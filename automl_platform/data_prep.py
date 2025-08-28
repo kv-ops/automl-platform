@@ -49,7 +49,7 @@ class DataPreprocessor:
                 except:
                     # Check if text (long strings)
                     avg_len = df[col].dropna().astype(str).str.len().mean()
-                    if avg_len > 50:
+                    if avg_len > 30:  # Réduire le seuil pour détecter les textes plus courts
                         self.text_features.append(col)
                     else:
                         self.categorical_features.append(col)
@@ -240,7 +240,7 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     
     # Check for duplicate columns
     duplicate_cols = df.columns[df.columns.duplicated()].tolist()
-    if duplicate_cols:
+    if len(duplicate_cols) > 0:
         issues.append(f"Duplicate columns: {duplicate_cols}")
     
     # Check for all null columns
