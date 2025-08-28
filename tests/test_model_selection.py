@@ -1,3 +1,5 @@
+"""Tests for model selection module."""
+
 import pytest
 import numpy as np
 import pandas as pd
