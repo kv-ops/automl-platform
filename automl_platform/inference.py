@@ -4,7 +4,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Union, Optional, Dict, Any, Tuple
+from typing import Union, Optional, Dict, Any, Tuple, List
 import json
 import logging
 
