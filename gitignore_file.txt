@@ -1,0 +1,257 @@
+# ============== Python ==============
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ============== Virtual Environments ==============
+venv/
+ENV/
+env/
+.venv
+.env
+
+# ============== IDEs ==============
+# VS Code
+.vscode/
+.history/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ============== Jupyter ==============
+.ipynb_checkpoints/
+*.ipynb
+!examples/*.ipynb
+
+# ============== Data ==============
+data/
+*.csv
+*.parquet
+*.xlsx
+*.xls
+*.json
+*.h5
+*.hdf5
+*.feather
+*.msgpack
+*.pkl
+*.pickle
+!tests/data/*.csv
+!examples/data/*.csv
+
+# ============== Models ==============
+models/
+*.joblib
+*.sav
+*.h5
+*.pt
+*.pth
+*.onnx
+*.pb
+model.pkl
+pipeline.joblib
+!tests/models/*.joblib
+
+# ============== Logs ==============
+*.log
+logs/
+*.out
+*.err
+
+# ============== Testing ==============
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+nosetests.xml
+test-results/
+
+# ============== Documentation ==============
+docs/_build/
+docs/_static/
+docs/_templates/
+site/
+.doctrees/
+
+# ============== OS Files ==============
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# ============== Configuration ==============
+.env
+.env.local
+.env.*.local
+config_local.yaml
+config_local.yml
+secrets.yaml
+secrets.yml
+*.secret
+
+# ============== Output ==============
+automl_output/
+results/
+output/
+outputs/
+experiments/
+runs/
+artifacts/
+checkpoints/
+
+# ============== Cache ==============
+.cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ============== Package Managers ==============
+# npm
+node_modules/
+package-lock.json
+
+# yarn
+yarn.lock
+.yarn/
+
+# ============== Cloud / Deployment ==============
+.serverless/
+.terraform/
+*.tfstate
+*.tfstate.*
+.aws/
+.gcp/
+.azure/
+
+# ============== Temporary Files ==============
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+.~*
+
+# ============== AutoML Specific ==============
+leaderboard.csv
+train_predictions.csv
+feature_importance.json
+train_metrics.json
+alerts.json
+reference_data.pkl
+config.yaml.backup
+
+# ============== Don't Ignore ==============
+!.gitignore
+!.github/
+!requirements.txt
+!setup.py
+!setup.cfg
+!README.md
+!LICENSE
+!CONTRIBUTING.md
+!CHANGELOG.md
+!config.yaml
+!pyproject.toml
