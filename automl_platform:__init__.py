@@ -1,5 +1,4 @@
-"""
-AutoML Platform - Production-ready AutoML with no data leakage.
+"""AutoML Platform - Production-ready AutoML with no data leakage."""
 
 A comprehensive machine learning automation platform that provides:
 - Automated model selection and hyperparameter optimization
