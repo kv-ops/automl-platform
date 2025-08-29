@@ -88,6 +88,7 @@ class AutoMLOrchestrator:
             
             try:
                 # Create pipeline with preprocessing
+                # IMPORTANT: Create fresh preprocessor for each model to avoid data leakage
                 pipeline = Pipeline([
                     ('preprocessor', DataPreprocessor(self.config.to_dict())),
                     ('model', base_model)
@@ -104,16 +105,34 @@ class AutoMLOrchestrator:
                                  'LGBMClassifier', 'LGBMRegressor',
                                  'GradientBoostingClassifier', 'GradientBoostingRegressor']:
                     
-                    # Fit preprocessor first
-                    X_preprocessed = self.preprocessor.fit_transform(X, y)
+                    # Create a temporary preprocessor for Optuna optimization
+                    # This will be refitted properly during cross-validation
+                    temp_preprocessor = DataPreprocessor(self.config.to_dict())
+                    
+                    # Use a single train/test split for Optuna to avoid leakage
+                    from sklearn.model_selection import train_test_split
+                    X_train, X_val, y_train, y_val = train_test_split(
+                        X, y, test_size=0.2, random_state=self.config.random_state, 
+                        stratify=y if self.task == 'classification' else None
+                    )
+                    
+                    # Fit preprocessor only on training data
+                    X_train_preprocessed = temp_preprocessor.fit_transform(X_train, y_train)
+                    X_val_preprocessed = temp_preprocessor.transform(X_val)
+                    
+                    # Combine for Optuna (it will do its own CV)
+                    X_preprocessed = np.vstack([X_train_preprocessed, X_val_preprocessed])
+                    y_combined = pd.concat([y_train, y_val])
                     
                     tuned_model, params = try_optuna(
-                        model_name, X_preprocessed, y, self.task,
+                        model_name, X_preprocessed, y_combined, self.task,
                         cv, scoring, n_trials=self.config.hpo_n_iter
                     )
                     
                     if tuned_model is not None:
-                        pipeline.set_params(model=tuned_model)
+                        # Update the model in the pipeline with tuned parameters
+                        base_model.set_params(**params)
+                        pipeline.set_params(model=base_model)
                     else:
                         # Fall back to grid search
                         param_grid = get_param_grid(model_name)
@@ -140,11 +159,11 @@ class AutoMLOrchestrator:
                     else:
                         params = {}
                 
-                # Cross-validate
+                # Cross-validate with fresh pipeline to avoid data leakage
                 scores = cross_val_score(pipeline, X, y, cv=cv, 
                                         scoring=scoring, n_jobs=-1)
                 
-                # Calculate additional metrics
+                # Fit final model on all data for metrics calculation
                 pipeline.fit(X, y)
                 y_pred = pipeline.predict(X)
                 
@@ -161,7 +180,7 @@ class AutoMLOrchestrator:
                     'cv_score': scores.mean(),
                     'cv_std': scores.std(),
                     'metrics': metrics,
-                    'params': params,
+                    'params': params if 'params' in locals() else {},
                     'training_time': time.time() - start_time,
                     'pipeline': pipeline
                 }
