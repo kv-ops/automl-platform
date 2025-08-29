@@ -182,10 +182,11 @@ class DataPreprocessor:
                 total_features_estimate = total_numeric + cat_encoded_estimate
                 
                 # Safe n_components: use minimum of multiple constraints
+                # CRITICAL: For Iris dataset with 4 features, we need to be very conservative
                 n_components = min(
-                    5,  # Never more than 5 for text features in small datasets
+                    3,  # Maximum 3 components for any text feature
                     max_features - 1,  # Less than max features
-                    total_features_estimate // 2 if total_features_estimate > 2 else 1,  # Half of total features
+                    max(1, total_features_estimate - 1),  # Must be less than total features
                     len(X) - 1 if len(X) > 1 else 1  # Less than number of samples
                 )
                 n_components = max(1, n_components)  # At least 1
@@ -281,7 +282,7 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     if df.empty:
         issues.append("DataFrame is empty")
     
-    # Check for duplicate columns - FIXED
+    # Check for duplicate columns - FIXED with .any()
     duplicate_mask = df.columns.duplicated()
     if duplicate_mask.any():  # Use .any() to get a single boolean value
         duplicate_cols = df.columns[duplicate_mask].tolist()
