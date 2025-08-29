@@ -47,12 +47,28 @@ class DataPreprocessor:
                     pd.to_datetime(df[col], errors='raise')
                     self.datetime_features.append(col)
                 except:
-                    # Check if text (long strings)
-                    avg_len = df[col].dropna().astype(str).str.len().mean()
-                    if avg_len > 50:
+                    # Check if text - UPDATED LOGIC
+                    # Consider it text if:
+                    # 1. Column name contains 'text' or 'description' or 'comment'
+                    # 2. Average length > 20 (lowered threshold)
+                    # 3. Has multiple words (spaces) in values
+                    col_lower = col.lower()
+                    if 'text' in col_lower or 'description' in col_lower or 'comment' in col_lower:
                         self.text_features.append(col)
                     else:
-                        self.categorical_features.append(col)
+                        # Check average length and word count
+                        sample_values = df[col].dropna().astype(str)
+                        if len(sample_values) > 0:
+                            avg_len = sample_values.str.len().mean()
+                            avg_words = sample_values.str.split().str.len().mean()
+                            
+                            # If long strings or multiple words, consider as text
+                            if avg_len > 20 or avg_words > 3:
+                                self.text_features.append(col)
+                            else:
+                                self.categorical_features.append(col)
+                        else:
+                            self.categorical_features.append(col)
             # Numeric
             elif pd.api.types.is_numeric_dtype(df[col]):
                 # Check if actually categorical (low cardinality integers)
@@ -238,7 +254,7 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     if df.empty:
         issues.append("DataFrame is empty")
     
-    # Check for duplicate columns - FIX HERE
+    # Check for duplicate columns - FIXED
     duplicate_mask = df.columns.duplicated()
     if duplicate_mask.any():  # Use .any() to get a single boolean value
         duplicate_cols = df.columns[duplicate_mask].tolist()
