@@ -282,19 +282,23 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     if df.empty:
         issues.append("DataFrame is empty")
     
-    # Check for duplicate columns - FIXED with .any()
-    duplicate_mask = df.columns.duplicated()
-    if duplicate_mask.any():  # Use .any() to get a single boolean value
-        duplicate_cols = df.columns[duplicate_mask].tolist()
+    # Check for duplicate columns
+    if df.columns.duplicated().any():
+        duplicate_cols = df.columns[df.columns.duplicated()].tolist()
         issues.append(f"Duplicate columns: {duplicate_cols}")
     
     # Check for all null columns
-    null_cols = df.columns[df.isnull().all()].tolist()
-    if null_cols:
-        issues.append(f"All null columns: {null_cols}")
+    null_mask = df.isnull().all()
+    if isinstance(null_mask, pd.Series) and null_mask.any():
+        null_cols = df.columns[null_mask].tolist()
+        if null_cols:
+            issues.append(f"All null columns: {null_cols}")
     
     # Check for single value columns
-    single_value_cols = [col for col in df.columns if df[col].nunique() == 1]
+    single_value_cols = []
+    for col in df.columns:
+        if df[col].nunique() == 1:
+            single_value_cols.append(col)
     if single_value_cols:
         issues.append(f"Single value columns: {single_value_cols}")
     
