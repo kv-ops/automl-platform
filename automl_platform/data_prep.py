@@ -160,13 +160,40 @@ class DataPreprocessor:
             ])
             transformers.append(('categorical', categorical_pipeline, self.categorical_features))
         
-        # Text pipeline
+        # Text pipeline - ULTRA FIXED
         if self.text_features:
             for text_col in self.text_features:
+                # CRITICAL FIX: Calculate n_components dynamically based on actual feature count
+                # For small datasets, use even smaller values
+                max_features = self.config.get('text_max_features', 100)
+                
+                # Count total features to determine safe n_components
+                total_numeric = len(self.numeric_features) if self.numeric_features else 0
+                total_categorical = len(self.categorical_features) if self.categorical_features else 0
+                
+                # For categorical, estimate encoded features (rough estimate)
+                if self.categorical_features and len(X) > 0:
+                    cat_encoded_estimate = sum([X[col].nunique() for col in self.categorical_features 
+                                               if col in X.columns])
+                else:
+                    cat_encoded_estimate = total_categorical * 3  # rough estimate
+                
+                # Total features after encoding
+                total_features_estimate = total_numeric + cat_encoded_estimate
+                
+                # Safe n_components: use minimum of multiple constraints
+                n_components = min(
+                    5,  # Never more than 5 for text features in small datasets
+                    max_features - 1,  # Less than max features
+                    total_features_estimate // 2 if total_features_estimate > 2 else 1,  # Half of total features
+                    len(X) - 1 if len(X) > 1 else 1  # Less than number of samples
+                )
+                n_components = max(1, n_components)  # At least 1
+                
                 text_pipeline = Pipeline([
-                    ('tfidf', TfidfVectorizer(max_features=self.config.get('text_max_features', 100),
+                    ('tfidf', TfidfVectorizer(max_features=max_features,
                                              ngram_range=(1, 2))),
-                    ('svd', TruncatedSVD(n_components=min(10, self.config.get('text_max_features', 100) - 1)))
+                    ('svd', TruncatedSVD(n_components=n_components))
                 ])
                 transformers.append((f'text_{text_col}', text_pipeline, text_col))
         
