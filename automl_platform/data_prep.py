@@ -49,7 +49,7 @@ class DataPreprocessor:
                 except:
                     # Check if text (long strings)
                     avg_len = df[col].dropna().astype(str).str.len().mean()
-                    if avg_len > 10 and df[col].dtype == 'object':  # Plus permissif pour détecter les textes
+                    if avg_len > 50:
                         self.text_features.append(col)
                     else:
                         self.categorical_features.append(col)
@@ -150,7 +150,8 @@ class DataPreprocessor:
                 text_pipeline = Pipeline([
                     ('tfidf', TfidfVectorizer(max_features=self.config.get('text_max_features', 100),
                                              ngram_range=(1, 2))),
-                    ('svd', TruncatedSVD(n_components=min(50, self.config.get('text_max_features', 100))))
+                    # FIX: Dynamically set n_components based on max_features and actual data
+                    ('svd', TruncatedSVD(n_components=min(10, self.config.get('text_max_features', 100) - 1)))
                 ])
                 transformers.append((f'text_{text_col}', text_pipeline, text_col))
         
@@ -239,8 +240,10 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
         issues.append("DataFrame is empty")
     
     # Check for duplicate columns
-    duplicate_cols = list(df.columns[df.columns.duplicated()])  # Convertir en liste directement
-    if duplicate_cols:  # Maintenant c'est une liste, pas une Series
+    # FIX: Properly handle boolean array
+    duplicate_mask = df.columns.duplicated()
+    if duplicate_mask.any():  # Changed from if duplicate_cols
+        duplicate_cols = df.columns[duplicate_mask].tolist()
         issues.append(f"Duplicate columns: {duplicate_cols}")
     
     # Check for all null columns
