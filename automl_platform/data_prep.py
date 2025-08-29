@@ -150,7 +150,6 @@ class DataPreprocessor:
                 text_pipeline = Pipeline([
                     ('tfidf', TfidfVectorizer(max_features=self.config.get('text_max_features', 100),
                                              ngram_range=(1, 2))),
-                    # FIX: Dynamically set n_components based on max_features and actual data
                     ('svd', TruncatedSVD(n_components=min(10, self.config.get('text_max_features', 100) - 1)))
                 ])
                 transformers.append((f'text_{text_col}', text_pipeline, text_col))
@@ -239,10 +238,9 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     if df.empty:
         issues.append("DataFrame is empty")
     
-    # Check for duplicate columns
-    # FIX: Properly handle boolean array
+    # Check for duplicate columns - FIX HERE
     duplicate_mask = df.columns.duplicated()
-    if duplicate_mask.any():  # Changed from if duplicate_cols
+    if duplicate_mask.any():  # Use .any() to get a single boolean value
         duplicate_cols = df.columns[duplicate_mask].tolist()
         issues.append(f"Duplicate columns: {duplicate_cols}")
     
