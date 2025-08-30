@@ -873,4 +873,378 @@ class AlertManager:
         # Check data quality alert
         if "quality_score" in metrics and metrics["quality_score"] < self.alert_config["quality_score_threshold"]:
             alert = {
-                "type": "poor_data_
+                "type": "poor_data_quality",
+                "severity": "high",
+                "message": f"Data quality score ({metrics['quality_score']:.1f}) below threshold ({self.alert_config['quality_score_threshold']})",
+                "timestamp": datetime.now().isoformat(),
+                "metrics": metrics
+            }
+            triggered_alerts.append(alert)
+        
+        # Process triggered alerts
+        for alert in triggered_alerts:
+            self.active_alerts.append(alert)
+            self.alert_history.append(alert)
+            self.notification_handler(alert)
+        
+        return triggered_alerts
+    
+    def resolve_alert(self, alert_type: str):
+        """Resolve an active alert"""
+        self.active_alerts = [a for a in self.active_alerts if a["type"] != alert_type]
+        logger.info(f"Alert resolved: {alert_type}")
+    
+    def get_active_alerts(self) -> List[Dict]:
+        """Get list of active alerts"""
+        return self.active_alerts
+    
+    def get_alert_summary(self) -> Dict:
+        """Get summary of alerts"""
+        summary = {
+            "active_alerts_count": len(self.active_alerts),
+            "total_alerts_triggered": len(self.alert_history),
+            "alerts_by_type": defaultdict(int),
+            "alerts_by_severity": defaultdict(int)
+        }
+        
+        for alert in self.alert_history:
+            summary["alerts_by_type"][alert["type"]] += 1
+            summary["alerts_by_severity"][alert["severity"]] += 1
+        
+        summary["alerts_by_type"] = dict(summary["alerts_by_type"])
+        summary["alerts_by_severity"] = dict(summary["alerts_by_severity"])
+        
+        return summary
+
+
+# Integration with external monitoring systems
+class MonitoringIntegration:
+    """Integration with external monitoring systems"""
+    
+    @staticmethod
+    def export_to_prometheus(monitor: ModelMonitor) -> bytes:
+        """Export metrics to Prometheus format"""
+        return monitor.export_metrics()
+    
+    @staticmethod
+    def export_to_grafana_json(monitor: ModelMonitor) -> Dict:
+        """Export metrics in Grafana-compatible JSON format"""
+        metrics = monitor.get_performance_summary()
+        
+        grafana_data = {
+            "dashboardId": monitor.model_id,
+            "title": f"Model {monitor.model_id} Dashboard",
+            "panels": [
+                {
+                    "id": 1,
+                    "type": "graph",
+                    "title": "Model Accuracy",
+                    "targets": [
+                        {
+                            "target": "accuracy",
+                            "datapoints": [
+                                [m.accuracy, datetime.fromisoformat(m.timestamp).timestamp() * 1000]
+                                for m in monitor.performance_history
+                                if m.accuracy is not None
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "id": 2,
+                    "type": "stat",
+                    "title": "Total Predictions",
+                    "value": metrics.get("total_predictions", 0)
+                },
+                {
+                    "id": 3,
+                    "type": "gauge",
+                    "title": "Data Quality Score",
+                    "value": metrics.get("metrics", {}).get("quality_score", 100)
+                }
+            ]
+        }
+        
+        return grafana_data
+    
+    @staticmethod
+    def send_to_slack(alert: Dict, webhook_url: str):
+        """Send alert to Slack"""
+        import requests
+        
+        slack_message = {
+            "text": f"🚨 ML Model Alert: {alert['type']}",
+            "attachments": [
+                {
+                    "color": "danger" if alert['severity'] == "high" else "warning",
+                    "fields": [
+                        {"title": "Severity", "value": alert['severity'], "short": True},
+                        {"title": "Timestamp", "value": alert['timestamp'], "short": True},
+                        {"title": "Message", "value": alert['message'], "short": False}
+                    ]
+                }
+            ]
+        }
+        
+        try:
+            response = requests.post(webhook_url, json=slack_message)
+            response.raise_for_status()
+            logger.info("Alert sent to Slack successfully")
+        except Exception as e:
+            logger.error(f"Failed to send alert to Slack: {e}")
+    
+    @staticmethod
+    def send_to_email(alert: Dict, smtp_config: Dict, recipients: List[str]):
+        """Send alert via email"""
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        msg = MIMEMultipart()
+        msg['From'] = smtp_config['from_email']
+        msg['To'] = ', '.join(recipients)
+        msg['Subject'] = f"ML Model Alert: {alert['type']}"
+        
+        body = f"""
+        Alert Type: {alert['type']}
+        Severity: {alert['severity']}
+        Message: {alert['message']}
+        Timestamp: {alert['timestamp']}
+        
+        Metrics:
+        {json.dumps(alert.get('metrics', {}), indent=2)}
+        """
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        try:
+            server = smtplib.SMTP(smtp_config['host'], smtp_config['port'])
+            server.starttls()
+            server.login(smtp_config['username'], smtp_config['password'])
+            server.send_message(msg)
+            server.quit()
+            logger.info("Alert sent via email successfully")
+        except Exception as e:
+            logger.error(f"Failed to send email alert: {e}")
+
+
+# Main monitoring service
+class MonitoringService:
+    """Central monitoring service for all models"""
+    
+    def __init__(self, storage_manager = None):
+        """
+        Initialize monitoring service
+        
+        Args:
+            storage_manager: Storage manager for persisting monitoring data
+        """
+        self.monitors = {}
+        self.quality_monitor = DataQualityMonitor()
+        self.alert_manager = AlertManager()
+        self.storage_manager = storage_manager
+    
+    def register_model(self, 
+                       model_id: str,
+                       model_type: str,
+                       reference_data: pd.DataFrame = None) -> ModelMonitor:
+        """
+        Register a model for monitoring
+        
+        Args:
+            model_id: Model identifier
+            model_type: Type of model
+            reference_data: Reference dataset
+            
+        Returns:
+            ModelMonitor instance
+        """
+        monitor = ModelMonitor(model_id, model_type, reference_data)
+        self.monitors[model_id] = monitor
+        logger.info(f"Model {model_id} registered for monitoring")
+        return monitor
+    
+    def get_monitor(self, model_id: str) -> ModelMonitor:
+        """Get monitor for a specific model"""
+        return self.monitors.get(model_id)
+    
+    def log_prediction(self,
+                      model_id: str,
+                      features: pd.DataFrame,
+                      predictions: np.ndarray,
+                      actuals: np.ndarray = None,
+                      prediction_time: float = None):
+        """Log prediction for a model"""
+        monitor = self.monitors.get(model_id)
+        if monitor:
+            monitor.log_prediction(features, predictions, actuals, prediction_time)
+        else:
+            logger.warning(f"Model {model_id} not registered for monitoring")
+    
+    def check_all_models_health(self) -> Dict:
+        """Check health status of all monitored models"""
+        health_report = {
+            "timestamp": datetime.now().isoformat(),
+            "models": {}
+        }
+        
+        for model_id, monitor in self.monitors.items():
+            summary = monitor.get_performance_summary()
+            
+            # Determine health status
+            if not summary.get("metrics"):
+                status = "no_data"
+            elif summary.get("metrics", {}).get("avg_accuracy", 1.0) < 0.8:
+                status = "degraded"
+            elif summary.get("drift_rate", 0) > 0.2:
+                status = "drift_detected"
+            else:
+                status = "healthy"
+            
+            health_report["models"][model_id] = {
+                "status": status,
+                "summary": summary
+            }
+        
+        return health_report
+    
+    def create_global_dashboard(self) -> Dict:
+        """Create dashboard with all models' metrics"""
+        dashboard = {
+            "timestamp": datetime.now().isoformat(),
+            "total_models": len(self.monitors),
+            "models": [],
+            "alerts": self.alert_manager.get_alert_summary(),
+            "data_quality_trend": self.quality_monitor.get_quality_trend()
+        }
+        
+        for model_id, monitor in self.monitors.items():
+            model_info = {
+                "model_id": model_id,
+                "model_type": monitor.model_type,
+                "performance": monitor.get_performance_summary(last_n_days=1),
+                "total_predictions": len(monitor.prediction_history),
+                "last_drift_check": monitor.drift_detector.drift_history[-1] if monitor.drift_detector.drift_history else None
+            }
+            dashboard["models"].append(model_info)
+        
+        return dashboard
+    
+    def save_monitoring_data(self):
+        """Save monitoring data to storage"""
+        if not self.storage_manager:
+            logger.warning("No storage manager configured")
+            return
+        
+        for model_id, monitor in self.monitors.items():
+            # Save performance history
+            if monitor.performance_history:
+                data = pd.DataFrame([m.to_dict() for m in monitor.performance_history])
+                self.storage_manager.save_dataset(
+                    data,
+                    f"monitoring_{model_id}_performance",
+                    tenant_id="monitoring"
+                )
+            
+            # Save drift history
+            if monitor.drift_detector.drift_history:
+                data = pd.DataFrame(monitor.drift_detector.drift_history)
+                self.storage_manager.save_dataset(
+                    data,
+                    f"monitoring_{model_id}_drift",
+                    tenant_id="monitoring"
+                )
+        
+        logger.info("Monitoring data saved to storage")
+
+
+# Example usage and testing
+if __name__ == "__main__":
+    # Create sample data
+    np.random.seed(42)
+    n_samples = 1000
+    
+    # Reference data (training data characteristics)
+    reference_data = pd.DataFrame({
+        'feature1': np.random.normal(0, 1, n_samples),
+        'feature2': np.random.normal(5, 2, n_samples),
+        'feature3': np.random.choice(['A', 'B', 'C'], n_samples),
+        'target': np.random.choice([0, 1], n_samples)
+    })
+    
+    # Production data (with some drift)
+    production_data = pd.DataFrame({
+        'feature1': np.random.normal(0.5, 1.2, 100),  # Drift in mean and std
+        'feature2': np.random.normal(5, 2, 100),
+        'feature3': np.random.choice(['A', 'B', 'C', 'D'], 100),  # New category
+        'target': np.random.choice([0, 1], 100)
+    })
+    
+    # Initialize monitoring
+    monitor = ModelMonitor(
+        model_id="test_model_001",
+        model_type="classification",
+        reference_data=reference_data
+    )
+    
+    # Simulate predictions
+    predictions = np.random.choice([0, 1], 100, p=[0.4, 0.6])
+    actuals = production_data['target'].values
+    
+    # Log predictions
+    monitor.log_prediction(
+        features=production_data.drop('target', axis=1),
+        predictions=predictions,
+        actuals=actuals,
+        prediction_time=0.05
+    )
+    
+    # Check drift
+    drift_results = monitor.check_drift(production_data.drop('target', axis=1))
+    print("Drift Detection Results:")
+    print(f"  Drift detected: {drift_results['drift_detected']}")
+    print(f"  Drifted features: {drift_results.get('drifted_features', [])}")
+    
+    # Get performance summary
+    summary = monitor.get_performance_summary()
+    print("\nPerformance Summary:")
+    print(json.dumps(summary, indent=2, default=str))
+    
+    # Data quality check
+    quality_monitor = DataQualityMonitor(
+        expected_schema={
+            'feature1': 'float64',
+            'feature2': 'float64',
+            'feature3': 'object'
+        }
+    )
+    
+    quality_report = quality_monitor.check_data_quality(production_data.drop('target', axis=1))
+    print("\nData Quality Report:")
+    print(f"  Quality Score: {quality_report['quality_score']:.1f}")
+    print(f"  Issues: {len(quality_report['issues'])}")
+    print(f"  Warnings: {len(quality_report['warnings'])}")
+    
+    # Alert checking
+    alert_manager = AlertManager()
+    alerts = alert_manager.check_alerts({
+        'accuracy': 0.75,  # Below threshold
+        'drift_score': 0.6,  # Above threshold
+        'quality_score': 65  # Below threshold
+    })
+    
+    print("\nTriggered Alerts:")
+    for alert in alerts:
+        print(f"  - {alert['type']}: {alert['message']}")
+    
+    # Create monitoring report
+    report = monitor.create_monitoring_report()
+    print("\nMonitoring Report Generated:")
+    print(f"  Model ID: {report['model_id']}")
+    print(f"  Total Predictions: {report['prediction_statistics']['total_predictions']}")
+    
+    # Export Prometheus metrics (if available)
+    if PROMETHEUS_AVAILABLE:
+        metrics_bytes = monitor.export_metrics()
+        print("\nPrometheus Metrics:")
+        print(metrics_bytes.decode()[:500])  # First 500 chars
