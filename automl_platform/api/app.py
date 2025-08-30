@@ -32,7 +32,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 # Monitoring
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry
 import uvicorn
 
 # Import your modules
@@ -52,64 +52,50 @@ logger = logging.getLogger(__name__)
 config = load_config(os.getenv("CONFIG_PATH", "config.yaml"))
 
 # ============================================================================
-# Metrics Helper Function
+# Metrics with Custom Registry to Avoid Duplicates
 # ============================================================================
 
-def get_or_create_metric(metric_class, name, *args, **kwargs):
-    """
-    Get existing metric or create new one if it doesn't exist.
-    This prevents duplicate metric registration when using auto-reload.
-    """
-    # Check if metric already exists in registry
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        if hasattr(collector, '_name') and collector._name == name:
-            return collector
-    
-    # Create new metric if it doesn't exist
-    return metric_class(name, *args, **kwargs)
+# Create a custom registry for this instance
+metrics_registry = CollectorRegistry()
 
-# ============================================================================
-# Metrics
-# ============================================================================
-
-# Prometheus metrics - using helper function to avoid duplicates
-request_count = get_or_create_metric(
-    Counter, 
+# Create metrics with the custom registry
+request_count = Counter(
     'automl_api_requests_total', 
     'Total API requests', 
-    ['method', 'endpoint', 'status']
+    ['method', 'endpoint', 'status'],
+    registry=metrics_registry
 )
 
-request_duration = get_or_create_metric(
-    Histogram, 
+request_duration = Histogram(
     'automl_api_request_duration_seconds', 
     'API request duration', 
-    ['method', 'endpoint']
+    ['method', 'endpoint'],
+    registry=metrics_registry
 )
 
-active_models = get_or_create_metric(
-    Gauge, 
+active_models = Gauge(
     'automl_active_models', 
-    'Number of active models'
+    'Number of active models',
+    registry=metrics_registry
 )
 
-training_jobs = get_or_create_metric(
-    Gauge, 
+training_jobs = Gauge(
     'automl_training_jobs', 
     'Number of training jobs', 
-    ['status']
+    ['status'],
+    registry=metrics_registry
 )
 
-prediction_count = get_or_create_metric(
-    Counter, 
+prediction_count = Counter(
     'automl_predictions_total', 
-    'Total predictions made'
+    'Total predictions made',
+    registry=metrics_registry
 )
 
-upload_size = get_or_create_metric(
-    Histogram, 
+upload_size = Histogram(
     'automl_upload_size_bytes', 
-    'Size of uploaded files'
+    'Size of uploaded files',
+    registry=metrics_registry
 )
 
 # ============================================================================
@@ -309,7 +295,7 @@ async def health_check():
 async def get_metrics():
     """Prometheus metrics endpoint"""
     return StreamingResponse(
-        generate_latest(),
+        generate_latest(metrics_registry),
         media_type=CONTENT_TYPE_LATEST
     )
 
