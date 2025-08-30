@@ -108,13 +108,24 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting AutoML API...")
     
-    # Initialize storage
-    app.state.storage = StorageManager(
-        backend=config.storage.backend,
-        endpoint=config.storage.endpoint,
-        access_key=config.storage.access_key,
-        secret_key=config.storage.secret_key
-    ) if config.storage.backend != "none" else None
+    # Initialize storage with proper parameters based on backend
+    if config.storage.backend == "local":
+        app.state.storage = StorageManager(backend="local")
+    elif config.storage.backend == "s3":
+        app.state.storage = StorageManager(
+            backend="s3",
+            endpoint=config.storage.endpoint,
+            access_key=config.storage.access_key,
+            secret_key=config.storage.secret_key
+        )
+    elif config.storage.backend == "gcs":
+        app.state.storage = StorageManager(
+            backend="gcs",
+            project_id=getattr(config.storage, 'project_id', None),
+            credentials_path=getattr(config.storage, 'credentials_path', None)
+        )
+    else:
+        app.state.storage = None
     
     # Initialize monitoring
     app.state.monitoring = MonitoringService(app.state.storage) if config.monitoring.enabled else None
