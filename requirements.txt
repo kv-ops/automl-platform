@@ -1,126 +1,238 @@
 # ==============================================================================
-# AutoML Platform Requirements
-# Python >= 3.8 required
+# AutoML Platform Requirements - Production Version
+# Python >= 3.8 required (3.9+ recommended)
 # ==============================================================================
 
-# ---------- Core Dependencies ----------
-pandas>=1.3.0,<2.0.0
-numpy>=1.21.0,<2.0.0
-scikit-learn>=1.0.0,<2.0.0
-scipy>=1.7.0,<2.0.0
-joblib>=1.1.0
-pyyaml>=5.4.0
+# ---------- Core ML Dependencies ----------
+pandas>=1.5.0,<2.0.0
+numpy>=1.24.0,<2.0.0
+scikit-learn>=1.2.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+joblib>=1.2.0
+pyyaml>=6.0
 
-# ---------- API Dependencies ----------
-fastapi>=0.68.0,<1.0.0
-uvicorn[standard]>=0.15.0
-pydantic>=1.8.0,<2.0.0
-python-multipart>=0.0.5  # For file uploads
-aiofiles>=0.8.0  # Async file operations
+# ---------- API Framework ----------
+fastapi>=0.104.0,<1.0.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.4.0,<3.0.0
+python-multipart>=0.0.6  # File uploads
+aiofiles>=23.2.0  # Async file operations
+httpx>=0.25.0  # Async HTTP client
+websockets>=12.0  # WebSocket support
+
+# ---------- Storage & Database ----------
+minio>=7.1.17  # MinIO client for object storage
+boto3>=1.28.0  # AWS S3 support
+pyarrow>=14.0.0  # Parquet format support
+sqlalchemy>=2.0.0  # SQL ORM
+alembic>=1.12.0  # Database migrations
+psycopg2-binary>=2.9.9  # PostgreSQL adapter
+redis>=5.0.0  # Redis client for caching
+
+# ---------- Monitoring & Observability ----------
+prometheus-client>=0.19.0  # Metrics export
+evidently>=0.4.8  # Drift detection and data quality
+grafana-api>=1.0.3  # Grafana integration
+opentelemetry-api>=1.21.0  # Distributed tracing
+opentelemetry-sdk>=1.21.0
+opentelemetry-instrumentation-fastapi>=0.42b0
+structlog>=23.2.0  # Structured logging
+
+# ---------- Task Queue & Workers ----------
+celery[redis]>=5.3.0  # Distributed task queue
+flower>=2.0.0  # Celery monitoring
+kombu>=5.3.0  # Message passing
+ray>=2.8.0  # Optional: Distributed computing
+dask[complete]>=2023.11.0  # Optional: Parallel computing
 
 # ---------- Hyperparameter Optimization ----------
-optuna>=2.10.0,<4.0.0
-optuna-dashboard>=0.8.0  # Optional: Web dashboard for Optuna
+optuna>=3.4.0  # Bayesian optimization
+optuna-dashboard>=0.13.0  # Web dashboard for Optuna
 
-# ---------- Boosting Algorithms ----------
-xgboost>=1.5.0,<2.0.0
-lightgbm>=3.2.0,<5.0.0
-catboost>=1.0.0,<2.0.0
+# ---------- ML Algorithms - Boosting ----------
+xgboost>=2.0.0,<3.0.0
+lightgbm>=4.1.0,<5.0.0
+catboost>=1.2.0,<2.0.0
 
-# ---------- Imbalanced Learning ----------
-imbalanced-learn>=0.8.0,<1.0.0
+# ---------- ML Algorithms - Imbalanced Learning ----------
+imbalanced-learn>=0.11.0,<1.0.0
 
-# ---------- Model Explainability ----------
-shap>=0.40.0,<1.0.0
-lime>=0.2.0
+# ---------- ML Algorithms - Neural Networks ----------
+torch>=2.1.0  # PyTorch for neural networks
+pytorch-tabnet>=4.1.0  # TabNet implementation
+tensorflow>=2.14.0  # Optional: TensorFlow support
 
 # ---------- Time Series ----------
-statsmodels>=0.12.0,<1.0.0
-prophet>=1.0.0,<2.0.0  # Note: Requires fbprophet on older systems
-pmdarima>=1.8.0,<3.0.0
-sktime>=0.13.0,<1.0.0
+statsmodels>=0.14.0,<1.0.0
+prophet>=1.1.5  # Facebook Prophet
+pmdarima>=2.0.4  # Auto-ARIMA
+sktime>=0.24.0  # Time series toolkit
+tsai>=0.3.8  # Deep learning for time series
 
-# ---------- NLP (Optional) ----------
-# Uncomment if NLP features needed:
-# sentence-transformers>=2.0.0
-# nltk>=3.6.0
-# spacy>=3.0.0
+# ---------- Model Explainability ----------
+shap>=0.43.0  # SHAP values
+lime>=0.2.0.1  # Local interpretable explanations
+interpret>=0.4.4  # Microsoft InterpretML
 
-# ---------- Visualization ----------
-matplotlib>=3.3.0,<4.0.0
-seaborn>=0.11.0,<1.0.0
-plotly>=5.0.0,<6.0.0
+# ---------- LLM Integration ----------
+openai>=1.3.0  # OpenAI API
+anthropic>=0.7.0  # Anthropic Claude API
+langchain>=0.0.340  # LLM orchestration
+chromadb>=0.4.18  # Vector database
+sentence-transformers>=2.2.2  # Embeddings
+tiktoken>=0.5.1  # Token counting
 
-# ---------- Development Tools ----------
-pytest>=6.2.0
-pytest-cov>=2.12.0
-pytest-asyncio>=0.18.0  # For async tests
-black>=21.0  # Code formatter
-flake8>=3.9.0  # Linting
-mypy>=0.910  # Type checking
-isort>=5.9.0  # Import sorting
-pre-commit>=2.15.0  # Git hooks
+# ---------- Data Formats & Connectors ----------
+openpyxl>=3.1.2  # Excel support
+xlrd>=2.0.1  # Legacy Excel
+pyxlsb>=1.0.10  # Excel binary format
+tables>=3.9.0  # HDF5 support
+fastavro>=1.9.0  # Avro format
+pyorc>=0.8.0  # ORC format
 
-# ---------- Type Hints ----------
-types-PyYAML>=5.4.0
-types-requests>=2.25.0
-typing-extensions>=4.0.0
+# ---------- Cloud Providers ----------
+google-cloud-storage>=2.10.0  # Google Cloud Storage
+azure-storage-blob>=12.19.0  # Azure Blob Storage
+azure-identity>=1.15.0  # Azure authentication
 
-# ---------- Documentation ----------
-sphinx>=4.0.0
-sphinx-rtd-theme>=0.5.0
-sphinx-autodoc-typehints>=1.12.0
+# ---------- Visualization & Reporting ----------
+matplotlib>=3.8.0,<4.0.0
+seaborn>=0.13.0,<1.0.0
+plotly>=5.18.0,<6.0.0
+kaleido>=0.2.1  # Static image export for Plotly
+reportlab>=4.0.0  # PDF generation
+jinja2>=3.1.2  # Template engine
+weasyprint>=60.0  # HTML to PDF conversion
 
-# ---------- Monitoring & Logging ----------
-python-json-logger>=2.0.0
-prometheus-client>=0.12.0  # For metrics export
-
-# ---------- Data Formats ----------
-pyarrow>=6.0.0  # Parquet support
-openpyxl>=3.0.0  # Excel support
-xlrd>=2.0.0  # Legacy Excel
-tables>=3.7.0  # HDF5 support (optional)
-
-# ---------- Cloud Storage (Optional) ----------
-# Uncomment based on your cloud provider:
-# boto3>=1.20.0  # AWS S3
-# google-cloud-storage>=2.0.0  # Google Cloud Storage
-# azure-storage-blob>=12.0.0  # Azure Blob Storage
-
-# ---------- Database Connectors (Optional) ----------
-# Uncomment based on your database:
-# psycopg2-binary>=2.9.0  # PostgreSQL
-# pymysql>=1.0.0  # MySQL
-# pymongo>=4.0.0  # MongoDB
-# sqlalchemy>=1.4.0  # SQL ORM
-
-# ---------- Additional Utilities ----------
-tqdm>=4.62.0  # Progress bars
-python-dotenv>=0.19.0  # Environment variables
-click>=8.0.0  # CLI utilities
-rich>=10.0.0  # Rich terminal output
-tabulate>=0.8.9  # Table formatting
+# ---------- Web UI ----------
+streamlit>=1.29.0  # Dashboard framework
+gradio>=4.7.0  # ML web interfaces
+dash>=2.14.0  # Alternative dashboard
+panel>=1.3.0  # Alternative viz framework
 
 # ---------- Security ----------
-cryptography>=36.0.0  # Encryption
-python-jose[cryptography]>=3.3.0  # JWT tokens (for API auth)
+cryptography>=41.0.0  # Encryption
+python-jose[cryptography]>=3.3.0  # JWT tokens
 passlib[bcrypt]>=1.7.4  # Password hashing
+secrets>=1.0.0  # Secure random generation
+pydantic[email]>=2.4.0  # Email validation
 
-# ---------- Performance Monitoring ----------
-memory-profiler>=0.60.0
-line-profiler>=3.5.0
+# ---------- Rate Limiting & Caching ----------
+slowapi>=0.1.9  # API rate limiting
+aiocache>=0.12.2  # Async caching
+diskcache>=5.6.0  # Disk-based cache
 
-# ---------- Storage ----------
-minio>=7.1.0
-boto3>=1.26.0
-pyarrow>=10.0.0
+# ---------- Development & Testing ----------
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0  # Async tests
+pytest-mock>=3.12.0
+pytest-benchmark>=4.0.0
+hypothesis>=6.92.0  # Property-based testing
+faker>=20.1.0  # Fake data generation
 
-# ---------- Monitoring ---------- 
-prometheus-client>=0.16.0
-evidently>=0.4.0
-scipy>=1.10.0
+# ---------- Code Quality ----------
+black>=23.11.0  # Code formatter
+ruff>=0.1.6  # Fast Python linter
+mypy>=1.7.0  # Type checking
+isort>=5.12.0  # Import sorting
+pre-commit>=3.5.0  # Git hooks
+bandit>=1.7.5  # Security linting
 
-# ---------- Optionnel mais recommandé ----------
-pandas>=1.5.0
-numpy>=1.24.0
-scikit-learn>=1.2.0
+# ---------- Documentation ----------
+sphinx>=7.2.0
+sphinx-rtd-theme>=2.0.0
+sphinx-autodoc-typehints>=1.25.0
+mkdocs>=1.5.0  # Alternative docs
+mkdocs-material>=9.4.0
+
+# ---------- Performance Profiling ----------
+memory-profiler>=0.61.0
+line-profiler>=4.1.0
+py-spy>=0.3.14  # Sampling profiler
+scalene>=1.5.0  # High-performance profiler
+
+# ---------- MLOps ----------
+mlflow>=2.8.0  # Experiment tracking
+wandb>=0.16.0  # Weights & Biases
+dvc>=3.30.0  # Data version control
+bentoml>=1.1.0  # Model serving
+
+# ---------- Additional Utilities ----------
+tqdm>=4.66.0  # Progress bars
+rich>=13.7.0  # Rich terminal output
+typer>=0.9.0  # CLI creation
+click>=8.1.7  # CLI utilities
+python-dotenv>=1.0.0  # Environment variables
+tabulate>=0.9.0  # Table formatting
+humanize>=4.9.0  # Human-readable formats
+pendulum>=3.0.0  # Better datetime
+pydantic-settings>=2.1.0  # Settings management
+
+# ---------- Data Validation ----------
+great-expectations>=0.18.0  # Data validation
+pandera>=0.17.0  # DataFrame validation
+
+# ---------- Feature Engineering ----------
+featuretools>=1.28.0  # Automated feature engineering
+tsfresh>=0.20.1  # Time series feature extraction
+category-encoders>=2.6.0  # Categorical encoding
+
+# ---------- AutoML Libraries (Optional) ----------
+auto-sklearn>=0.15.0  # Auto-sklearn
+h2o>=3.44.0  # H2O AutoML
+flaml>=2.1.0  # Microsoft FLAML
+autokeras>=1.1.0  # AutoKeras
+
+# ---------- Deployment ----------
+docker>=6.1.0  # Docker SDK
+kubernetes>=28.1.0  # Kubernetes client
+helm>=0.0.0  # Helm charts
+terraform>=1.6.0  # Infrastructure as code
+
+# ---------- Notification Services ----------
+slack-sdk>=3.23.0  # Slack integration
+sendgrid>=6.11.0  # Email service
+twilio>=8.10.0  # SMS/WhatsApp notifications
+
+# ---------- Monitoring Integrations ----------
+datadog>=0.47.0  # Datadog monitoring
+newrelic>=9.3.0  # New Relic APM
+sentry-sdk>=1.38.0  # Error tracking
+
+# ---------- Database Drivers (Optional) ----------
+pymongo>=4.6.0  # MongoDB
+cassandra-driver>=3.28.0  # Cassandra
+clickhouse-driver>=0.2.6  # ClickHouse
+influxdb-client>=1.38.0  # InfluxDB
+
+# ---------- Message Queues (Optional) ----------
+pika>=1.3.2  # RabbitMQ
+aiokafka>=0.10.0  # Kafka async client
+confluent-kafka>=2.3.0  # Kafka client
+
+# ---------- Search & Analytics ----------
+elasticsearch>=8.11.0  # Elasticsearch
+opensearch-py>=2.4.0  # OpenSearch
+
+# ==============================================================================
+# Installation Notes:
+# 
+# 1. Create virtual environment:
+#    python -m venv venv
+#    source venv/bin/activate  # Linux/Mac
+#    venv\Scripts\activate     # Windows
+#
+# 2. Install core dependencies:
+#    pip install -r requirements.txt
+#
+# 3. For GPU support (optional):
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# 4. For development only:
+#    pip install -r requirements-dev.txt
+#
+# 5. For production deployment:
+#    pip install gunicorn uvloop httptools
+#
+# ==============================================================================
