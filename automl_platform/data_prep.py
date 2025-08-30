@@ -305,11 +305,13 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     
     # Check for all null columns - Handle duplicate columns case
     try:
+        null_cols = []
         for col_idx, col in enumerate(df.columns):
             # Use iloc to handle duplicate column names
             if df.iloc[:, col_idx].isnull().all():
-                if col not in [c for c in issues if 'null' in c]:
-                    issues.append(f"All null column: {col}")
+                null_cols.append(str(col))
+        if null_cols:
+            issues.append(f"All null columns: {null_cols}")
     except:
         pass
     
