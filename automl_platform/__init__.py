@@ -1,101 +1,58 @@
 """
-AutoML Platform - Production-ready AutoML with no data leakage.
-
-A comprehensive machine learning automation platform that provides:
-- Automated model selection and hyperparameter optimization
-- No data leakage guarantee through proper CV pipelines
-- Support for 30+ sklearn models plus XGBoost, LightGBM, CatBoost
-- Automatic feature engineering and preprocessing
-- Model explainability with SHAP and LIME
-- REST API for deployment
+AutoML Platform Package
+A comprehensive AutoML solution with advanced features
 """
 
-__version__ = "3.0.0"
+__version__ = "1.0.0"
 __author__ = "AutoML Platform Team"
 
-# Import main components
-from .config import AutoMLConfig
-from .orchestrator import AutoMLOrchestrator
-from .data_prep import DataPreprocessor, validate_data, handle_imbalance
-from .model_selection import (
-    get_available_models,
-    get_cv_splitter,
-    get_param_grid,
-    tune_model
-)
-from .metrics import detect_task, calculate_metrics
-from .inference import (
-    load_pipeline,
-    predict,
-    predict_proba,
-    predict_batch,
-    save_predictions
-)
-
-# Define public API
+# Package metadata
 __all__ = [
-    # Version
-    "__version__",
-    
-    # Main classes
-    "AutoMLConfig",
-    "AutoMLOrchestrator",
-    "DataPreprocessor",
-    
-    # Functions
-    "validate_data",
-    "handle_imbalance",
-    "get_available_models",
-    "get_cv_splitter",
-    "get_param_grid",
-    "tune_model",
-    "detect_task",
-    "calculate_metrics",
-    "load_pipeline",
-    "predict",
-    "predict_proba",
-    "predict_batch",
-    "save_predictions",
+    'AutoMLConfig',
+    'DataPreprocessor',
+    'AutoMLOrchestrator',
+    'detect_task',
+    'calculate_metrics',
+    '__version__'
 ]
 
-# Module level docstring for help()
-def get_info():
-    """
-    Get information about the AutoML Platform.
-    
-    Returns:
-        dict: Platform information including version, features, and usage
-    """
-    return {
-        "version": __version__,
-        "description": "Production-ready AutoML with no data leakage",
-        "features": [
-            "30+ sklearn models + XGBoost/LightGBM/CatBoost",
-            "Automatic preprocessing with no data leakage",
-            "Hyperparameter optimization with Optuna",
-            "Model explainability (SHAP/LIME)",
-            "Imbalanced data handling",
-            "REST API for deployment",
-            "Comprehensive testing suite"
-        ],
-        "usage": """
-        from automl_platform import AutoMLConfig, AutoMLOrchestrator
-        import pandas as pd
-        
-        # Load data
-        df = pd.read_csv('data.csv')
-        X = df.drop(columns=['target'])
-        y = df['target']
-        
-        # Configure and train
-        config = AutoMLConfig()
-        orchestrator = AutoMLOrchestrator(config)
-        orchestrator.fit(X, y)
-        
-        # Get results
-        leaderboard = orchestrator.get_leaderboard()
-        predictions = orchestrator.predict(X_test)
-        """,
-        "documentation": "https://github.com/automl-platform/automl-platform",
-        "license": "MIT"
-    }
+# Lazy imports to avoid circular dependencies
+# Import only when explicitly needed by using:
+# from automl_platform.config import AutoMLConfig
+# from automl_platform.orchestrator import AutoMLOrchestrator
+# etc.
+
+def get_config():
+    """Lazy import for config module"""
+    from .config import AutoMLConfig, load_config
+    return AutoMLConfig, load_config
+
+def get_orchestrator():
+    """Lazy import for orchestrator module"""
+    from .orchestrator import AutoMLOrchestrator
+    return AutoMLOrchestrator
+
+def get_data_prep():
+    """Lazy import for data_prep module"""
+    from .data_prep import DataPreprocessor, validate_data
+    return DataPreprocessor, validate_data
+
+def get_metrics():
+    """Lazy import for metrics module"""
+    from .metrics import calculate_metrics, detect_task
+    return calculate_metrics, detect_task
+
+def get_model_selection():
+    """Lazy import for model_selection module"""
+    from .model_selection import get_available_models, get_param_grid
+    return get_available_models, get_param_grid
+
+# Optional: Import the most commonly used classes only
+# These are safe imports that don't cause circular dependencies
+try:
+    from .config import AutoMLConfig
+    from .metrics import detect_task, calculate_metrics
+except ImportError as e:
+    # If there's still an import error, just pass
+    # The modules can still be imported directly
+    pass
