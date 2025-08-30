@@ -293,7 +293,8 @@ class AutoMLOrchestrator:
         from sklearn.inspection import permutation_importance
         
         try:
-            # Get feature names after preprocessing
+            # CRITICAL FIX: Use transform instead of fit_transform to avoid data leakage
+            # The pipeline is already fitted, we just need to transform the data
             X_transformed = self.best_pipeline.named_steps['preprocessor'].transform(X)
             
             # Calculate permutation importance
