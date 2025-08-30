@@ -1,0 +1,302 @@
+# ==============================================================================
+# Configuration AutoML Platform
+# Fichier à placer à la racine du projet (remplacer config_yaml.txt)
+# ==============================================================================
+
+# Environnement: development, staging, production
+environment: development
+debug: true
+random_state: 42
+n_jobs: -1
+verbose: 1
+
+# ---------- Storage Configuration ----------
+storage:
+  backend: local  # Options: local, minio, s3
+  local_base_path: ./ml_storage
+  
+  # MinIO/S3 settings (si backend = minio ou s3)
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  secure: false
+  region: us-east-1
+  
+  # Buckets
+  models_bucket: models
+  datasets_bucket: datasets
+  artifacts_bucket: artifacts
+  
+  # Features
+  enable_feature_store: true
+  feature_cache_size: 100
+  auto_versioning: true
+  max_versions_per_model: 10
+  cleanup_old_versions: false
+  
+  # Multi-tenant
+  enable_multi_tenant: true
+  default_tenant_id: default
+
+# ---------- Monitoring Configuration ----------
+monitoring:
+  enabled: true
+  
+  # Prometheus
+  prometheus_enabled: true
+  prometheus_port: 8000
+  
+  # Drift detection
+  drift_detection_enabled: true
+  drift_check_frequency: 100
+  drift_sensitivity: 0.05
+  psi_threshold: 0.25
+  
+  # Data quality
+  quality_check_enabled: true
+  min_quality_score: 70.0
+  max_missing_ratio: 0.3
+  max_outlier_ratio: 0.1
+  
+  # Performance
+  track_performance: true
+  performance_window_days: 7
+  min_predictions_for_metrics: 30
+  
+  # Alerting
+  alerting_enabled: true
+  alert_channels: [log]  # Options: log, email, slack, webhook
+  
+  # Alert thresholds
+  accuracy_alert_threshold: 0.8
+  drift_alert_threshold: 0.5
+  error_rate_threshold: 0.05
+  latency_threshold: 1.0
+  quality_score_threshold: 70.0
+  
+  # Notification settings (optionnel)
+  # slack_webhook_url: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+  # email_smtp_host: smtp.gmail.com
+  # email_smtp_port: 587
+  # email_from: alerts@automl.com
+  # email_recipients: []
+  
+  # Reporting
+  log_predictions: true
+  log_features: false
+  create_reports: true
+  report_frequency: daily
+  report_output_dir: ./monitoring_reports
+  
+  # Integration
+  grafana_enabled: false
+  evidently_enabled: true
+
+# ---------- Worker Configuration ----------
+worker:
+  enabled: false  # Mettre à true pour activer le training parallèle
+  backend: celery  # Options: celery, ray, dask, local
+  
+  # Celery settings
+  broker_url: redis://localhost:6379/0
+  result_backend: redis://localhost:6379/0
+  
+  # Worker pool
+  max_workers: 4
+  max_concurrent_jobs: 2
+  worker_prefetch_multiplier: 1
+  task_time_limit: 3600
+  task_soft_time_limit: 3300
+  
+  # Queues
+  queues:
+    default:
+      priority: 0
+    training:
+      priority: 1
+    prediction:
+      priority: 2
+    gpu:
+      priority: 3
+      routing_key: gpu.*
+  
+  # Resources
+  enable_gpu_queue: false
+  gpus_per_worker: 1
+  memory_limit_gb: 8.0
+  cpu_limit: 4
+  
+  # Retry policy
+  task_max_retries: 3
+  task_retry_delay: 60
+  task_retry_backoff: true
+  task_retry_jitter: true
+  
+  # Monitoring
+  enable_task_events: true
+  enable_worker_monitoring: true
+  worker_heartbeat_interval: 30
+  
+  # Auto-scaling
+  autoscale_enabled: false
+  autoscale_min_workers: 1
+  autoscale_max_workers: 10
+  autoscale_target_cpu: 70.0
+
+# ---------- LLM Configuration ----------
+llm:
+  enabled: false  # Mettre à true si vous avez une clé API
+  
+  # Provider
+  provider: openai  # Options: openai, anthropic, huggingface, local
+  # api_key: sk-YOUR-API-KEY  # Ou utiliser variable d'environnement OPENAI_API_KEY
+  
+  # Model
+  model_name: gpt-4
+  temperature: 0.7
+  max_tokens: 1000
+  
+  # Features
+  enable_data_cleaning: true
+  enable_feature_suggestions: true
+  enable_model_explanations: true
+  enable_report_generation: true
+  enable_chatbot: true
+  
+  # RAG
+  enable_rag: true
+  vector_store: chromadb
+  embedding_model: text-embedding-ada-002
+  chunk_size: 1000
+  chunk_overlap: 200
+  
+  # Caching
+  cache_responses: true
+  cache_ttl: 3600
+  
+  # Cost management
+  max_cost_per_day: 100.0
+  track_usage: true
+  
+  # Prompts
+  prompts_dir: ./prompts
+
+# ---------- API Configuration ----------
+api:
+  enabled: true
+  host: 0.0.0.0
+  port: 8000
+  
+  # Security
+  enable_auth: false  # Mettre à true en production
+  jwt_secret: change-this-secret-key-in-production
+  jwt_algorithm: HS256
+  jwt_expiration_minutes: 60
+  
+  # Rate limiting
+  enable_rate_limit: true
+  rate_limit_requests: 100
+  rate_limit_period: 60
+  
+  # CORS
+  enable_cors: true
+  cors_origins: ["*"]  # Restreindre en production
+  
+  # Documentation
+  enable_docs: true
+  docs_url: /docs
+  redoc_url: /redoc
+  
+  # WebSocket
+  enable_websocket: true
+  websocket_ping_interval: 30
+  
+  # File upload
+  max_upload_size_mb: 100
+  allowed_extensions: [.csv, .parquet, .json, .xlsx]
+
+# ---------- Data Preprocessing ----------
+max_missing_ratio: 0.5
+rare_category_threshold: 0.01
+high_cardinality_threshold: 20
+outlier_method: iqr  # Options: iqr, isolation_forest, none
+outlier_threshold: 1.5
+scaling_method: robust  # Options: standard, robust, minmax, none
+
+# ---------- Feature Engineering ----------
+create_polynomial: false
+polynomial_degree: 2
+create_interactions: false
+create_datetime_features: true
+create_lag_features: false
+lag_periods: [1, 7, 30]
+
+# Advanced
+enable_auto_feature_engineering: true
+max_features_generated: 50
+feature_selection_method: mutual_info  # Options: mutual_info, shap, permutation
+feature_selection_threshold: 0.01
+
+# ---------- Text Processing ----------
+text_max_features: 100
+text_ngram_range: [1, 2]
+text_min_df: 2
+
+# ---------- Model Selection ----------
+task: auto  # Options: classification, regression, timeseries, auto
+cv_folds: 5
+validation_strategy: auto  # Options: stratified, kfold, timeseries, auto
+scoring: auto  # Determined based on task
+
+# Algorithms
+algorithms: [all]  # ou spécifier: [RandomForestClassifier, XGBClassifier, ...]
+exclude_algorithms: []
+include_neural_networks: false
+include_time_series: false
+
+# ---------- Hyperparameter Tuning ----------
+hpo_method: optuna  # Options: grid, random, optuna, none
+hpo_n_iter: 20
+hpo_time_budget: 3600
+early_stopping_rounds: 50
+warm_start: true
+
+# ---------- Ensemble Methods ----------
+ensemble_method: voting  # Options: voting, stacking, none
+ensemble_n_layers: 2
+ensemble_use_probabilities: true
+calibrate_probabilities: false
+
+# ---------- Class Imbalance ----------
+handle_imbalance: true
+imbalance_method: class_weight  # Options: class_weight, smote, adasyn, none
+smote_neighbors: 5
+
+# ---------- Performance Thresholds ----------
+min_accuracy: 0.6
+min_auc: 0.6
+min_r2: 0.0
+
+# ---------- Output Settings ----------
+output_dir: ./automl_output
+save_pipeline: true
+save_predictions: true
+save_feature_importance: true
+generate_report: true
+report_format: html  # Options: html, pdf, markdown
+
+# ---------- Resource Limits ----------
+max_memory_gb: 16.0
+max_time_minutes: 60
+max_models_to_train: 50
+
+# ---------- Multi-tenant Support ----------
+tenant_id: default
+# project_id: 
+# user_id: 
+
+# ---------- Logging ----------
+log_level: INFO
+log_file: ./logs/automl.log
+log_to_mlflow: false
+# mlflow_tracking_uri: http://localhost:5000
