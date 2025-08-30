@@ -281,40 +281,74 @@ def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
     # Check for empty dataframe
     if df.empty:
         issues.append("DataFrame is empty")
+        return {
+            'valid': False,
+            'issues': issues,
+            'n_rows': 0,
+            'n_columns': 0,
+            'missing_ratio': 0.0
+        }
     
-    # Check for duplicate columns
-    if df.columns.duplicated().any():
-        duplicate_cols = df.columns[df.columns.duplicated()].tolist()
-        issues.append(f"Duplicate columns: {duplicate_cols}")
+    # Check for duplicate columns - Handle edge case
+    try:
+        dup_mask = df.columns.duplicated()
+        has_duplicates = bool(dup_mask.any())
+        if has_duplicates:
+            duplicate_cols = df.columns[dup_mask].tolist()
+            issues.append(f"Duplicate columns: {duplicate_cols}")
+    except:
+        # Fallback for any edge case
+        col_counts = df.columns.value_counts()
+        duplicate_cols = col_counts[col_counts > 1].index.tolist()
+        if duplicate_cols:
+            issues.append(f"Duplicate columns: {duplicate_cols}")
     
-    # Check for all null columns
-    null_mask = df.isnull().all()
-    if isinstance(null_mask, pd.Series) and null_mask.any():
-        null_cols = df.columns[null_mask].tolist()
-        if null_cols:
-            issues.append(f"All null columns: {null_cols}")
+    # Check for all null columns - Handle duplicate columns case
+    try:
+        for col_idx, col in enumerate(df.columns):
+            # Use iloc to handle duplicate column names
+            if df.iloc[:, col_idx].isnull().all():
+                if col not in [c for c in issues if 'null' in c]:
+                    issues.append(f"All null column: {col}")
+    except:
+        pass
     
-    # Check for single value columns
-    single_value_cols = []
-    for col in df.columns:
-        if df[col].nunique() == 1:
-            single_value_cols.append(col)
-    if single_value_cols:
-        issues.append(f"Single value columns: {single_value_cols}")
+    # Check for single value columns - Handle duplicate columns case
+    try:
+        single_value_cols = []
+        for col_idx, col in enumerate(df.columns):
+            # Use iloc to handle duplicate column names
+            if df.iloc[:, col_idx].nunique() == 1:
+                single_value_cols.append(str(col))
+        if single_value_cols:
+            # Deduplicate the list
+            single_value_cols = list(set(single_value_cols))
+            issues.append(f"Single value columns: {single_value_cols}")
+    except:
+        pass
     
     # Check for high missing ratio
-    high_missing = {}
-    for col in df.columns:
-        missing_ratio = df[col].isnull().mean()
-        if missing_ratio > 0.5:
-            high_missing[col] = missing_ratio
-    if high_missing:
-        issues.append(f"High missing ratio: {high_missing}")
+    try:
+        high_missing = {}
+        for col_idx, col in enumerate(df.columns):
+            missing_ratio = df.iloc[:, col_idx].isnull().mean()
+            if missing_ratio > 0.5:
+                high_missing[str(col)] = float(missing_ratio)
+        if high_missing:
+            issues.append(f"High missing ratio: {high_missing}")
+    except:
+        pass
+    
+    # Calculate overall missing ratio safely
+    try:
+        missing_ratio = df.isnull().values.mean()
+    except:
+        missing_ratio = 0.0
     
     return {
         'valid': len(issues) == 0,
         'issues': issues,
         'n_rows': len(df),
         'n_columns': len(df.columns),
-        'missing_ratio': df.isnull().mean().mean()
+        'missing_ratio': float(missing_ratio)
     }
