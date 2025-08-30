@@ -9,7 +9,7 @@ import json
 import hashlib
 import pickle
 import joblib
-from typing import Any, Dict, List, Optional, Union, BinaryIO
+from typing import Any, Dict, List, Optional, Union, BinaryIO, Tuple
 from datetime import datetime
 from pathlib import Path
 import logging
