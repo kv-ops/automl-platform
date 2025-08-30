@@ -1,10 +1,9 @@
 """Enhanced configuration management for AutoML platform with Storage, Monitoring, and Workers."""
 
-from typing import List, Dict, Any, Optional, Tuple
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import logging
 import os
 from datetime import timedelta
