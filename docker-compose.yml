@@ -1,0 +1,249 @@
+version: '3.8'
+
+services:
+  # PostgreSQL for metadata
+  postgres:
+    image: postgres:14-alpine
+    container_name: automl_postgres
+    environment:
+      POSTGRES_DB: automl
+      POSTGRES_USER: automl
+      POSTGRES_PASSWORD: automl_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - automl_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U automl"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and Celery broker
+  redis:
+    image: redis:7-alpine
+    container_name: automl_redis
+    command: redis-server --appendonly yes --requirepass redis_secret
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - automl_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO for S3-compatible object storage
+  minio:
+    image: minio/minio:latest
+    container_name: automl_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_DEFAULT_BUCKETS: models,datasets,artifacts
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    networks:
+      - automl_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MLflow for model registry
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    container_name: automl_mlflow
+    environment:
+      BACKEND_STORE_URI: postgresql://automl:automl_secret@postgres:5432/automl
+      ARTIFACT_ROOT: s3://models/
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin123
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "5000:5000"
+    networks:
+      - automl_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://automl:automl_secret@postgres:5432/automl
+      --default-artifact-root s3://models/
+      --host 0.0.0.0
+      --port 5000
+
+  # Celery worker for async jobs
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: automl_celery_worker
+    command: celery -A automl_platform.worker worker --loglevel=info --concurrency=2
+    environment:
+      CELERY_BROKER_URL: redis://:redis_secret@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:redis_secret@redis:6379/0
+      DATABASE_URL: postgresql://automl:automl_secret@postgres:5432/automl
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - ./:/app
+    networks:
+      - automl_network
+    depends_on:
+      - redis
+      - postgres
+      - minio
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # Celery beat for scheduled tasks
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: automl_celery_beat
+    command: celery -A automl_platform.worker beat --loglevel=info
+    environment:
+      CELERY_BROKER_URL: redis://:redis_secret@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:redis_secret@redis:6379/0
+    volumes:
+      - ./:/app
+    networks:
+      - automl_network
+    depends_on:
+      - redis
+
+  # Flower for Celery monitoring
+  flower:
+    image: mher/flower:latest
+    container_name: automl_flower
+    command: celery --broker=redis://:redis_secret@redis:6379/0 flower --port=5555
+    environment:
+      CELERY_BROKER_URL: redis://:redis_secret@redis:6379/0
+      FLOWER_BASIC_AUTH: admin:admin123
+    ports:
+      - "5555:5555"
+    networks:
+      - automl_network
+    depends_on:
+      - redis
+
+  # FastAPI application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: automl_api
+    command: uvicorn automl_platform.api.app:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql://automl:automl_secret@postgres:5432/automl
+      REDIS_URL: redis://:redis_secret@redis:6379/0
+      CELERY_BROKER_URL: redis://:redis_secret@redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-this}
+    volumes:
+      - ./:/app
+    ports:
+      - "8000:8000"
+    networks:
+      - automl_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # Streamlit UI
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: automl_streamlit
+    command: streamlit run automl_platform/ui/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    environment:
+      API_URL: http://api:8000
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - ./:/app
+    ports:
+      - "8501:8501"
+    networks:
+      - automl_network
+    depends_on:
+      - api
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: automl_prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - automl_network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: automl_grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    networks:
+      - automl_network
+    depends_on:
+      - prometheus
+
+networks:
+  automl_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  mlflow_data:
