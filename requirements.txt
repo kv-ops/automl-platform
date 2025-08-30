@@ -109,3 +109,18 @@ passlib[bcrypt]>=1.7.4  # Password hashing
 # ---------- Performance Monitoring ----------
 memory-profiler>=0.60.0
 line-profiler>=3.5.0
+
+# ---------- Storage ----------
+minio>=7.1.0
+boto3>=1.26.0
+pyarrow>=10.0.0
+
+# ---------- Monitoring ---------- 
+prometheus-client>=0.16.0
+evidently>=0.4.0
+scipy>=1.10.0
+
+# ---------- Optionnel mais recommandé ----------
+pandas>=1.5.0
+numpy>=1.24.0
+scikit-learn>=1.2.0
