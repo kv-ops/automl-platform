@@ -294,7 +294,7 @@ class AutoMLOrchestrator:
         
         try:
             # Get feature names after preprocessing
-            X_transformed = self.best_pipeline.named_steps['preprocessor'].fit_transform(X, y)
+            X_transformed = self.best_pipeline.named_steps['preprocessor'].transform(X)
             
             # Calculate permutation importance
             result = permutation_importance(
