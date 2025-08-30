@@ -1,537 +1,939 @@
-"""FastAPI application for AutoML platform."""
+"""
+Enhanced FastAPI application for AutoML Platform
+Production-ready with rate limiting, monitoring, and comprehensive endpoints
+"""
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, BackgroundTasks, WebSocket, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from contextlib import asynccontextmanager
+from pydantic import BaseModel, Field, validator
+from typing import Optional, List, Dict, Any, Union
 import pandas as pd
 import numpy as np
-import logging
-from datetime import datetime
-import uuid
-import io
 import json
-from pathlib import Path
 import asyncio
 import aiofiles
+from datetime import datetime, timedelta
+import hashlib
+import jwt
+import os
+from pathlib import Path
+import uuid
+import logging
+from io import BytesIO
+import time
 
-from ..orchestrator import AutoMLOrchestrator
-from ..config import AutoMLConfig
-from ..inference import load_pipeline, predict, predict_proba, save_predictions
-from ..data_prep import validate_data
-from ..metrics import calculate_metrics
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
-# Setup logging
+# Monitoring
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+import uvicorn
+
+# Import your modules
+from automl_platform.config import AutoMLConfig, load_config
+from automl_platform.enhanced_orchestrator import EnhancedAutoMLOrchestrator
+from automl_platform.storage import StorageManager
+from automl_platform.monitoring import MonitoringService, DataQualityMonitor
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+config = load_config(os.getenv("CONFIG_PATH", "config.yaml"))
+
+# ============================================================================
+# Metrics
+# ============================================================================
+
+# Prometheus metrics
+request_count = Counter('automl_api_requests_total', 'Total API requests', ['method', 'endpoint', 'status'])
+request_duration = Histogram('automl_api_request_duration_seconds', 'API request duration', ['method', 'endpoint'])
+active_models = Gauge('automl_active_models', 'Number of active models')
+training_jobs = Gauge('automl_training_jobs', 'Number of training jobs', ['status'])
+prediction_count = Counter('automl_predictions_total', 'Total predictions made')
+upload_size = Histogram('automl_upload_size_bytes', 'Size of uploaded files')
+
+# ============================================================================
+# Lifespan Management
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle"""
+    # Startup
+    logger.info("Starting AutoML API...")
+    
+    # Initialize storage
+    app.state.storage = StorageManager(
+        backend=config.storage.backend,
+        endpoint=config.storage.endpoint,
+        access_key=config.storage.access_key,
+        secret_key=config.storage.secret_key
+    ) if config.storage.backend != "none" else None
+    
+    # Initialize monitoring
+    app.state.monitoring = MonitoringService(app.state.storage) if config.monitoring.enabled else None
+    
+    # Initialize orchestrators pool
+    app.state.orchestrators = {}
+    
+    # Initialize WebSocket connections
+    app.state.websocket_connections = {}
+    
+    logger.info("AutoML API started successfully")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down AutoML API...")
+    
+    # Clean up resources
+    if app.state.monitoring:
+        app.state.monitoring.save_monitoring_data()
+    
+    # Close WebSocket connections
+    for ws in app.state.websocket_connections.values():
+        await ws.close()
+    
+    logger.info("AutoML API shutdown complete")
+
+# ============================================================================
+# Application Setup
+# ============================================================================
 
 # Create FastAPI app
 app = FastAPI(
     title="AutoML Platform API",
-    description="Production-ready AutoML with no data leakage",
-    version="3.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    description="Production-ready AutoML platform with monitoring and storage",
+    version="2.0.0",
+    docs_url="/docs" if config.api.enable_docs else None,
+    redoc_url="/redoc" if config.api.enable_docs else None,
+    lifespan=lifespan
 )
+
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify allowed origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if config.api.enable_cors:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.api.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# Global state management
-class AppState:
-    def __init__(self):
-        self.active_jobs = {}
-        self.models_cache = {}
-        self.max_models = 10  # Maximum models to keep in cache
-        
-state = AppState()
+# ============================================================================
+# Security
+# ============================================================================
 
-# Pydantic models for request/response
+security = HTTPBearer()
+
+def create_token(user_id: str) -> str:
+    """Create JWT token"""
+    payload = {
+        "user_id": user_id,
+        "exp": datetime.utcnow() + timedelta(minutes=config.api.jwt_expiration_minutes)
+    }
+    return jwt.encode(payload, config.api.jwt_secret, algorithm=config.api.jwt_algorithm)
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """Verify JWT token"""
+    if not config.api.enable_auth:
+        return "anonymous"
+    
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, config.api.jwt_secret, algorithms=[config.api.jwt_algorithm])
+        return payload["user_id"]
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# ============================================================================
+# Pydantic Models
+# ============================================================================
+
 class TrainRequest(BaseModel):
-    target: str = Field(..., description="Target column name")
-    task: str = Field("auto", description="Task type: auto, classification, regression")
-    cv_folds: int = Field(5, ge=2, le=20, description="Number of CV folds")
-    algorithms: List[str] = Field(["all"], description="List of algorithms to test")
-    hpo_method: str = Field("optuna", description="HPO method: optuna, random, grid, none")
-    hpo_n_iter: int = Field(20, ge=1, le=100, description="Number of HPO iterations")
-    config: Optional[Dict[str, Any]] = Field(None, description="Additional configuration")
+    """Training request model"""
+    experiment_name: Optional[str] = Field(None, description="Name for the experiment")
+    task: Optional[str] = Field("auto", description="Task type: classification, regression, auto")
+    algorithms: Optional[List[str]] = Field(None, description="Algorithms to use")
+    max_runtime_seconds: Optional[int] = Field(3600, description="Maximum runtime in seconds")
+    optimize_metric: Optional[str] = Field("auto", description="Metric to optimize")
+    validation_split: Optional[float] = Field(0.2, description="Validation split ratio")
+    enable_monitoring: Optional[bool] = Field(True, description="Enable monitoring")
+    enable_feature_engineering: Optional[bool] = Field(True, description="Enable feature engineering")
 
-class PredictionRequest(BaseModel):
-    model_id: str = Field(..., description="Model ID")
-    features: Dict[str, Any] = Field(..., description="Feature values")
-    explain: bool = Field(False, description="Include explanation")
-
-class BatchPredictionRequest(BaseModel):
-    model_id: str = Field(..., description="Model ID")
-    data: List[Dict[str, Any]] = Field(..., description="List of feature dictionaries")
-    include_probabilities: bool = Field(False, description="Include probability predictions")
-
-class JobStatus(BaseModel):
-    job_id: str
-    status: str  # pending, running, completed, failed
-    progress: float
-    message: str
-    created_at: datetime
-    updated_at: datetime
-    result: Optional[Dict[str, Any]] = None
+class PredictRequest(BaseModel):
+    """Prediction request model"""
+    model_id: str = Field(..., description="Model ID to use for prediction")
+    data: Dict[str, Any] = Field(..., description="Input data for prediction")
+    track: Optional[bool] = Field(True, description="Track predictions for monitoring")
 
 class ModelInfo(BaseModel):
+    """Model information response"""
     model_id: str
+    algorithm: str
+    metrics: Dict[str, float]
+    version: str
     created_at: str
-    task: str
-    best_model: str
-    cv_score: float
-    n_features: int
-    n_samples_trained: int
+    status: str
 
-# Background training task
-async def train_background(job_id: str, df: pd.DataFrame, train_request: TrainRequest):
-    """Async background training task."""
-    try:
-        # Update job status
-        state.active_jobs[job_id]["status"] = "running"
-        state.active_jobs[job_id]["message"] = "Preparing data..."
-        state.active_jobs[job_id]["progress"] = 0.1
-        
-        # Split features and target
-        if train_request.target not in df.columns:
-            raise ValueError(f"Target column '{train_request.target}' not found")
-        
-        X = df.drop(columns=[train_request.target])
-        y = df[train_request.target]
-        
-        # Create configuration
-        config_dict = train_request.config or {}
-        config_dict.update({
-            "cv_folds": train_request.cv_folds,
-            "algorithms": train_request.algorithms,
-            "hpo_method": train_request.hpo_method,
-            "hpo_n_iter": train_request.hpo_n_iter
-        })
-        config = AutoMLConfig(**config_dict)
-        
-        # Update progress
-        state.active_jobs[job_id]["message"] = "Training models..."
-        state.active_jobs[job_id]["progress"] = 0.2
-        
-        # Train
-        orchestrator = AutoMLOrchestrator(config)
-        await asyncio.get_event_loop().run_in_executor(
-            None, orchestrator.fit, X, y, train_request.task
-        )
-        
-        # Update progress
-        state.active_jobs[job_id]["message"] = "Saving model..."
-        state.active_jobs[job_id]["progress"] = 0.9
-        
-        # Save model
-        model_id = str(uuid.uuid4())
-        model_dir = Path("./api_models")
-        model_dir.mkdir(exist_ok=True)
-        model_path = model_dir / f"{model_id}.joblib"
-        
-        orchestrator.save_pipeline(str(model_path))
-        
-        # Cache model (limit cache size)
-        if len(state.models_cache) >= state.max_models:
-            # Remove oldest model from cache
-            oldest_id = min(state.models_cache, 
-                          key=lambda k: state.models_cache[k]["created_at"])
-            del state.models_cache[oldest_id]
-        
-        state.models_cache[model_id] = {
-            "orchestrator": orchestrator,
-            "path": str(model_path),
-            "created_at": datetime.now().isoformat(),
-            "task": orchestrator.task,
-            "best_model": orchestrator.leaderboard[0]["model"] if orchestrator.leaderboard else None,
-            "cv_score": orchestrator.leaderboard[0]["cv_score"] if orchestrator.leaderboard else None,
-            "n_features": X.shape[1],
-            "n_samples": len(X)
-        }
-        
-        # Prepare result
-        leaderboard_dict = orchestrator.get_leaderboard(top_n=10).to_dict('records')
-        
-        # Update job as completed
-        state.active_jobs[job_id]["status"] = "completed"
-        state.active_jobs[job_id]["message"] = "Training completed successfully"
-        state.active_jobs[job_id]["progress"] = 1.0
-        state.active_jobs[job_id]["result"] = {
-            "model_id": model_id,
-            "task": orchestrator.task,
-            "best_model": state.models_cache[model_id]["best_model"],
-            "cv_score": state.models_cache[model_id]["cv_score"],
-            "leaderboard": leaderboard_dict,
-            "n_models_tested": len(orchestrator.leaderboard)
-        }
-        
-    except Exception as e:
-        logger.error(f"Training failed for job {job_id}: {str(e)}")
-        state.active_jobs[job_id]["status"] = "failed"
-        state.active_jobs[job_id]["message"] = str(e)
-        state.active_jobs[job_id]["progress"] = 0.0
+class ExperimentInfo(BaseModel):
+    """Experiment information response"""
+    experiment_id: str
+    status: str
+    progress: float
+    models_trained: int
+    best_score: Optional[float]
+    elapsed_time: float
+    eta: Optional[float]
+
+class DataQualityReport(BaseModel):
+    """Data quality report"""
+    quality_score: float
+    issues: List[Dict[str, Any]]
+    warnings: List[Dict[str, Any]]
+    statistics: Dict[str, Any]
+
+# ============================================================================
+# Middleware
+# ============================================================================
+
+@app.middleware("http")
+async def add_metrics(request: Request, call_next):
+    """Add metrics to all requests"""
+    start_time = time.time()
     
-    finally:
-        state.active_jobs[job_id]["updated_at"] = datetime.now()
+    # Process request
+    response = await call_next(request)
+    
+    # Record metrics
+    duration = time.time() - start_time
+    request_count.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status=response.status_code
+    ).inc()
+    request_duration.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration)
+    
+    # Add custom headers
+    response.headers["X-Process-Time"] = str(duration)
+    response.headers["X-Request-ID"] = str(uuid.uuid4())
+    
+    return response
 
-# API Endpoints
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    """Root endpoint with API documentation."""
-    html_content = """
-    <html>
-        <head>
-            <title>AutoML Platform API</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                h1 { color: #333; }
-                .endpoint { background: #f4f4f4; padding: 10px; margin: 10px 0; border-radius: 5px; }
-                .method { font-weight: bold; color: #007bff; }
-                code { background: #e9ecef; padding: 2px 5px; border-radius: 3px; }
-            </style>
-        </head>
-        <body>
-            <h1>🚀 AutoML Platform API v3.0</h1>
-            <p>Production-ready AutoML with no data leakage</p>
-            
-            <h2>Available Endpoints:</h2>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/train</code> - Train new AutoML model
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/predict</code> - Single prediction
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/predict_batch</code> - Batch predictions
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/models</code> - List trained models
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/model/{model_id}</code> - Get model details
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/job/{job_id}</code> - Check job status
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/health</code> - Health check
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/docs</code> - Interactive API documentation
-            </div>
-            
-            <h2>Quick Start:</h2>
-            <ol>
-                <li>Upload your data using POST /train</li>
-                <li>Check training status with GET /job/{job_id}</li>
-                <li>Make predictions with POST /predict</li>
-            </ol>
-        </body>
-    </html>
-    """
-    return html_content
+# ============================================================================
+# Health & Monitoring Endpoints
+# ============================================================================
 
 @app.get("/health")
-async def health():
-    """Health check endpoint."""
+async def health_check():
+    """Health check endpoint"""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "models_cached": len(state.models_cache),
-        "active_jobs": len(state.active_jobs),
-        "version": "3.0.0"
+        "version": "2.0.0",
+        "environment": config.environment
     }
 
-@app.post("/train", status_code=status.HTTP_202_ACCEPTED)
-async def train_model(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="CSV file with training data"),
-    config: str = None
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus metrics endpoint"""
+    return StreamingResponse(
+        generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+@app.get("/api/v1/status")
+@limiter.limit("10/minute")
+async def get_status(request: Request, user_id: str = Depends(verify_token)):
+    """Get system status"""
+    return {
+        "status": "operational",
+        "active_experiments": len(app.state.orchestrators),
+        "models_available": active_models._value.get(),
+        "storage_backend": config.storage.backend,
+        "monitoring_enabled": config.monitoring.enabled,
+        "user_id": user_id
+    }
+
+# ============================================================================
+# Data Management Endpoints
+# ============================================================================
+
+@app.post("/api/v1/data/upload")
+@limiter.limit("5/minute")
+async def upload_data(
+    request: Request,
+    file: UploadFile = File(...),
+    dataset_name: Optional[str] = None,
+    user_id: str = Depends(verify_token)
 ):
-    """Train a new AutoML model (async)."""
-    try:
-        # Parse configuration
-        if config:
-            train_request = TrainRequest(**json.loads(config))
-        else:
-            return HTTPException(
-                status_code=400,
-                detail="Configuration required. Pass as JSON string in 'config' parameter"
-            )
-        
-        # Load data
-        content = await file.read()
-        df = pd.read_csv(io.StringIO(content.decode('utf-8')))
-        
-        logger.info(f"Loaded data: {df.shape}")
-        
-        # Validate data
-        validation = validate_data(df)
-        if not validation["valid"]:
-            logger.warning(f"Data issues: {validation['issues']}")
-        
-        # Create job
-        job_id = str(uuid.uuid4())
-        state.active_jobs[job_id] = {
-            "job_id": job_id,
-            "status": "pending",
-            "progress": 0.0,
-            "message": "Job created",
-            "created_at": datetime.now(),
-            "updated_at": datetime.now(),
-            "result": None
-        }
-        
-        # Start background training
-        background_tasks.add_task(train_background, job_id, df, train_request)
-        
-        return {
-            "job_id": job_id,
-            "message": "Training started",
-            "status_url": f"/job/{job_id}"
-        }
-        
-    except Exception as e:
-        logger.error(f"Training error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/predict")
-async def predict_single(request: PredictionRequest):
-    """Make a single prediction."""
-    try:
-        # Get model
-        if request.model_id not in state.models_cache:
-            # Try to load from disk
-            model_path = Path(f"./api_models/{request.model_id}.joblib")
-            if not model_path.exists():
-                raise HTTPException(status_code=404, detail=f"Model {request.model_id} not found")
-            
-            # Load and cache
-            from ..inference import load_pipeline
-            pipeline, metadata = load_pipeline(model_path)
-            orchestrator = AutoMLOrchestrator(AutoMLConfig())
-            orchestrator.best_pipeline = pipeline
-            orchestrator.task = metadata.get("task", "classification")
-            
-            state.models_cache[request.model_id] = {
-                "orchestrator": orchestrator,
-                "path": str(model_path),
-                "created_at": datetime.now().isoformat(),
-                "task": orchestrator.task
-            }
-        
-        orchestrator = state.models_cache[request.model_id]["orchestrator"]
-        
-        # Create dataframe
-        df = pd.DataFrame([request.features])
-        
-        # Predict
-        prediction = orchestrator.predict(df)[0]
-        
-        response = {
-            "model_id": request.model_id,
-            "prediction": prediction.item() if hasattr(prediction, 'item') else prediction,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Add probabilities if classification
-        if orchestrator.task == "classification" and hasattr(orchestrator.best_pipeline, 'predict_proba'):
-            try:
-                proba = orchestrator.predict_proba(df)[0]
-                response["probabilities"] = proba.tolist()
-                response["confidence"] = float(max(proba))
-            except:
-                pass
-        
-        # Add explanation if requested
-        if request.explain:
-            try:
-                explanation = orchestrator.explain_predictions(df, indices=[0])
-                response["explanation"] = explanation
-            except Exception as e:
-                logger.warning(f"Could not generate explanation: {e}")
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Prediction error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/predict_batch")
-async def predict_batch(request: BatchPredictionRequest):
-    """Make batch predictions."""
-    try:
-        # Get model
-        if request.model_id not in state.models_cache:
-            raise HTTPException(status_code=404, detail=f"Model {request.model_id} not found")
-        
-        orchestrator = state.models_cache[request.model_id]["orchestrator"]
-        
-        # Create dataframe
-        df = pd.DataFrame(request.data)
-        
-        # Predict
-        predictions = orchestrator.predict(df)
-        
-        results = []
-        for i, pred in enumerate(predictions):
-            result = {
-                "index": i,
-                "prediction": pred.item() if hasattr(pred, 'item') else pred
-            }
-            
-            # Add probabilities if requested
-            if request.include_probabilities and orchestrator.task == "classification":
-                try:
-                    proba = orchestrator.predict_proba(df.iloc[[i]])[0]
-                    result["probabilities"] = proba.tolist()
-                    result["confidence"] = float(max(proba))
-                except:
-                    pass
-            
-            results.append(result)
-        
-        return {
-            "model_id": request.model_id,
-            "predictions": results,
-            "n_predictions": len(results),
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Batch prediction error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/models", response_model=List[ModelInfo])
-async def list_models():
-    """List all available models."""
-    models = []
-    for model_id, info in state.models_cache.items():
-        models.append(ModelInfo(
-            model_id=model_id,
-            created_at=info["created_at"],
-            task=info.get("task", "unknown"),
-            best_model=info.get("best_model", "unknown"),
-            cv_score=info.get("cv_score", 0.0),
-            n_features=info.get("n_features", 0),
-            n_samples_trained=info.get("n_samples", 0)
-        ))
-    return models
-
-@app.get("/model/{model_id}")
-async def get_model_details(model_id: str):
-    """Get detailed model information."""
-    if model_id not in state.models_cache:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    """Upload dataset"""
+    # Validate file
+    if not file.filename.endswith(tuple(config.api.allowed_extensions)):
+        raise HTTPException(400, f"Invalid file type. Allowed: {config.api.allowed_extensions}")
     
-    info = state.models_cache[model_id]
-    orchestrator = info["orchestrator"]
+    # Check file size
+    contents = await file.read()
+    file_size = len(contents)
+    
+    if file_size > config.api.max_upload_size_mb * 1024 * 1024:
+        raise HTTPException(413, f"File too large. Maximum size: {config.api.max_upload_size_mb} MB")
+    
+    upload_size.observe(file_size)
+    
+    # Parse data
+    try:
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(BytesIO(contents))
+        elif file.filename.endswith('.parquet'):
+            df = pd.read_parquet(BytesIO(contents))
+        elif file.filename.endswith('.json'):
+            df = pd.read_json(BytesIO(contents))
+        elif file.filename.endswith('.xlsx'):
+            df = pd.read_excel(BytesIO(contents))
+        else:
+            raise ValueError("Unsupported file format")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to parse file: {str(e)}")
+    
+    # Generate dataset ID
+    dataset_id = dataset_name or f"dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{user_id}"
+    
+    # Save to storage
+    if app.state.storage:
+        try:
+            path = app.state.storage.save_dataset(df, dataset_id, tenant_id=user_id)
+            logger.info(f"Dataset saved: {dataset_id}")
+        except Exception as e:
+            logger.error(f"Failed to save dataset: {e}")
+            raise HTTPException(500, "Failed to save dataset")
+    
+    # Data quality check
+    quality_report = None
+    if app.state.monitoring:
+        quality_monitor = DataQualityMonitor()
+        quality_report = quality_monitor.check_data_quality(df)
+    
+    return {
+        "dataset_id": dataset_id,
+        "shape": list(df.shape),
+        "columns": list(df.columns),
+        "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+        "quality_report": quality_report,
+        "storage_path": path if app.state.storage else None
+    }
+
+@app.get("/api/v1/data/{dataset_id}")
+@limiter.limit("10/minute")
+async def get_dataset_info(
+    request: Request,
+    dataset_id: str,
+    user_id: str = Depends(verify_token)
+):
+    """Get dataset information"""
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        df = app.state.storage.load_dataset(dataset_id, tenant_id=user_id)
+        return {
+            "dataset_id": dataset_id,
+            "shape": list(df.shape),
+            "columns": list(df.columns),
+            "head": df.head(10).to_dict('records'),
+            "statistics": df.describe().to_dict()
+        }
+    except FileNotFoundError:
+        raise HTTPException(404, f"Dataset {dataset_id} not found")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load dataset: {str(e)}")
+
+@app.post("/api/v1/data/{dataset_id}/quality")
+@limiter.limit("5/minute")
+async def check_data_quality(
+    request: Request,
+    dataset_id: str,
+    user_id: str = Depends(verify_token)
+) -> DataQualityReport:
+    """Check data quality"""
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        df = app.state.storage.load_dataset(dataset_id, tenant_id=user_id)
+        quality_monitor = DataQualityMonitor()
+        report = quality_monitor.check_data_quality(df)
+        
+        return DataQualityReport(
+            quality_score=report["quality_score"],
+            issues=report.get("issues", []),
+            warnings=report.get("warnings", []),
+            statistics={
+                "rows": report["rows"],
+                "columns": report["columns"]
+            }
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Quality check failed: {str(e)}")
+
+# ============================================================================
+# Training Endpoints
+# ============================================================================
+
+@app.post("/api/v1/train")
+@limiter.limit("2/minute")
+async def start_training(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    dataset_id: str,
+    target_column: str,
+    train_request: TrainRequest,
+    user_id: str = Depends(verify_token)
+) -> ExperimentInfo:
+    """Start training job"""
+    # Load dataset
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        df = app.state.storage.load_dataset(dataset_id, tenant_id=user_id)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Dataset {dataset_id} not found")
+    
+    # Validate target column
+    if target_column not in df.columns:
+        raise HTTPException(400, f"Target column {target_column} not found")
+    
+    # Prepare data
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+    
+    # Create experiment ID
+    experiment_id = train_request.experiment_name or f"exp_{uuid.uuid4().hex[:8]}"
+    
+    # Configure orchestrator
+    train_config = config.copy()
+    if train_request.algorithms:
+        train_config.algorithms = train_request.algorithms
+    if train_request.optimize_metric:
+        train_config.scoring = train_request.optimize_metric
+    
+    # Create orchestrator
+    orchestrator = EnhancedAutoMLOrchestrator(train_config)
+    app.state.orchestrators[experiment_id] = {
+        "orchestrator": orchestrator,
+        "status": "running",
+        "start_time": time.time(),
+        "user_id": user_id
+    }
+    
+    # Update metrics
+    training_jobs.labels(status="running").inc()
+    
+    # Start training in background
+    background_tasks.add_task(
+        run_training,
+        orchestrator,
+        X,
+        y,
+        experiment_id,
+        train_request.task
+    )
+    
+    return ExperimentInfo(
+        experiment_id=experiment_id,
+        status="running",
+        progress=0.0,
+        models_trained=0,
+        best_score=None,
+        elapsed_time=0.0,
+        eta=train_request.max_runtime_seconds
+    )
+
+async def run_training(orchestrator, X, y, experiment_id, task):
+    """Run training in background"""
+    try:
+        # Train models
+        orchestrator.fit(X, y, task=task, experiment_name=experiment_id)
+        
+        # Update status
+        app.state.orchestrators[experiment_id]["status"] = "completed"
+        training_jobs.labels(status="running").dec()
+        training_jobs.labels(status="completed").inc()
+        
+        # Update active models count
+        active_models.inc()
+        
+        logger.info(f"Training completed for experiment {experiment_id}")
+        
+    except Exception as e:
+        logger.error(f"Training failed for experiment {experiment_id}: {e}")
+        app.state.orchestrators[experiment_id]["status"] = "failed"
+        app.state.orchestrators[experiment_id]["error"] = str(e)
+        training_jobs.labels(status="running").dec()
+        training_jobs.labels(status="failed").inc()
+
+@app.get("/api/v1/experiments/{experiment_id}")
+@limiter.limit("30/minute")
+async def get_experiment_status(
+    request: Request,
+    experiment_id: str,
+    user_id: str = Depends(verify_token)
+) -> ExperimentInfo:
+    """Get experiment status"""
+    if experiment_id not in app.state.orchestrators:
+        raise HTTPException(404, f"Experiment {experiment_id} not found")
+    
+    exp = app.state.orchestrators[experiment_id]
+    
+    # Check ownership
+    if exp["user_id"] != user_id and user_id != "admin":
+        raise HTTPException(403, "Access denied")
+    
+    orchestrator = exp["orchestrator"]
+    elapsed_time = time.time() - exp["start_time"]
+    
+    # Calculate progress
+    if exp["status"] == "completed":
+        progress = 1.0
+    elif orchestrator.total_models_trained > 0:
+        progress = min(orchestrator.total_models_trained / len(orchestrator.leaderboard), 1.0)
+    else:
+        progress = 0.0
+    
+    # Get best score
+    best_score = None
+    if orchestrator.leaderboard:
+        best_score = orchestrator.leaderboard[0]["cv_score"]
+    
+    return ExperimentInfo(
+        experiment_id=experiment_id,
+        status=exp["status"],
+        progress=progress,
+        models_trained=orchestrator.total_models_trained,
+        best_score=best_score,
+        elapsed_time=elapsed_time,
+        eta=None if exp["status"] == "completed" else (elapsed_time / progress - elapsed_time) if progress > 0 else None
+    )
+
+@app.get("/api/v1/experiments/{experiment_id}/leaderboard")
+@limiter.limit("10/minute")
+async def get_leaderboard(
+    request: Request,
+    experiment_id: str,
+    top_n: Optional[int] = 10,
+    user_id: str = Depends(verify_token)
+):
+    """Get experiment leaderboard"""
+    if experiment_id not in app.state.orchestrators:
+        raise HTTPException(404, f"Experiment {experiment_id} not found")
+    
+    exp = app.state.orchestrators[experiment_id]
+    if exp["user_id"] != user_id and user_id != "admin":
+        raise HTTPException(403, "Access denied")
+    
+    orchestrator = exp["orchestrator"]
+    leaderboard = orchestrator.get_leaderboard(top_n=top_n)
+    
+    return {
+        "experiment_id": experiment_id,
+        "leaderboard": leaderboard.to_dict('records') if not leaderboard.empty else []
+    }
+
+# ============================================================================
+# Model Management Endpoints
+# ============================================================================
+
+@app.get("/api/v1/models")
+@limiter.limit("10/minute")
+async def list_models(
+    request: Request,
+    user_id: str = Depends(verify_token)
+):
+    """List available models"""
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    models = app.state.storage.list_models(tenant_id=user_id)
+    
+    return {
+        "models": [
+            ModelInfo(
+                model_id=m["model_id"],
+                algorithm=m["algorithm"],
+                metrics=m["metrics"],
+                version=m["version"],
+                created_at=m["created_at"],
+                status="active"
+            )
+            for m in models
+        ]
+    }
+
+@app.get("/api/v1/models/{model_id}")
+@limiter.limit("10/minute")
+async def get_model_info(
+    request: Request,
+    model_id: str,
+    version: Optional[str] = None,
+    user_id: str = Depends(verify_token)
+):
+    """Get model information"""
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        model, metadata = app.state.storage.load_model(model_id, version, tenant_id=user_id)
+        return metadata
+    except FileNotFoundError:
+        raise HTTPException(404, f"Model {model_id} not found")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load model: {str(e)}")
+
+@app.delete("/api/v1/models/{model_id}")
+@limiter.limit("5/minute")
+async def delete_model(
+    request: Request,
+    model_id: str,
+    version: Optional[str] = None,
+    user_id: str = Depends(verify_token)
+):
+    """Delete model"""
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    success = app.state.storage.delete_model(model_id, version, tenant_id=user_id)
+    
+    if success:
+        active_models.dec()
+        return {"message": f"Model {model_id} deleted successfully"}
+    else:
+        raise HTTPException(404, f"Model {model_id} not found")
+
+# ============================================================================
+# Prediction Endpoints
+# ============================================================================
+
+@app.post("/api/v1/predict")
+@limiter.limit("100/minute")
+async def predict(
+    request: Request,
+    predict_request: PredictRequest,
+    user_id: str = Depends(verify_token)
+):
+    """Make predictions"""
+    # Load model
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        model, metadata = app.state.storage.load_model(
+            predict_request.model_id,
+            tenant_id=user_id
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, f"Model {predict_request.model_id} not found")
+    
+    # Prepare data
+    df = pd.DataFrame([predict_request.data])
+    
+    # Make prediction
+    start_time = time.time()
+    try:
+        predictions = model.predict(df)
+        prediction_time = time.time() - start_time
+        
+        # Track if monitoring enabled
+        if app.state.monitoring and predict_request.track:
+            monitor = app.state.monitoring.get_monitor(predict_request.model_id)
+            if monitor:
+                monitor.log_prediction(df, predictions, None, prediction_time)
+        
+        # Update metrics
+        prediction_count.inc()
+        
+        # Return predictions
+        if len(predictions) == 1:
+            prediction_value = float(predictions[0]) if isinstance(predictions[0], (np.integer, np.floating)) else predictions[0]
+        else:
+            prediction_value = predictions.tolist()
+        
+        return {
+            "model_id": predict_request.model_id,
+            "prediction": prediction_value,
+            "prediction_time": prediction_time,
+            "metadata": metadata
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Prediction failed: {str(e)}")
+
+@app.post("/api/v1/predict/batch")
+@limiter.limit("10/minute")
+async def predict_batch(
+    request: Request,
+    model_id: str,
+    file: UploadFile = File(...),
+    user_id: str = Depends(verify_token)
+):
+    """Batch predictions"""
+    # Parse input file
+    contents = await file.read()
+    
+    try:
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(BytesIO(contents))
+        elif file.filename.endswith('.parquet'):
+            df = pd.read_parquet(BytesIO(contents))
+        else:
+            raise ValueError("Unsupported file format")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to parse file: {str(e)}")
+    
+    # Load model
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        model, metadata = app.state.storage.load_model(model_id, tenant_id=user_id)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Model {model_id} not found")
+    
+    # Make predictions
+    try:
+        predictions = model.predict(df)
+        
+        # Add predictions to dataframe
+        df['prediction'] = predictions
+        
+        # Convert to CSV
+        output = BytesIO()
+        df.to_csv(output, index=False)
+        output.seek(0)
+        
+        # Update metrics
+        prediction_count.inc(len(predictions))
+        
+        return StreamingResponse(
+            output,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=predictions_{model_id}.csv"}
+        )
+        
+    except Exception as e:
+        raise HTTPException(500, f"Batch prediction failed: {str(e)}")
+
+# ============================================================================
+# Monitoring Endpoints
+# ============================================================================
+
+@app.get("/api/v1/monitoring/drift/{model_id}")
+@limiter.limit("10/minute")
+async def get_drift_status(
+    request: Request,
+    model_id: str,
+    user_id: str = Depends(verify_token)
+):
+    """Get drift status for a model"""
+    if not app.state.monitoring:
+        raise HTTPException(503, "Monitoring not configured")
+    
+    monitor = app.state.monitoring.get_monitor(model_id)
+    if not monitor:
+        raise HTTPException(404, f"Monitor for model {model_id} not found")
+    
+    # Get latest drift results
+    if monitor.drift_detector.drift_history:
+        latest_drift = monitor.drift_detector.drift_history[-1]
+    else:
+        latest_drift = {"drift_detected": False, "message": "No drift checks performed yet"}
     
     return {
         "model_id": model_id,
-        "created_at": info["created_at"],
-        "task": info.get("task", "unknown"),
-        "best_model": info.get("best_model", "unknown"),
-        "cv_score": info.get("cv_score", 0.0),
-        "n_features": info.get("n_features", 0),
-        "n_samples_trained": info.get("n_samples", 0),
-        "leaderboard": orchestrator.get_leaderboard(top_n=5).to_dict('records') if orchestrator.leaderboard else [],
-        "feature_importance": orchestrator.feature_importance if hasattr(orchestrator, 'feature_importance') else {}
+        "drift_status": latest_drift,
+        "performance_summary": monitor.get_performance_summary()
     }
 
-@app.get("/job/{job_id}", response_model=JobStatus)
-async def get_job_status(job_id: str):
-    """Get job status."""
-    if job_id not in state.active_jobs:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+@app.get("/api/v1/monitoring/performance/{model_id}")
+@limiter.limit("10/minute")
+async def get_performance_metrics(
+    request: Request,
+    model_id: str,
+    days: int = 7,
+    user_id: str = Depends(verify_token)
+):
+    """Get performance metrics for a model"""
+    if not app.state.monitoring:
+        raise HTTPException(503, "Monitoring not configured")
     
-    return JobStatus(**state.active_jobs[job_id])
+    monitor = app.state.monitoring.get_monitor(model_id)
+    if not monitor:
+        raise HTTPException(404, f"Monitor for model {model_id} not found")
+    
+    return monitor.get_performance_summary(last_n_days=days)
 
-@app.delete("/model/{model_id}")
-async def delete_model(model_id: str):
-    """Delete a model from cache and disk."""
-    if model_id not in state.models_cache:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+@app.post("/api/v1/monitoring/alert")
+@limiter.limit("5/minute")
+async def configure_alert(
+    request: Request,
+    model_id: str,
+    alert_type: str,
+    threshold: float,
+    notification_channel: str,
+    user_id: str = Depends(verify_token)
+):
+    """Configure monitoring alert"""
+    if not app.state.monitoring:
+        raise HTTPException(503, "Monitoring not configured")
     
-    # Remove from cache
-    info = state.models_cache[model_id]
-    del state.models_cache[model_id]
-    
-    # Delete file if exists
-    model_path = Path(info["path"])
-    if model_path.exists():
-        model_path.unlink()
-        # Also delete metadata
-        meta_path = model_path.with_suffix('.meta.json')
-        if meta_path.exists():
-            meta_path.unlink()
-    
-    return {"message": f"Model {model_id} deleted successfully"}
+    # This would configure alerts in your monitoring system
+    return {
+        "message": "Alert configured successfully",
+        "model_id": model_id,
+        "alert_type": alert_type,
+        "threshold": threshold,
+        "channel": notification_channel
+    }
 
-@app.get("/jobs")
-async def list_jobs():
-    """List all jobs."""
-    jobs = []
-    for job_id, job_info in state.active_jobs.items():
-        jobs.append({
-            "job_id": job_id,
-            "status": job_info["status"],
-            "progress": job_info["progress"],
-            "created_at": job_info["created_at"].isoformat(),
-            "message": job_info["message"]
+# ============================================================================
+# WebSocket Endpoints
+# ============================================================================
+
+@app.websocket("/ws/experiments/{experiment_id}")
+async def websocket_experiment_updates(
+    websocket: WebSocket,
+    experiment_id: str
+):
+    """WebSocket for real-time experiment updates"""
+    await websocket.accept()
+    app.state.websocket_connections[f"exp_{experiment_id}"] = websocket
+    
+    try:
+        while True:
+            # Send updates every second
+            await asyncio.sleep(1)
+            
+            if experiment_id in app.state.orchestrators:
+                exp = app.state.orchestrators[experiment_id]
+                orchestrator = exp["orchestrator"]
+                
+                update = {
+                    "type": "experiment_update",
+                    "experiment_id": experiment_id,
+                    "status": exp["status"],
+                    "models_trained": orchestrator.total_models_trained,
+                    "best_score": orchestrator.leaderboard[0]["cv_score"] if orchestrator.leaderboard else None
+                }
+                
+                await websocket.send_json(update)
+                
+                if exp["status"] in ["completed", "failed"]:
+                    break
+            else:
+                await websocket.send_json({"type": "error", "message": "Experiment not found"})
+                break
+                
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        del app.state.websocket_connections[f"exp_{experiment_id}"]
+        await websocket.close()
+
+# ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
+@app.post("/api/v1/auth/login")
+@limiter.limit("5/minute")
+async def login(request: Request, username: str, password: str):
+    """Login endpoint"""
+    # This is a simple example - implement proper authentication
+    if username == "admin" and password == "admin":  # Replace with real auth
+        token = create_token(username)
+        return {"access_token": token, "token_type": "bearer"}
+    else:
+        raise HTTPException(401, "Invalid credentials")
+
+@app.post("/api/v1/auth/refresh")
+@limiter.limit("10/minute")
+async def refresh_token(request: Request, user_id: str = Depends(verify_token)):
+    """Refresh JWT token"""
+    new_token = create_token(user_id)
+    return {"access_token": new_token, "token_type": "bearer"}
+
+# ============================================================================
+# Admin Endpoints
+# ============================================================================
+
+@app.get("/api/v1/admin/experiments")
+@limiter.limit("5/minute")
+async def list_all_experiments(
+    request: Request,
+    user_id: str = Depends(verify_token)
+):
+    """List all experiments (admin only)"""
+    if user_id != "admin":
+        raise HTTPException(403, "Admin access required")
+    
+    experiments = []
+    for exp_id, exp in app.state.orchestrators.items():
+        experiments.append({
+            "experiment_id": exp_id,
+            "user_id": exp["user_id"],
+            "status": exp["status"],
+            "start_time": exp["start_time"]
         })
-    return {"jobs": jobs, "total": len(jobs)}
+    
+    return {"experiments": experiments}
 
-# Startup and shutdown events
-@app.on_event("startup")
-async def startup_event():
-    """Initialize application on startup."""
-    logger.info("AutoML Platform API starting up...")
+@app.delete("/api/v1/admin/experiments/{experiment_id}")
+@limiter.limit("5/minute")
+async def delete_experiment(
+    request: Request,
+    experiment_id: str,
+    user_id: str = Depends(verify_token)
+):
+    """Delete experiment (admin only)"""
+    if user_id != "admin":
+        raise HTTPException(403, "Admin access required")
     
-    # Create directories
-    Path("./api_models").mkdir(exist_ok=True)
-    Path("./api_temp").mkdir(exist_ok=True)
-    
-    logger.info("API ready to serve requests")
+    if experiment_id in app.state.orchestrators:
+        del app.state.orchestrators[experiment_id]
+        return {"message": f"Experiment {experiment_id} deleted"}
+    else:
+        raise HTTPException(404, f"Experiment {experiment_id} not found")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown."""
-    logger.info("AutoML Platform API shutting down...")
-    
-    # Wait for active jobs to complete (max 30 seconds)
-    active_jobs = [j for j in state.active_jobs.values() if j["status"] == "running"]
-    if active_jobs:
-        logger.info(f"Waiting for {len(active_jobs)} active jobs to complete...")
-        await asyncio.sleep(min(30, len(active_jobs) * 5))
-    
-    logger.info("Shutdown complete")
-
-# Main entry point for running directly
-def main():
-    """Run the API server."""
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+# ============================================================================
+# Run Application
+# ============================================================================
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(
+        "app:app",
+        host=config.api.host,
+        port=config.api.port,
+        reload=config.debug,
+        log_level="info" if config.verbose else "error"
+    )
