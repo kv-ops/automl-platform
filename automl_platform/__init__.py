@@ -1,58 +1,73 @@
 """
-AutoML Platform Package
-A comprehensive AutoML solution with advanced features
+AutoML Platform - Production-ready machine learning automation
+
+A comprehensive platform for automated machine learning with advanced features including:
+- Automated model selection and hyperparameter optimization
+- Feature engineering and data preprocessing
+- Model monitoring and drift detection
+- Multi-tenant architecture with billing
+- LLM integration for intelligent assistance
+- Real-time streaming capabilities
+- Enterprise-grade security and deployment
+
+Version: 2.0.0
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __author__ = "AutoML Platform Team"
+__email__ = "support@automl-platform.com"
 
-# Package metadata
+# Core imports for easy access
+from .config import AutoMLConfig, load_config
+from .orchestrator import AutoMLOrchestrator
+from .data_prep import DataPreprocessor, validate_data
+from .metrics import calculate_metrics, detect_task
+from .model_selection import get_available_models
+
+# Make commonly used classes available at package level
 __all__ = [
-    'AutoMLConfig',
-    'DataPreprocessor',
-    'AutoMLOrchestrator',
-    'detect_task',
-    'calculate_metrics',
-    '__version__'
+    "AutoMLConfig",
+    "load_config", 
+    "AutoMLOrchestrator",
+    "DataPreprocessor",
+    "validate_data",
+    "calculate_metrics",
+    "detect_task",
+    "get_available_models"
 ]
 
-# Lazy imports to avoid circular dependencies
-# Import only when explicitly needed by using:
-# from automl_platform.config import AutoMLConfig
-# from automl_platform.orchestrator import AutoMLOrchestrator
-# etc.
+# Package metadata
+PACKAGE_INFO = {
+    "name": "automl_platform",
+    "version": __version__,
+    "description": "Production-ready AutoML platform with advanced features",
+    "requires_python": ">=3.8",
+    "license": "MIT",
+    "keywords": ["machine learning", "automl", "automation", "ai", "ml"],
+    "classifiers": [
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+    ],
+}
 
-def get_config():
-    """Lazy import for config module"""
-    from .config import AutoMLConfig, load_config
-    return AutoMLConfig, load_config
+def get_version():
+    """Get the current version of the AutoML platform."""
+    return __version__
 
-def get_orchestrator():
-    """Lazy import for orchestrator module"""
-    from .orchestrator import AutoMLOrchestrator
-    return AutoMLOrchestrator
+def get_package_info():
+    """Get package metadata information."""
+    return PACKAGE_INFO.copy()
 
-def get_data_prep():
-    """Lazy import for data_prep module"""
-    from .data_prep import DataPreprocessor, validate_data
-    return DataPreprocessor, validate_data
-
-def get_metrics():
-    """Lazy import for metrics module"""
-    from .metrics import calculate_metrics, detect_task
-    return calculate_metrics, detect_task
-
-def get_model_selection():
-    """Lazy import for model_selection module"""
-    from .model_selection import get_available_models, get_param_grid
-    return get_available_models, get_param_grid
-
-# Optional: Import the most commonly used classes only
-# These are safe imports that don't cause circular dependencies
-try:
-    from .config import AutoMLConfig
-    from .metrics import detect_task, calculate_metrics
-except ImportError as e:
-    # If there's still an import error, just pass
-    # The modules can still be imported directly
-    pass
+# Check Python version compatibility
+import sys
+if sys.version_info < (3, 8):
+    raise RuntimeError(
+        f"AutoML Platform requires Python 3.8 or later. "
+        f"Current version: {sys.version_info.major}.{sys.version_info.minor}"
+    )
