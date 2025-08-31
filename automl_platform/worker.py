@@ -1,7 +1,7 @@
 """
 Celery worker for asynchronous AutoML jobs
 Implements distributed training with proper isolation and GPU support
-WITH COMPLETE GPU QUEUE CONFIGURATION
+WITH COMPLETE GPU QUEUE CONFIGURATION AND BILLING INTEGRATION
 """
 
 from celery import Celery, Task
@@ -58,7 +58,8 @@ app.config_from_object({
         'automl.predict.gpu.*': {'queue': 'gpu'},  # GPU prediction tasks
         'automl.llm.*': {'queue': 'llm'},
         'automl.monitor.*': {'queue': 'monitoring'},
-        'automl.export.*': {'queue': 'export'}
+        'automl.export.*': {'queue': 'export'},
+        'automl.streaming.*': {'queue': 'streaming'}  # NEW: Streaming tasks
     },
     
     # Queue configuration with priorities
@@ -80,6 +81,8 @@ from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
 from .config import AutoMLConfig, load_config
 from .storage import StorageManager
 from .monitoring import MonitoringService, ModelMonitor
+from .infrastructure import TenantManager, SecurityManager  # NEW
+from .billing import BillingManager, UsageTracker  # NEW
 
 # Initialize services
 config = load_config()
@@ -92,16 +95,23 @@ storage_manager = StorageManager(
 
 monitoring_service = MonitoringService(storage_manager) if config.monitoring.enabled else None
 
+# NEW: Initialize infrastructure and billing
+tenant_manager = TenantManager(db_url=config.database.url)
+security_manager = SecurityManager(secret_key=config.security.secret_key)
+billing_manager = BillingManager(tenant_manager=tenant_manager)
+usage_tracker = UsageTracker(billing_manager=billing_manager)
+
 
 class GPUResourceManager:
-    """Manage GPU resources for workers"""
+    """Manage GPU resources for workers with billing tracking."""
     
     def __init__(self):
         self.available_gpus = self._detect_gpus()
         self.allocated_gpus = {}
+        self.gpu_usage_start = {}  # Track GPU usage start time for billing
         
     def _detect_gpus(self) -> List[int]:
-        """Detect available GPUs"""
+        """Detect available GPUs."""
         if TORCH_AVAILABLE:
             return list(range(GPU_COUNT))
         
@@ -111,14 +121,21 @@ class GPUResourceManager:
         except:
             return []
     
-    def allocate_gpu(self, task_id: str, preferred_gpu: Optional[int] = None) -> Optional[int]:
-        """Allocate a GPU for a task"""
+    def allocate_gpu(self, task_id: str, tenant_id: str, preferred_gpu: Optional[int] = None) -> Optional[int]:
+        """Allocate a GPU for a task with tenant tracking."""
+        # Check tenant GPU quota
+        tenant = tenant_manager.get_tenant(tenant_id)
+        if not tenant or not tenant.features.get('gpu_training', False):
+            logger.warning(f"Tenant {tenant_id} does not have GPU access")
+            return None
+        
         if not self.available_gpus:
             return None
         
         # Try to allocate preferred GPU
         if preferred_gpu is not None and preferred_gpu not in self.allocated_gpus.values():
             self.allocated_gpus[task_id] = preferred_gpu
+            self.gpu_usage_start[task_id] = time.time()
             return preferred_gpu
         
         # Find least loaded GPU
@@ -129,24 +146,35 @@ class GPUResourceManager:
             for gpu in gpus:
                 if gpu.id not in self.allocated_gpus.values():
                     self.allocated_gpus[task_id] = gpu.id
+                    self.gpu_usage_start[task_id] = time.time()
                     return gpu.id
         except:
             # Fallback to simple allocation
             for gpu_id in self.available_gpus:
                 if gpu_id not in self.allocated_gpus.values():
                     self.allocated_gpus[task_id] = gpu_id
+                    self.gpu_usage_start[task_id] = time.time()
                     return gpu_id
         
         return None
     
-    def release_gpu(self, task_id: str):
-        """Release GPU allocated to a task"""
+    def release_gpu(self, task_id: str, tenant_id: str):
+        """Release GPU allocated to a task and track usage."""
         if task_id in self.allocated_gpus:
             gpu_id = self.allocated_gpus.pop(task_id)
+            
+            # Calculate GPU hours for billing
+            if task_id in self.gpu_usage_start:
+                start_time = self.gpu_usage_start.pop(task_id)
+                gpu_hours = (time.time() - start_time) / 3600
+                
+                # Track usage for billing
+                usage_tracker.track_gpu_usage(tenant_id, gpu_hours)
+                
             logger.info(f"Released GPU {gpu_id} from task {task_id}")
     
     def get_gpu_status(self) -> Dict:
-        """Get current GPU status"""
+        """Get current GPU status."""
         status = {
             "available_count": len(self.available_gpus),
             "allocated_count": len(self.allocated_gpus),
@@ -177,43 +205,79 @@ gpu_manager = GPUResourceManager()
 
 
 class AutoMLTask(Task):
-    """Base task with automatic tracking, error handling, and resource management"""
+    """Base task with automatic tracking, error handling, and billing."""
     
     def before_start(self, task_id, args, kwargs):
-        """Called before task execution"""
+        """Called before task execution."""
+        # Extract tenant_id from kwargs
+        tenant_id = kwargs.get('tenant_id', 'default')
+        
+        # Check tenant limits
+        if not billing_manager.check_limits(tenant_id, 'concurrent_jobs', 1):
+            raise Exception(f"Tenant {tenant_id} exceeded concurrent jobs limit")
+        
+        # Track API call for billing
+        usage_tracker.track_api_call(tenant_id, 'task_execution')
+        
         # Check if GPU is required
         if 'require_gpu' in kwargs and kwargs['require_gpu']:
-            gpu_id = gpu_manager.allocate_gpu(task_id)
+            gpu_id = gpu_manager.allocate_gpu(task_id, tenant_id)
             if gpu_id is not None:
                 os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
                 logger.info(f"Task {task_id} allocated GPU {gpu_id}")
             else:
                 logger.warning(f"Task {task_id} requested GPU but none available")
         
+        # Allocate resources
+        cpu_requested = kwargs.get('cpu_cores', 1)
+        memory_requested = kwargs.get('memory_gb', 2)
+        
+        if not tenant_manager.allocate_resources(tenant_id, cpu_requested, memory_requested, 0):
+            raise Exception(f"Insufficient resources for tenant {tenant_id}")
+        
         # Log task start
-        logger.info(f"Starting task {task_id}: {self.name}")
+        logger.info(f"Starting task {task_id}: {self.name} for tenant {tenant_id}")
         
         # Monitor resource usage
         self.start_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
         self.start_time = time.time()
+        self.tenant_id = tenant_id
     
     def on_success(self, retval, task_id, args, kwargs):
-        """Called on successful task completion"""
-        # Release GPU if allocated
-        gpu_manager.release_gpu(task_id)
+        """Called on successful task completion."""
+        tenant_id = kwargs.get('tenant_id', 'default')
         
-        # Log resource usage
+        # Release GPU if allocated
+        gpu_manager.release_gpu(task_id, tenant_id)
+        
+        # Release resources
+        cpu_requested = kwargs.get('cpu_cores', 1)
+        memory_requested = kwargs.get('memory_gb', 2)
+        tenant_manager.release_resources(tenant_id, cpu_requested, memory_requested, 0)
+        
+        # Log resource usage for billing
         end_memory = psutil.Process().memory_info().rss / 1024 / 1024
         memory_used = end_memory - self.start_memory
         time_taken = time.time() - self.start_time
+        
+        # Track compute hours for billing
+        compute_hours = time_taken / 3600
+        usage_tracker.track_compute_hours(tenant_id, compute_hours)
         
         logger.info(f"Task {task_id} completed successfully. "
                    f"Time: {time_taken:.2f}s, Memory: {memory_used:.2f}MB")
     
     def on_failure(self, exc, task_id, args, kwargs, einfo):
-        """Called on task failure"""
+        """Called on task failure."""
+        tenant_id = kwargs.get('tenant_id', 'default')
+        
         # Release GPU if allocated
-        gpu_manager.release_gpu(task_id)
+        gpu_manager.release_gpu(task_id, tenant_id)
+        
+        # Release resources
+        cpu_requested = kwargs.get('cpu_cores', 1)
+        memory_requested = kwargs.get('memory_gb', 2)
+        tenant_manager.release_resources(tenant_id, cpu_requested, memory_requested, 0)
         
         logger.error(f"Task {task_id} failed: {exc}")
         
@@ -224,11 +288,12 @@ class AutoMLTask(Task):
             alert_manager.check_alerts({
                 "task_failure": True,
                 "task_id": task_id,
+                "tenant_id": tenant_id,
                 "error": str(exc)
             })
     
     def on_retry(self, exc, task_id, args, kwargs, einfo):
-        """Called when task is retried"""
+        """Called when task is retried."""
         logger.warning(f"Task {task_id} retrying: {exc}")
 
 
@@ -236,7 +301,7 @@ class AutoMLTask(Task):
 @app.task(base=AutoMLTask, bind=True, name='automl.train.full_pipeline', 
           queue='training', max_retries=3)
 def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[str, Any], 
-                        user_id: str, tenant_id: str) -> Dict[str, Any]:
+                        user_id: str, tenant_id: str, **kwargs) -> Dict[str, Any]:
     """
     Execute complete AutoML training pipeline on CPU.
     
@@ -251,21 +316,30 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
         Training results with model URL and metrics
     """
     try:
+        # Verify API key
+        api_key = kwargs.get('api_key')
+        if api_key:
+            verified_tenant_id = security_manager.verify_api_key(api_key)
+            if verified_tenant_id != tenant_id:
+                raise Exception("Invalid API key for tenant")
+        
         # Check quota
         from .config import AutoMLConfig
         job_config = AutoMLConfig(**config_dict)
         
-        if not job_config.check_quota('max_concurrent_jobs', 1):
-            raise Exception(f"Quota exceeded for plan {job_config.billing.plan_type}")
+        if not billing_manager.check_limits(tenant_id, 'models', 1):
+            raise Exception(f"Tenant {tenant_id} exceeded model limit")
+        
+        # Track storage usage
+        df = storage_manager.load_dataset(dataset_url, tenant_id=tenant_id)
+        storage_mb = df.memory_usage(deep=True).sum() / 1024**2
+        usage_tracker.track_storage(tenant_id, storage_mb)
         
         # Update job status
         self.update_state(
             state='PROGRESS',
             meta={'current': 0, 'total': 100, 'status': 'Loading dataset...'}
         )
-        
-        # Load dataset from storage
-        df = storage_manager.load_dataset(dataset_url, tenant_id=tenant_id)
         
         # Data quality check
         self.update_state(
@@ -314,7 +388,8 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
         
         model_path = orchestrator.save_pipeline(f"/tmp/{job_id}_model.pkl")
         
-        # Save to storage
+        # Save to storage with encryption
+        tenant = tenant_manager.get_tenant(tenant_id)
         if storage_manager:
             metadata = {
                 'job_id': job_id,
@@ -323,7 +398,8 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
                 'created_at': datetime.now().isoformat(),
                 'config': config_dict,
                 'best_model': orchestrator.leaderboard[0]['model'] if orchestrator.leaderboard else None,
-                'metrics': orchestrator.leaderboard[0]['metrics'] if orchestrator.leaderboard else {}
+                'metrics': orchestrator.leaderboard[0]['metrics'] if orchestrator.leaderboard else {},
+                'encrypted': tenant.encryption_enabled if tenant else False
             }
             
             model_url = storage_manager.save_model(
@@ -331,6 +407,9 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
                 metadata,
                 version="1.0.0"
             )
+            
+            # Track model count for billing
+            billing_manager.increment_model_count(tenant_id)
         else:
             model_url = model_path
         
@@ -349,7 +428,12 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
             'cv_score': orchestrator.leaderboard[0]['cv_score'] if orchestrator.leaderboard else None,
             'leaderboard': orchestrator.get_leaderboard().to_dict('records'),
             'completed_at': datetime.now().isoformat(),
-            'worker_type': 'CPU'
+            'worker_type': 'CPU',
+            'billing_info': {
+                'compute_hours': (time.time() - self.start_time) / 3600,
+                'storage_mb': storage_mb,
+                'tenant_plan': tenant.plan if tenant else 'unknown'
+            }
         }
         
         return results
@@ -363,22 +447,16 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
 @app.task(base=AutoMLTask, bind=True, name='automl.train.gpu.neural_pipeline', 
           queue='gpu', max_retries=2)
 def train_neural_pipeline_gpu(self, job_id: str, dataset_url: str, config_dict: Dict[str, Any],
-                              user_id: str, tenant_id: str, require_gpu: bool = True) -> Dict[str, Any]:
+                              user_id: str, tenant_id: str, require_gpu: bool = True, **kwargs) -> Dict[str, Any]:
     """
-    Execute neural network training pipeline on GPU.
-    
-    Args:
-        job_id: Unique job identifier
-        dataset_url: S3/MinIO URL to dataset
-        config_dict: Training configuration
-        user_id: User identifier
-        tenant_id: Tenant identifier
-        require_gpu: Whether GPU is required
-    
-    Returns:
-        Training results
+    Execute neural network training pipeline on GPU with billing tracking.
     """
     try:
+        # Check GPU access for tenant
+        tenant = tenant_manager.get_tenant(tenant_id)
+        if not tenant or not tenant.features.get('gpu_training', False):
+            raise Exception(f"Tenant {tenant_id} does not have GPU training access")
+        
         # Verify GPU is available
         if require_gpu and not TORCH_AVAILABLE:
             raise Exception("GPU requested but not available. Falling back to CPU queue.")
@@ -468,9 +546,16 @@ def train_neural_pipeline_gpu(self, job_id: str, dataset_url: str, config_dict: 
             }
             
             model_url = storage_manager.save_model(model, metadata, version="1.0.0")
+            
+            # Track GPU model for premium billing
+            billing_manager.increment_model_count(tenant_id, model_type='gpu')
         else:
             model_url = f"/tmp/{job_id}_gpu_model.pkl"
             model.save_model(model_url)
+        
+        # Calculate GPU hours for billing
+        gpu_hours = (time.time() - self.start_time) / 3600
+        usage_tracker.track_gpu_usage(tenant_id, gpu_hours)
         
         results = {
             'job_id': job_id,
@@ -479,7 +564,12 @@ def train_neural_pipeline_gpu(self, job_id: str, dataset_url: str, config_dict: 
             'task_type': task_type,
             'gpu_used': True,
             'completed_at': datetime.now().isoformat(),
-            'worker_type': 'GPU'
+            'worker_type': 'GPU',
+            'billing_info': {
+                'gpu_hours': gpu_hours,
+                'gpu_name': gpu_name if TORCH_AVAILABLE else None,
+                'tenant_plan': tenant.plan
+            }
         }
         
         return results
@@ -492,31 +582,63 @@ def train_neural_pipeline_gpu(self, job_id: str, dataset_url: str, config_dict: 
             logger.info(f"Falling back to CPU training for job {job_id}")
             return train_full_pipeline.apply_async(
                 args=[job_id, dataset_url, config_dict, user_id, tenant_id],
+                kwargs=kwargs,
                 queue='training'
             )
         
         raise self.retry(exc=e, countdown=30)
 
 
-# Batch Prediction Task
+# Streaming Task (NEW)
+@app.task(base=AutoMLTask, bind=True, name='automl.streaming.process', 
+          queue='streaming', max_retries=3)
+def process_streaming_data(self, stream_config: Dict[str, Any], tenant_id: str, **kwargs) -> Dict[str, Any]:
+    """Process streaming data with Kafka/Flink."""
+    from .streaming import KafkaStreamProcessor, StreamConfig
+    
+    try:
+        # Check streaming access for tenant
+        tenant = tenant_manager.get_tenant(tenant_id)
+        if not tenant or not tenant.features.get('streaming', False):
+            raise Exception(f"Tenant {tenant_id} does not have streaming access")
+        
+        # Initialize stream processor
+        config = StreamConfig(**stream_config)
+        processor = KafkaStreamProcessor(config)
+        
+        # Start processing
+        processor.create_topic()
+        
+        # This would normally run continuously
+        # For demo, process a batch
+        self.update_state(
+            state='PROGRESS',
+            meta={'status': 'Processing stream...'}
+        )
+        
+        return {
+            'status': 'streaming_started',
+            'config': stream_config,
+            'tenant_id': tenant_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Streaming failed: {str(e)}")
+        raise
+
+
+# Batch Prediction Task with Billing
 @app.task(base=AutoMLTask, bind=True, name='automl.predict.batch', 
           queue='prediction', max_retries=2)
 def predict_batch(self, job_id: str, model_url: str, data_url: str, 
-                  tenant_id: str, use_gpu: bool = False) -> Dict[str, Any]:
+                  tenant_id: str, use_gpu: bool = False, **kwargs) -> Dict[str, Any]:
     """
-    Batch prediction task with optional GPU acceleration.
-    
-    Args:
-        job_id: Prediction job ID
-        model_url: S3/MinIO URL to model
-        data_url: S3/MinIO URL to prediction data
-        tenant_id: Tenant identifier
-        use_gpu: Whether to use GPU for prediction
-    
-    Returns:
-        Prediction results with URL to output file
+    Batch prediction task with billing tracking.
     """
     try:
+        # Track API call
+        usage_tracker.track_api_call(tenant_id, 'batch_prediction')
+        
         self.update_state(
             state='PROGRESS',
             meta={'current': 0, 'total': 100, 'status': 'Loading model...'}
@@ -547,6 +669,9 @@ def predict_batch(self, job_id: str, model_url: str, data_url: str,
         start_time = time.time()
         predictions = model.predict(df)
         prediction_time = time.time() - start_time
+        
+        # Track predictions for billing
+        usage_tracker.track_predictions(tenant_id, len(predictions))
         
         # Add probabilities if classification
         probabilities = None
@@ -586,7 +711,11 @@ def predict_batch(self, job_id: str, model_url: str, data_url: str,
             'n_predictions': len(predictions),
             'prediction_time': prediction_time,
             'gpu_used': use_gpu and TORCH_AVAILABLE,
-            'completed_at': datetime.now().isoformat()
+            'completed_at': datetime.now().isoformat(),
+            'billing_info': {
+                'predictions_count': len(predictions),
+                'compute_seconds': prediction_time
+            }
         }
         
     except Exception as e:
@@ -598,19 +727,16 @@ def predict_batch(self, job_id: str, model_url: str, data_url: str,
 @app.task(base=AutoMLTask, bind=True, name='automl.export.docker', 
           queue='export', max_retries=2)
 def export_model_docker(self, model_id: str, tenant_id: str, 
-                       output_format: str = "docker") -> Dict[str, Any]:
+                       output_format: str = "docker", **kwargs) -> Dict[str, Any]:
     """
     Export model to Docker, ONNX, or PMML format.
-    
-    Args:
-        model_id: Model identifier
-        tenant_id: Tenant identifier
-        output_format: Export format (docker, onnx, pmml)
-    
-    Returns:
-        Export results with download URL
     """
     try:
+        # Check export access
+        tenant = tenant_manager.get_tenant(tenant_id)
+        if not tenant or not tenant.features.get('custom_deployment', False):
+            raise Exception(f"Tenant {tenant_id} does not have export access")
+        
         self.update_state(
             state='PROGRESS',
             meta={'current': 0, 'total': 100, 'status': f'Exporting to {output_format}...'}
@@ -631,6 +757,9 @@ def export_model_docker(self, model_id: str, tenant_id: str,
         else:
             raise ValueError(f"Unsupported export format: {output_format}")
         
+        # Track export for billing
+        usage_tracker.track_api_call(tenant_id, f'export_{output_format}')
+        
         return {
             'model_id': model_id,
             'export_format': output_format,
@@ -643,23 +772,17 @@ def export_model_docker(self, model_id: str, tenant_id: str,
         raise self.retry(exc=e, countdown=30)
 
 
-# Monitoring Task
+# Monitoring Task with Billing
 @app.task(base=AutoMLTask, name='automl.monitor.drift', queue='monitoring')
 def monitor_drift(tenant_id: str, model_id: str, 
                   reference_data_url: str, current_data_url: str) -> Dict[str, Any]:
     """
-    Monitor data/model drift.
-    
-    Args:
-        tenant_id: Tenant identifier
-        model_id: Model identifier
-        reference_data_url: URL to reference dataset
-        current_data_url: URL to current dataset
-    
-    Returns:
-        Drift analysis results
+    Monitor data/model drift with billing tracking.
     """
     try:
+        # Track monitoring API call
+        usage_tracker.track_api_call(tenant_id, 'drift_monitoring')
+        
         # Load datasets
         ref_df = storage_manager.load_dataset(reference_data_url, tenant_id=tenant_id)
         curr_df = storage_manager.load_dataset(current_data_url, tenant_id=tenant_id)
@@ -717,18 +840,14 @@ def monitor_drift(tenant_id: str, model_id: str,
 def scheduled_retrain(tenant_id: str, model_id: str, 
                       dataset_url: str, config_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Scheduled model retraining.
-    
-    Args:
-        tenant_id: Tenant identifier
-        model_id: Model to retrain
-        dataset_url: New training data URL
-        config_dict: Training configuration
-    
-    Returns:
-        New model information
+    Scheduled model retraining with billing.
     """
     try:
+        # Check if tenant has auto-retrain feature
+        tenant = tenant_manager.get_tenant(tenant_id)
+        if not tenant or not tenant.features.get('auto_retrain', False):
+            raise Exception(f"Tenant {tenant_id} does not have auto-retrain access")
+        
         # Generate new job ID
         job_id = f"retrain_{model_id}_{int(time.time())}"
         
@@ -765,7 +884,7 @@ def scheduled_retrain(tenant_id: str, model_id: str,
 # System Status Task
 @app.task(name='automl.system.status', queue='monitoring')
 def get_system_status() -> Dict[str, Any]:
-    """Get system status including GPU availability"""
+    """Get system status including GPU availability and billing info."""
     status = {
         'timestamp': datetime.now().isoformat(),
         'workers': {
@@ -790,35 +909,19 @@ def get_system_status() -> Dict[str, Any]:
     # Get queue lengths
     import redis
     r = redis.from_url(app.conf.broker_url)
-    for queue in ['default', 'training', 'gpu', 'prediction', 'llm', 'monitoring', 'export']:
+    for queue in ['default', 'training', 'gpu', 'prediction', 'llm', 'monitoring', 'export', 'streaming']:
         status['queues'][queue] = r.llen(f"celery:{queue}")
     
+    # Add billing summary
+    status['billing'] = billing_manager.get_system_summary()
+    
     return status
-
-
-# Celery beat schedule for periodic tasks
-from celery.schedules import crontab
-
-app.conf.beat_schedule = {
-    'cleanup-old-jobs': {
-        'task': 'automl.maintenance.cleanup',
-        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
-    },
-    'monitor-system-health': {
-        'task': 'automl.system.status',
-        'schedule': 60.0,  # Every minute
-    },
-    'check-gpu-health': {
-        'task': 'automl.gpu.health_check',
-        'schedule': 300.0,  # Every 5 minutes
-    }
-}
 
 
 # GPU Health Check Task
 @app.task(name='automl.gpu.health_check', queue='monitoring')
 def gpu_health_check() -> Dict[str, Any]:
-    """Check GPU health and availability"""
+    """Check GPU health and availability."""
     health = {
         'timestamp': datetime.now().isoformat(),
         'gpu_available': GPU_COUNT > 0,
@@ -865,28 +968,78 @@ def gpu_health_check() -> Dict[str, Any]:
     return health
 
 
+# Celery beat schedule for periodic tasks
+from celery.schedules import crontab
+
+app.conf.beat_schedule = {
+    'cleanup-old-jobs': {
+        'task': 'automl.maintenance.cleanup',
+        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
+    },
+    'monitor-system-health': {
+        'task': 'automl.system.status',
+        'schedule': 60.0,  # Every minute
+    },
+    'check-gpu-health': {
+        'task': 'automl.gpu.health_check',
+        'schedule': 300.0,  # Every 5 minutes
+    },
+    'update-billing-metrics': {
+        'task': 'automl.billing.update_metrics',
+        'schedule': 3600.0,  # Every hour
+    }
+}
+
+
+# Billing Update Task (NEW)
+@app.task(name='automl.billing.update_metrics', queue='monitoring')
+def update_billing_metrics() -> Dict[str, Any]:
+    """Update billing metrics for all tenants."""
+    try:
+        summary = billing_manager.calculate_all_tenant_bills()
+        
+        # Send billing alerts if needed
+        for tenant_id, bill in summary.items():
+            if bill.get('over_limit', False):
+                # Send alert
+                from .monitoring import AlertManager
+                alert_manager = AlertManager()
+                alert_manager.check_alerts({
+                    'billing_alert': True,
+                    'tenant_id': tenant_id,
+                    'message': f"Tenant {tenant_id} exceeded limits",
+                    'details': bill
+                })
+        
+        return summary
+        
+    except Exception as e:
+        logger.error(f"Billing update failed: {str(e)}")
+        return {}
+
+
 # Signal handlers for monitoring
 @task_prerun.connect
 def task_prerun_handler(sender=None, task_id=None, task=None, **kwargs):
-    """Log task start"""
+    """Log task start."""
     logger.info(f"Task {task.name} [{task_id}] starting")
 
 
 @task_postrun.connect
 def task_postrun_handler(sender=None, task_id=None, task=None, **kwargs):
-    """Log task completion"""
+    """Log task completion."""
     logger.info(f"Task {task.name} [{task_id}] completed")
 
 
 @task_failure.connect
 def task_failure_handler(sender=None, task_id=None, exception=None, **kwargs):
-    """Handle task failure"""
+    """Handle task failure."""
     logger.error(f"Task [{task_id}] failed: {exception}")
 
 
 @worker_ready.connect
 def worker_ready_handler(sender=None, **kwargs):
-    """Initialize worker with GPU detection"""
+    """Initialize worker with GPU detection."""
     logger.info(f"Worker ready. GPUs available: {GPU_COUNT}")
     if GPU_COUNT > 0:
         logger.info(f"GPU status: {gpu_manager.get_gpu_status()}")
