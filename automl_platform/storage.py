@@ -2,7 +2,7 @@
 Storage module for ML Platform
 Handles model versioning, dataset storage, and artifact management
 Compatible with S3/MinIO for cloud-native deployment
-WITH DOCKER/ONNX/PMML EXPORT SUPPORT
+WITH DOCKER/ONNX/PMML EXPORT SUPPORT AND CONNECTORS INTEGRATION
 """
 
 import os
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelMetadata:
-    """Model metadata for versioning and tracking"""
+    """Model metadata for versioning and tracking."""
     model_id: str
     version: str
     model_type: str
@@ -55,13 +55,15 @@ class ModelMetadata:
     description: str = ""
     author: str = ""
     tenant_id: str = "default"
+    encrypted: bool = False
+    compression: str = "none"
     
     def to_dict(self):
         return asdict(self)
 
 
 class StorageBackend:
-    """Abstract base class for storage backends"""
+    """Abstract base class for storage backends."""
     
     def save_model(self, model: Any, metadata: ModelMetadata) -> str:
         raise NotImplementedError
@@ -83,14 +85,17 @@ class StorageBackend:
 
 
 class MinIOStorage(StorageBackend):
-    """MinIO/S3 compatible storage backend"""
+    """MinIO/S3 compatible storage backend with encryption support."""
     
     def __init__(self, 
                  endpoint: str = "localhost:9000",
                  access_key: str = "minioadmin",
                  secret_key: str = "minioadmin",
                  secure: bool = False,
-                 region: str = "us-east-1"):
+                 region: str = "us-east-1",
+                 encryption_key: bytes = None):
+        
+        self.encryption_key = encryption_key
         
         if MINIO_AVAILABLE:
             self.client = Minio(
@@ -121,7 +126,7 @@ class MinIOStorage(StorageBackend):
         self._ensure_buckets()
     
     def _ensure_buckets(self):
-        """Create required buckets if they don't exist"""
+        """Create required buckets if they don't exist."""
         buckets = [self.models_bucket, self.datasets_bucket, self.artifacts_bucket]
         
         for bucket in buckets:
@@ -139,11 +144,39 @@ class MinIOStorage(StorageBackend):
             except Exception as e:
                 logger.warning(f"Could not create bucket {bucket}: {e}")
     
+    def _encrypt_data(self, data: bytes) -> bytes:
+        """Encrypt data if encryption key is provided."""
+        if self.encryption_key:
+            from cryptography.fernet import Fernet
+            f = Fernet(self.encryption_key)
+            return f.encrypt(data)
+        return data
+    
+    def _decrypt_data(self, data: bytes) -> bytes:
+        """Decrypt data if encryption key is provided."""
+        if self.encryption_key:
+            from cryptography.fernet import Fernet
+            f = Fernet(self.encryption_key)
+            return f.decrypt(data)
+        return data
+    
     def save_model(self, model: Any, metadata: ModelMetadata) -> str:
-        """Save model to MinIO with versioning"""
+        """Save model to MinIO with versioning and optional encryption."""
         try:
             # Serialize model
             model_bytes = pickle.dumps(model)
+            
+            # Encrypt if needed
+            if metadata.encrypted and self.encryption_key:
+                model_bytes = self._encrypt_data(model_bytes)
+            
+            # Compress if requested
+            if metadata.compression == "gzip":
+                import gzip
+                model_bytes = gzip.compress(model_bytes)
+            elif metadata.compression == "lz4":
+                import lz4.frame
+                model_bytes = lz4.frame.compress(model_bytes)
             
             # Create object path
             object_name = f"{metadata.tenant_id}/{metadata.model_id}/v{metadata.version}/model.pkl"
@@ -188,7 +221,7 @@ class MinIOStorage(StorageBackend):
             raise
     
     def load_model(self, model_id: str, version: str = None, tenant_id: str = "default") -> tuple:
-        """Load model from MinIO"""
+        """Load model from MinIO with decryption support."""
         try:
             # If no version specified, get latest
             if version is None:
@@ -200,7 +233,7 @@ class MinIOStorage(StorageBackend):
             if MINIO_AVAILABLE:
                 # Load model
                 response = self.client.get_object(self.models_bucket, object_name)
-                model = pickle.loads(response.read())
+                model_bytes = response.read()
                 response.close()
                 
                 # Load metadata
@@ -210,10 +243,25 @@ class MinIOStorage(StorageBackend):
             else:
                 # Use boto3
                 response = self.client.get_object(Bucket=self.models_bucket, Key=object_name)
-                model = pickle.loads(response['Body'].read())
+                model_bytes = response['Body'].read()
                 
                 response = self.client.get_object(Bucket=self.models_bucket, Key=metadata_name)
                 metadata = json.loads(response['Body'].read())
+            
+            # Decompress if needed
+            if metadata.get('compression') == "gzip":
+                import gzip
+                model_bytes = gzip.decompress(model_bytes)
+            elif metadata.get('compression') == "lz4":
+                import lz4.frame
+                model_bytes = lz4.frame.decompress(model_bytes)
+            
+            # Decrypt if needed
+            if metadata.get('encrypted') and self.encryption_key:
+                model_bytes = self._decrypt_data(model_bytes)
+            
+            # Deserialize model
+            model = pickle.loads(model_bytes)
             
             logger.info(f"Model loaded: {model_id} v{version}")
             return model, metadata
@@ -223,7 +271,7 @@ class MinIOStorage(StorageBackend):
             raise
     
     def _get_latest_version(self, model_id: str, tenant_id: str) -> str:
-        """Get latest version of a model"""
+        """Get latest version of a model."""
         prefix = f"{tenant_id}/{model_id}/"
         versions = []
         
@@ -253,19 +301,35 @@ class MinIOStorage(StorageBackend):
             logger.error(f"Failed to get latest version: {e}")
             return "1.0.0"
     
-    def save_dataset(self, data: pd.DataFrame, dataset_id: str, tenant_id: str = "default") -> str:
-        """Save dataset to MinIO in Parquet format"""
+    def save_dataset(self, data: pd.DataFrame, dataset_id: str, tenant_id: str = "default",
+                    format: str = "parquet", compression: str = "snappy") -> str:
+        """Save dataset to MinIO in specified format."""
         try:
-            # Convert to parquet
-            parquet_buffer = BytesIO()
-            data.to_parquet(parquet_buffer, engine='pyarrow', compression='snappy')
-            parquet_bytes = parquet_buffer.getvalue()
+            # Convert to bytes based on format
+            if format == "parquet":
+                buffer = BytesIO()
+                data.to_parquet(buffer, engine='pyarrow', compression=compression)
+                data_bytes = buffer.getvalue()
+                extension = "parquet"
+            elif format == "csv":
+                data_bytes = data.to_csv(index=False).encode()
+                extension = "csv"
+            elif format == "json":
+                data_bytes = data.to_json(orient='records').encode()
+                extension = "json"
+            elif format == "feather":
+                buffer = BytesIO()
+                data.to_feather(buffer)
+                data_bytes = buffer.getvalue()
+                extension = "feather"
+            else:
+                raise ValueError(f"Unsupported format: {format}")
             
             # Calculate hash for deduplication
-            data_hash = hashlib.sha256(parquet_bytes).hexdigest()[:16]
+            data_hash = hashlib.sha256(data_bytes).hexdigest()[:16]
             
             # Create object path
-            object_name = f"{tenant_id}/{dataset_id}_{data_hash}.parquet"
+            object_name = f"{tenant_id}/{dataset_id}_{data_hash}.{extension}"
             metadata_name = f"{tenant_id}/{dataset_id}_{data_hash}_metadata.json"
             
             # Dataset metadata
@@ -275,8 +339,11 @@ class MinIOStorage(StorageBackend):
                 "shape": list(data.shape),
                 "columns": list(data.columns),
                 "dtypes": {col: str(dtype) for col, dtype in data.dtypes.items()},
+                "format": format,
+                "compression": compression,
                 "created_at": datetime.now().isoformat(),
-                "tenant_id": tenant_id
+                "tenant_id": tenant_id,
+                "size_bytes": len(data_bytes)
             }
             
             if MINIO_AVAILABLE:
@@ -284,8 +351,8 @@ class MinIOStorage(StorageBackend):
                 self.client.put_object(
                     self.datasets_bucket,
                     object_name,
-                    BytesIO(parquet_bytes),
-                    len(parquet_bytes)
+                    BytesIO(data_bytes),
+                    len(data_bytes)
                 )
                 
                 # Save metadata
@@ -300,7 +367,7 @@ class MinIOStorage(StorageBackend):
                 self.client.put_object(
                     Bucket=self.datasets_bucket,
                     Key=object_name,
-                    Body=parquet_bytes
+                    Body=data_bytes
                 )
                 self.client.put_object(
                     Bucket=self.datasets_bucket,
@@ -316,35 +383,48 @@ class MinIOStorage(StorageBackend):
             raise
     
     def load_dataset(self, dataset_id: str, tenant_id: str = "default") -> pd.DataFrame:
-        """Load dataset from MinIO"""
+        """Load dataset from MinIO."""
         try:
             # Find dataset file
             prefix = f"{tenant_id}/{dataset_id}"
             
             if MINIO_AVAILABLE:
                 objects = list(self.client.list_objects(self.datasets_bucket, prefix=prefix))
-                parquet_files = [obj.object_name for obj in objects if obj.object_name.endswith('.parquet')]
+                dataset_files = [obj.object_name for obj in objects 
+                               if not obj.object_name.endswith('_metadata.json')]
             else:
                 response = self.client.list_objects_v2(
                     Bucket=self.datasets_bucket,
                     Prefix=prefix
                 )
-                parquet_files = [obj['Key'] for obj in response.get('Contents', []) 
-                               if obj['Key'].endswith('.parquet')]
+                dataset_files = [obj['Key'] for obj in response.get('Contents', []) 
+                               if not obj['Key'].endswith('_metadata.json')]
             
-            if not parquet_files:
+            if not dataset_files:
                 raise FileNotFoundError(f"Dataset {dataset_id} not found")
             
             # Load the most recent one
-            object_name = sorted(parquet_files)[-1]
+            object_name = sorted(dataset_files)[-1]
             
             if MINIO_AVAILABLE:
                 response = self.client.get_object(self.datasets_bucket, object_name)
-                data = pd.read_parquet(BytesIO(response.read()))
+                data_bytes = response.read()
                 response.close()
             else:
                 response = self.client.get_object(Bucket=self.datasets_bucket, Key=object_name)
-                data = pd.read_parquet(BytesIO(response['Body'].read()))
+                data_bytes = response['Body'].read()
+            
+            # Load based on extension
+            if object_name.endswith('.parquet'):
+                data = pd.read_parquet(BytesIO(data_bytes))
+            elif object_name.endswith('.csv'):
+                data = pd.read_csv(BytesIO(data_bytes))
+            elif object_name.endswith('.json'):
+                data = pd.read_json(BytesIO(data_bytes))
+            elif object_name.endswith('.feather'):
+                data = pd.read_feather(BytesIO(data_bytes))
+            else:
+                raise ValueError(f"Unknown file format: {object_name}")
             
             logger.info(f"Dataset loaded: {dataset_id}")
             return data
@@ -354,7 +434,7 @@ class MinIOStorage(StorageBackend):
             raise
     
     def list_models(self, tenant_id: str = None) -> List[Dict]:
-        """List all models for a tenant"""
+        """List all models for a tenant."""
         models = []
         prefix = f"{tenant_id}/" if tenant_id else ""
         
@@ -386,27 +466,52 @@ class MinIOStorage(StorageBackend):
 
 
 class LocalStorage(StorageBackend):
-    """Local filesystem storage backend for development"""
+    """Local filesystem storage backend for development."""
     
-    def __init__(self, base_path: str = "./ml_storage"):
+    def __init__(self, base_path: str = "./ml_storage", encryption_key: bytes = None):
         self.base_path = Path(base_path)
         self.models_path = self.base_path / "models"
         self.datasets_path = self.base_path / "datasets"
         self.artifacts_path = self.base_path / "artifacts"
+        self.encryption_key = encryption_key
         
         # Create directories
         for path in [self.models_path, self.datasets_path, self.artifacts_path]:
             path.mkdir(parents=True, exist_ok=True)
     
+    def _encrypt_data(self, data: bytes) -> bytes:
+        """Encrypt data if encryption key is provided."""
+        if self.encryption_key:
+            from cryptography.fernet import Fernet
+            f = Fernet(self.encryption_key)
+            return f.encrypt(data)
+        return data
+    
+    def _decrypt_data(self, data: bytes) -> bytes:
+        """Decrypt data if encryption key is provided."""
+        if self.encryption_key:
+            from cryptography.fernet import Fernet
+            f = Fernet(self.encryption_key)
+            return f.decrypt(data)
+        return data
+    
     def save_model(self, model: Any, metadata: ModelMetadata) -> str:
-        """Save model to local filesystem"""
+        """Save model to local filesystem with encryption support."""
         try:
             model_dir = self.models_path / metadata.tenant_id / metadata.model_id / f"v{metadata.version}"
             model_dir.mkdir(parents=True, exist_ok=True)
             
+            # Serialize model
+            model_bytes = pickle.dumps(model)
+            
+            # Encrypt if needed
+            if metadata.encrypted and self.encryption_key:
+                model_bytes = self._encrypt_data(model_bytes)
+            
             # Save model
             model_path = model_dir / "model.pkl"
-            joblib.dump(model, model_path)
+            with open(model_path, 'wb') as f:
+                f.write(model_bytes)
             
             # Save metadata
             metadata_path = model_dir / "metadata.json"
@@ -421,21 +526,29 @@ class LocalStorage(StorageBackend):
             raise
     
     def load_model(self, model_id: str, version: str = None, tenant_id: str = "default") -> tuple:
-        """Load model from local filesystem"""
+        """Load model from local filesystem."""
         try:
             if version is None:
                 version = self._get_latest_version(model_id, tenant_id)
             
             model_dir = self.models_path / tenant_id / model_id / f"v{version}"
             
-            # Load model
-            model_path = model_dir / "model.pkl"
-            model = joblib.load(model_path)
-            
             # Load metadata
             metadata_path = model_dir / "metadata.json"
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
+            
+            # Load model
+            model_path = model_dir / "model.pkl"
+            with open(model_path, 'rb') as f:
+                model_bytes = f.read()
+            
+            # Decrypt if needed
+            if metadata.get('encrypted') and self.encryption_key:
+                model_bytes = self._decrypt_data(model_bytes)
+            
+            # Deserialize model
+            model = pickle.loads(model_bytes)
             
             logger.info(f"Model loaded: {model_id} v{version}")
             return model, metadata
@@ -445,7 +558,7 @@ class LocalStorage(StorageBackend):
             raise
     
     def _get_latest_version(self, model_id: str, tenant_id: str) -> str:
-        """Get latest version of a model"""
+        """Get latest version of a model."""
         model_base = self.models_path / tenant_id / model_id
         if not model_base.exists():
             return "1.0.0"
@@ -459,16 +572,30 @@ class LocalStorage(StorageBackend):
             return sorted(versions, key=lambda x: tuple(map(int, x.split('.'))))[-1]
         return "1.0.0"
     
-    def save_dataset(self, data: pd.DataFrame, dataset_id: str, tenant_id: str = "default") -> str:
-        """Save dataset to local filesystem"""
+    def save_dataset(self, data: pd.DataFrame, dataset_id: str, tenant_id: str = "default",
+                    format: str = "parquet", compression: str = "snappy") -> str:
+        """Save dataset to local filesystem."""
         try:
             dataset_dir = self.datasets_path / tenant_id
             dataset_dir.mkdir(parents=True, exist_ok=True)
             
-            # Save as parquet
+            # Save based on format
             data_hash = hashlib.sha256(data.to_csv().encode()).hexdigest()[:16]
-            dataset_path = dataset_dir / f"{dataset_id}_{data_hash}.parquet"
-            data.to_parquet(dataset_path, engine='pyarrow', compression='snappy')
+            
+            if format == "parquet":
+                dataset_path = dataset_dir / f"{dataset_id}_{data_hash}.parquet"
+                data.to_parquet(dataset_path, engine='pyarrow', compression=compression)
+            elif format == "csv":
+                dataset_path = dataset_dir / f"{dataset_id}_{data_hash}.csv"
+                data.to_csv(dataset_path, index=False)
+            elif format == "json":
+                dataset_path = dataset_dir / f"{dataset_id}_{data_hash}.json"
+                data.to_json(dataset_path, orient='records')
+            elif format == "feather":
+                dataset_path = dataset_dir / f"{dataset_id}_{data_hash}.feather"
+                data.to_feather(dataset_path)
+            else:
+                raise ValueError(f"Unsupported format: {format}")
             
             # Save metadata
             metadata = {
@@ -477,6 +604,8 @@ class LocalStorage(StorageBackend):
                 "shape": list(data.shape),
                 "columns": list(data.columns),
                 "dtypes": {col: str(dtype) for col, dtype in data.dtypes.items()},
+                "format": format,
+                "compression": compression,
                 "created_at": datetime.now().isoformat(),
                 "tenant_id": tenant_id
             }
@@ -493,18 +622,31 @@ class LocalStorage(StorageBackend):
             raise
     
     def load_dataset(self, dataset_id: str, tenant_id: str = "default") -> pd.DataFrame:
-        """Load dataset from local filesystem"""
+        """Load dataset from local filesystem."""
         try:
             dataset_dir = self.datasets_path / tenant_id
             
             # Find dataset file
-            parquet_files = list(dataset_dir.glob(f"{dataset_id}_*.parquet"))
-            if not parquet_files:
+            dataset_files = list(dataset_dir.glob(f"{dataset_id}_*"))
+            dataset_files = [f for f in dataset_files if not f.name.endswith('_metadata.json')]
+            
+            if not dataset_files:
                 raise FileNotFoundError(f"Dataset {dataset_id} not found")
             
             # Load the most recent one
-            dataset_path = sorted(parquet_files, key=lambda x: x.stat().st_mtime)[-1]
-            data = pd.read_parquet(dataset_path)
+            dataset_path = sorted(dataset_files, key=lambda x: x.stat().st_mtime)[-1]
+            
+            # Load based on extension
+            if dataset_path.suffix == '.parquet':
+                data = pd.read_parquet(dataset_path)
+            elif dataset_path.suffix == '.csv':
+                data = pd.read_csv(dataset_path)
+            elif dataset_path.suffix == '.json':
+                data = pd.read_json(dataset_path)
+            elif dataset_path.suffix == '.feather':
+                data = pd.read_feather(dataset_path)
+            else:
+                raise ValueError(f"Unknown file format: {dataset_path}")
             
             logger.info(f"Dataset loaded: {dataset_id}")
             return data
@@ -514,7 +656,7 @@ class LocalStorage(StorageBackend):
             raise
     
     def list_models(self, tenant_id: str = None) -> List[Dict]:
-        """List all models for a tenant"""
+        """List all models for a tenant."""
         models = []
         
         if tenant_id:
@@ -535,7 +677,7 @@ class LocalStorage(StorageBackend):
             return []
     
     def delete_model(self, model_id: str, version: str = None, tenant_id: str = "default") -> bool:
-        """Delete a model version or all versions"""
+        """Delete a model version or all versions."""
         try:
             if version:
                 model_dir = self.models_path / tenant_id / model_id / f"v{version}"
@@ -560,7 +702,7 @@ class LocalStorage(StorageBackend):
 
 
 class StorageManager:
-    """Main storage manager that handles backend selection"""
+    """Main storage manager that handles backend selection and connectors."""
     
     def __init__(self, backend: str = "local", **kwargs):
         """
@@ -572,13 +714,52 @@ class StorageManager:
         """
         self.backend_type = backend
         
+        # Get encryption key from infrastructure if available
+        encryption_key = kwargs.pop('encryption_key', None)
+        
         if backend == "minio" or backend == "s3":
-            self.backend = MinIOStorage(**kwargs)
+            self.backend = MinIOStorage(encryption_key=encryption_key, **kwargs)
         else:
-            self.backend = LocalStorage(**kwargs)
+            self.backend = LocalStorage(encryption_key=encryption_key, **kwargs)
+        
+        # Initialize connectors
+        self.connectors = {}
+        self._init_connectors()
     
-    def save_model(self, model: Any, metadata: Dict, version: str = None) -> str:
-        """Save a model with metadata"""
+    def _init_connectors(self):
+        """Initialize data source connectors."""
+        from .connectors import (
+            SnowflakeConnector, BigQueryConnector, 
+            PostgreSQLConnector, MongoDBConnector
+        )
+        
+        # Register available connectors
+        self.connectors = {
+            'snowflake': SnowflakeConnector,
+            'bigquery': BigQueryConnector,
+            'postgresql': PostgreSQLConnector,
+            'mongodb': MongoDBConnector
+        }
+    
+    def load_from_connector(self, connector_type: str, config: Dict[str, Any], 
+                          query: str = None, table: str = None) -> pd.DataFrame:
+        """Load data from external connector."""
+        if connector_type not in self.connectors:
+            raise ValueError(f"Unknown connector type: {connector_type}")
+        
+        connector_class = self.connectors[connector_type]
+        connector = connector_class(**config)
+        
+        if query:
+            return connector.query(query)
+        elif table:
+            return connector.read_table(table)
+        else:
+            raise ValueError("Either query or table must be specified")
+    
+    def save_model(self, model: Any, metadata: Dict, version: str = None,
+                  encryption: bool = False, compression: str = "none") -> str:
+        """Save a model with metadata."""
         if version is None:
             version = "1.0.0"
         
@@ -599,42 +780,45 @@ class StorageManager:
             tags=metadata.get('tags', []),
             description=metadata.get('description', ''),
             author=metadata.get('author', 'unknown'),
-            tenant_id=metadata.get('tenant_id', 'default')
+            tenant_id=metadata.get('tenant_id', 'default'),
+            encrypted=encryption,
+            compression=compression
         )
         
         return self.backend.save_model(model, model_metadata)
     
     def load_model(self, model_id: str, version: str = None, tenant_id: str = "default"):
-        """Load a model"""
+        """Load a model."""
         return self.backend.load_model(model_id, version, tenant_id)
     
-    def save_dataset(self, data: pd.DataFrame, dataset_id: str, tenant_id: str = "default"):
-        """Save a dataset"""
-        return self.backend.save_dataset(data, dataset_id, tenant_id)
+    def save_dataset(self, data: pd.DataFrame, dataset_id: str, tenant_id: str = "default",
+                    format: str = "parquet", compression: str = "snappy"):
+        """Save a dataset."""
+        return self.backend.save_dataset(data, dataset_id, tenant_id, format, compression)
     
     def load_dataset(self, dataset_id: str, tenant_id: str = "default"):
-        """Load a dataset"""
+        """Load a dataset."""
         return self.backend.load_dataset(dataset_id, tenant_id)
     
     def list_models(self, tenant_id: str = None):
-        """List all models"""
+        """List all models."""
         return self.backend.list_models(tenant_id)
     
     def delete_model(self, model_id: str, version: str = None, tenant_id: str = "default"):
-        """Delete a model"""
+        """Delete a model."""
         if hasattr(self.backend, 'delete_model'):
             return self.backend.delete_model(model_id, version, tenant_id)
         return False
     
     def get_model_history(self, model_id: str, tenant_id: str = "default") -> List[Dict]:
-        """Get version history of a model"""
+        """Get version history of a model."""
         all_models = self.list_models(tenant_id)
         return [m for m in all_models if m.get('model_id') == model_id]
     
-    # NEW: Export methods as requested in the prompt
+    # Export methods
     def export_model_to_docker(self, model_id: str, version: str = None, 
                               tenant_id: str = "default", output_dir: str = "./docker_export") -> str:
-        """Export model as Docker container with FastAPI serving"""
+        """Export model as Docker container with FastAPI serving."""
         model, metadata = self.load_model(model_id, version, tenant_id)
         
         output_path = Path(output_dir) / f"{model_id}_v{version or 'latest'}"
@@ -644,52 +828,99 @@ class StorageManager:
         model_file = output_path / "model.pkl"
         joblib.dump(model, model_file)
         
-        # Create FastAPI app
-        app_content = f'''from fastapi import FastAPI, HTTPException
+        # Create FastAPI app with enhanced features
+        app_content = f'''from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import joblib
 import pandas as pd
 import numpy as np
 import json
+import time
+from datetime import datetime
 
 app = FastAPI(title="Model {model_id}", version="{version or 'latest'}")
+security = HTTPBearer()
 model = joblib.load("model.pkl")
 metadata = {json.dumps(metadata, indent=2)}
 
 class PredictRequest(BaseModel):
     data: Dict[str, Any]
+    return_probabilities: bool = False
 
 class BatchPredictRequest(BaseModel):
     data: List[Dict[str, Any]]
+    return_probabilities: bool = False
+
+class HealthResponse(BaseModel):
+    status: str
+    model_id: str
+    version: str
+    uptime: float
+    
+startup_time = time.time()
 
 @app.get("/")
 def info():
     return metadata
 
+@app.get("/health", response_model=HealthResponse)
+def health():
+    return {{
+        "status": "healthy",
+        "model_id": "{model_id}",
+        "version": "{version or 'latest'}",
+        "uptime": time.time() - startup_time
+    }}
+
 @app.post("/predict")
-def predict(request: PredictRequest):
+def predict(request: PredictRequest, credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         df = pd.DataFrame([request.data])
         prediction = model.predict(df)
-        result = prediction.tolist() if hasattr(prediction, 'tolist') else prediction
-        return {{"prediction": result}}
+        
+        response = {{
+            "prediction": prediction.tolist() if hasattr(prediction, 'tolist') else prediction,
+            "timestamp": datetime.now().isoformat()
+        }}
+        
+        if request.return_probabilities and hasattr(model, 'predict_proba'):
+            probabilities = model.predict_proba(df)
+            response["probabilities"] = probabilities.tolist()
+        
+        return response
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/predict_batch")
-def predict_batch(request: BatchPredictRequest):
+def predict_batch(request: BatchPredictRequest, credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         df = pd.DataFrame(request.data)
         predictions = model.predict(df)
-        results = predictions.tolist() if hasattr(predictions, 'tolist') else predictions
-        return {{"predictions": results}}
+        
+        response = {{
+            "predictions": predictions.tolist() if hasattr(predictions, 'tolist') else predictions,
+            "timestamp": datetime.now().isoformat(),
+            "batch_size": len(request.data)
+        }}
+        
+        if request.return_probabilities and hasattr(model, 'predict_proba'):
+            probabilities = model.predict_proba(df)
+            response["probabilities"] = probabilities.tolist()
+        
+        return response
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/health")
-def health():
-    return {{"status": "healthy", "model_id": "{model_id}", "version": "{version or 'latest'}"}}
+@app.get("/metrics")
+def metrics():
+    """Prometheus-compatible metrics endpoint"""
+    return {{
+        "predictions_total": 0,  # Would track in production
+        "prediction_duration_seconds": 0,
+        "model_version": "{version or 'latest'}"
+    }}
 '''
         
         (output_path / "app.py").write_text(app_content)
@@ -703,16 +934,18 @@ xgboost==2.0.0
 lightgbm==4.1.0
 catboost==1.2.2
 joblib==1.3.2
-numpy==1.24.3"""
+numpy==1.24.3
+python-multipart==0.0.6"""
         
         (output_path / "requirements.txt").write_text(requirements)
         
-        # Create Dockerfile
-        dockerfile = f"""FROM python:3.9-slim
+        # Create Dockerfile with multi-stage build
+        dockerfile = f"""# Multi-stage build for smaller image
+FROM python:3.9-slim as builder
 
 WORKDIR /app
 
-# Install system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \\
     gcc \\
     g++ \\
@@ -720,11 +953,22 @@ RUN apt-get update && apt-get install -y \\
 
 # Copy and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# Final stage
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
 
 # Copy application files
 COPY app.py .
 COPY model.pkl .
+
+# Make sure scripts in .local are usable
+ENV PATH=/root/.local/bin:$PATH
 
 # Expose port
 EXPOSE 8000
@@ -738,7 +982,7 @@ CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
 """
         (output_path / "Dockerfile").write_text(dockerfile)
         
-        # Create docker-compose.yml
+        # Create docker-compose.yml with monitoring
         compose = f"""version: '3.8'
 
 services:
@@ -754,12 +998,73 @@ services:
     restart: unless-stopped
     networks:
       - model-network
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=8000"
+      - "prometheus.io/path=/metrics"
 
 networks:
   model-network:
     driver: bridge
 """
         (output_path / "docker-compose.yml").write_text(compose)
+        
+        # Create Kubernetes deployment
+        k8s_yaml = f"""apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {model_id}-deployment
+  labels:
+    app: {model_id}
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: {model_id}
+  template:
+    metadata:
+      labels:
+        app: {model_id}
+    spec:
+      containers:
+      - name: model
+        image: {model_id}:{version or 'latest'}
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {model_id}-service
+spec:
+  selector:
+    app: {model_id}
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer
+"""
+        (output_path / "k8s-deployment.yaml").write_text(k8s_yaml)
         
         # Create deployment script
         deploy_script = f"""#!/bin/bash
@@ -774,6 +1079,9 @@ docker-compose up -d
 echo "Model API available at http://localhost:8000"
 echo "View logs: docker-compose logs -f"
 echo "Stop: docker-compose down"
+
+# Optional: Deploy to Kubernetes
+# kubectl apply -f k8s-deployment.yaml
 """
         deploy_path = output_path / "deploy.sh"
         deploy_path.write_text(deploy_script)
@@ -784,7 +1092,7 @@ echo "Stop: docker-compose down"
     
     def export_model_to_onnx(self, model_id: str, version: str = None,
                             tenant_id: str = "default", output_path: str = None) -> str:
-        """Export model to ONNX format"""
+        """Export model to ONNX format."""
         try:
             import skl2onnx
             from skl2onnx import convert_sklearn
@@ -821,7 +1129,7 @@ echo "Stop: docker-compose down"
     
     def export_model_to_pmml(self, model_id: str, version: str = None,
                             tenant_id: str = "default", output_path: str = None) -> str:
-        """Export model to PMML format"""
+        """Export model to PMML format."""
         try:
             from sklearn2pmml import sklearn2pmml
             from sklearn2pmml.pipeline import PMMLPipeline
@@ -852,10 +1160,9 @@ echo "Stop: docker-compose down"
     
     def export_model_to_tensorflow(self, model_id: str, version: str = None,
                                   tenant_id: str = "default", output_path: str = None) -> str:
-        """Export model to TensorFlow SavedModel format for TF Serving"""
+        """Export model to TensorFlow SavedModel format for TF Serving."""
         try:
             import tensorflow as tf
-            from tensorflow import keras
             
             model, metadata = self.load_model(model_id, version, tenant_id)
             
@@ -892,20 +1199,49 @@ echo "Stop: docker-compose down"
             raise
 
 
-# Feature Store functionality
 class FeatureStore:
-    """Simple feature store for feature reusability"""
+    """Feature store for feature reusability and versioning."""
     
     def __init__(self, storage_manager: StorageManager):
         self.storage = storage_manager
         self.feature_cache = {}
+        self.feature_registry = {}
+    
+    def register_feature(self, name: str, description: str, 
+                        computation_func: callable, dependencies: List[str] = None):
+        """Register a feature computation."""
+        self.feature_registry[name] = {
+            "description": description,
+            "computation": computation_func,
+            "dependencies": dependencies or [],
+            "created_at": datetime.now().isoformat()
+        }
+    
+    def compute_features(self, df: pd.DataFrame, feature_names: List[str]) -> pd.DataFrame:
+        """Compute requested features."""
+        result = df.copy()
+        
+        for feature_name in feature_names:
+            if feature_name in self.feature_registry:
+                feature_def = self.feature_registry[feature_name]
+                
+                # Check dependencies
+                for dep in feature_def["dependencies"]:
+                    if dep not in result.columns:
+                        # Recursively compute dependency
+                        result = self.compute_features(result, [dep])
+                
+                # Compute feature
+                result[feature_name] = feature_def["computation"](result)
+        
+        return result
     
     def save_features(self, 
                      features: pd.DataFrame,
                      feature_set_name: str,
                      version: str = "1.0.0",
                      metadata: Dict = None) -> str:
-        """Save computed features for reuse"""
+        """Save computed features for reuse."""
         
         feature_metadata = {
             "feature_set_name": feature_set_name,
@@ -913,7 +1249,8 @@ class FeatureStore:
             "columns": list(features.columns),
             "shape": list(features.shape),
             "created_at": datetime.now().isoformat(),
-            "metadata": metadata or {}
+            "metadata": metadata or {},
+            "registry": self.feature_registry
         }
         
         # Save as dataset with special naming
@@ -930,7 +1267,7 @@ class FeatureStore:
     def load_features(self, 
                      feature_set_name: str,
                      version: str = None) -> pd.DataFrame:
-        """Load features from store"""
+        """Load features from store."""
         
         # Check cache first
         cache_key = f"{feature_set_name}:{version}" if version else feature_set_name
@@ -950,7 +1287,5 @@ class FeatureStore:
         return features
     
     def list_feature_sets(self) -> List[str]:
-        """List available feature sets"""
-        # This would need to be implemented based on storage backend
-        # For now, return cached keys
+        """List available feature sets."""
         return list(set(k.split(':')[0] for k in self.feature_cache.keys()))
