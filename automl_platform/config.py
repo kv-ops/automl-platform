@@ -1,4 +1,4 @@
-"""Enhanced configuration management for AutoML platform with Storage, Monitoring, and Workers."""
+"""Enhanced configuration management for AutoML platform with Storage, Monitoring, Workers, and BILLING."""
 
 import yaml
 from pathlib import Path
@@ -7,9 +7,104 @@ from typing import List, Dict, Any, Optional, Tuple
 import logging
 import os
 from datetime import timedelta
+from enum import Enum
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class PlanType(Enum):
+    """Subscription plans"""
+    FREE = "free"
+    TRIAL = "trial"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+
+@dataclass
+class BillingConfig:
+    """Billing and quotas configuration"""
+    enabled: bool = True
+    plan_type: str = "free"  # free, trial, pro, enterprise
+    
+    # Quotas by plan
+    quotas: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
+        "free": {
+            "max_datasets": 3,
+            "max_dataset_size_mb": 10,
+            "max_models": 5,
+            "max_concurrent_jobs": 1,
+            "max_predictions_per_day": 100,
+            "max_workers": 1,
+            "llm_enabled": False,
+            "llm_calls_per_month": 0,
+            "gpu_enabled": False,
+            "api_rate_limit": 10,
+            "data_retention_days": 7
+        },
+        "trial": {
+            "max_datasets": 10,
+            "max_dataset_size_mb": 100,
+            "max_models": 20,
+            "max_concurrent_jobs": 2,
+            "max_predictions_per_day": 1000,
+            "max_workers": 2,
+            "llm_enabled": True,
+            "llm_calls_per_month": 100,
+            "gpu_enabled": False,
+            "api_rate_limit": 60,
+            "data_retention_days": 14
+        },
+        "pro": {
+            "max_datasets": 100,
+            "max_dataset_size_mb": 1000,
+            "max_models": 100,
+            "max_concurrent_jobs": 5,
+            "max_predictions_per_day": 10000,
+            "max_workers": 4,
+            "llm_enabled": True,
+            "llm_calls_per_month": 1000,
+            "gpu_enabled": False,
+            "api_rate_limit": 100,
+            "data_retention_days": 90
+        },
+        "enterprise": {
+            "max_datasets": -1,  # unlimited
+            "max_dataset_size_mb": 10000,
+            "max_models": -1,
+            "max_concurrent_jobs": 20,
+            "max_predictions_per_day": -1,
+            "max_workers": 10,
+            "llm_enabled": True,
+            "llm_calls_per_month": -1,
+            "gpu_enabled": True,
+            "api_rate_limit": 1000,
+            "data_retention_days": 365
+        }
+    })
+    
+    # Pricing
+    pricing: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "free": {"monthly": 0, "yearly": 0},
+        "trial": {"monthly": 0, "yearly": 0},
+        "pro": {"monthly": 99, "yearly": 990},
+        "enterprise": {"monthly": 999, "yearly": 9990}
+    })
+    
+    # Metering
+    enable_metering: bool = True
+    track_compute_minutes: bool = True
+    track_storage_gb: bool = True
+    track_api_calls: bool = True
+    track_llm_tokens: bool = True
+    
+    # Billing backend
+    stripe_api_key: Optional[str] = os.getenv("STRIPE_API_KEY")
+    stripe_webhook_secret: Optional[str] = os.getenv("STRIPE_WEBHOOK_SECRET")
+    
+    # Trial settings
+    trial_duration_days: int = 14
+    trial_requires_card: bool = False
 
 
 @dataclass
@@ -27,7 +122,7 @@ class StorageConfig:
     secure: bool = False
     region: str = "us-east-1"
     
-    # Bucket names
+    # Bucket names - ISOLATED BY TENANT
     models_bucket: str = "models"
     datasets_bucket: str = "datasets"
     artifacts_bucket: str = "artifacts"
@@ -44,6 +139,7 @@ class StorageConfig:
     # Multi-tenant
     enable_multi_tenant: bool = True
     default_tenant_id: str = "default"
+    isolate_buckets_per_tenant: bool = True  # Create separate buckets per tenant
 
 
 @dataclass
@@ -74,7 +170,7 @@ class MonitoringConfig:
     
     # Alerting
     alerting_enabled: bool = True
-    alert_channels: List[str] = field(default_factory=lambda: ["log"])  # "log", "email", "slack", "webhook"
+    alert_channels: List[str] = field(default_factory=lambda: ["log", "email", "slack"])
     
     # Alert thresholds
     accuracy_alert_threshold: float = 0.8
@@ -120,19 +216,24 @@ class WorkerConfig:
     task_time_limit: int = 3600  # seconds
     task_soft_time_limit: int = 3300  # seconds
     
-    # Queue configuration
+    # Queue configuration - WITH GPU SUPPORT
     queues: Dict[str, Dict] = field(default_factory=lambda: {
         "default": {"priority": 0},
         "training": {"priority": 1},
         "prediction": {"priority": 2},
-        "gpu": {"priority": 3, "routing_key": "gpu.*"}
+        "gpu": {"priority": 3, "routing_key": "gpu.*", "gpu_required": True},
+        "llm": {"priority": 2, "routing_key": "llm.*"}
     })
     
     # Resource management
-    enable_gpu_queue: bool = False
+    enable_gpu_queue: bool = True
     gpus_per_worker: int = 1
     memory_limit_gb: float = 8.0
     cpu_limit: int = 4
+    
+    # GPU configuration
+    gpu_workers: int = 0  # Number of workers with GPU access
+    gpu_memory_fraction: float = 0.8  # Fraction of GPU memory to use
     
     # Retry policy
     task_max_retries: int = 3
@@ -205,9 +306,16 @@ class APIConfig:
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60
     
-    # Rate limiting
+    # SSO Support
+    enable_sso: bool = False
+    sso_provider: str = "keycloak"  # "keycloak", "auth0", "okta"
+    sso_client_id: Optional[str] = os.getenv("SSO_CLIENT_ID")
+    sso_client_secret: Optional[str] = os.getenv("SSO_CLIENT_SECRET")
+    sso_realm_url: Optional[str] = os.getenv("SSO_REALM_URL")
+    
+    # Rate limiting - PER PLAN
     enable_rate_limit: bool = True
-    rate_limit_requests: int = 100
+    rate_limit_requests: int = 100  # Default, overridden by plan
     rate_limit_period: int = 60  # seconds
     
     # CORS
@@ -238,6 +346,7 @@ class AutoMLConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
+    billing: BillingConfig = field(default_factory=BillingConfig)  # NEW: Billing configuration
     
     # General settings
     environment: str = "development"  # "development", "staging", "production"
@@ -316,6 +425,11 @@ class AutoMLConfig:
     generate_report: bool = True
     report_format: str = "html"  # "html", "pdf", "markdown"
     
+    # Export formats
+    enable_docker_export: bool = True
+    enable_onnx_export: bool = True
+    enable_pmml_export: bool = False
+    
     # Resource limits
     max_memory_gb: float = 16.0
     max_time_minutes: int = 60
@@ -331,6 +445,21 @@ class AutoMLConfig:
     log_file: Optional[str] = "./logs/automl.log"
     log_to_mlflow: bool = False
     mlflow_tracking_uri: Optional[str] = os.getenv("MLFLOW_TRACKING_URI")
+    
+    def get_quota(self, key: str) -> Any:
+        """Get quota value for current plan"""
+        if not self.billing.enabled:
+            return -1  # Unlimited if billing disabled
+        
+        plan_quotas = self.billing.quotas.get(self.billing.plan_type, {})
+        return plan_quotas.get(key, -1)
+    
+    def check_quota(self, key: str, current_usage: int) -> bool:
+        """Check if quota is exceeded"""
+        quota = self.get_quota(key)
+        if quota == -1:  # Unlimited
+            return True
+        return current_usage < quota
     
     @classmethod
     def from_yaml(cls, filepath: str) -> "AutoMLConfig":
@@ -355,6 +484,9 @@ class AutoMLConfig:
             if 'api' in config_dict and isinstance(config_dict['api'], dict):
                 config_dict['api'] = APIConfig(**config_dict['api'])
             
+            if 'billing' in config_dict and isinstance(config_dict['billing'], dict):
+                config_dict['billing'] = BillingConfig(**config_dict['billing'])
+            
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
                 config_dict['algorithms'] = [config_dict['algorithms']]
@@ -366,7 +498,7 @@ class AutoMLConfig:
         config_dict = asdict(self)
         
         # Convert dataclasses to dicts for YAML serialization
-        for key in ['storage', 'monitoring', 'worker', 'llm', 'api']:
+        for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing']:
             if key in config_dict and hasattr(config_dict[key], '__dict__'):
                 config_dict[key] = asdict(config_dict[key])
         
@@ -404,6 +536,10 @@ class AutoMLConfig:
                 if self.llm.provider in ["openai", "anthropic"] and not self.llm.api_key:
                     logger.warning(f"No API key provided for {self.llm.provider}")
             
+            # Validate billing config
+            if self.billing.enabled:
+                assert self.billing.plan_type in ["free", "trial", "pro", "enterprise"], f"Invalid plan type: {self.billing.plan_type}"
+            
             # Create necessary directories
             Path(self.output_dir).mkdir(parents=True, exist_ok=True)
             if self.storage.backend == "local":
@@ -430,14 +566,16 @@ class AutoMLConfig:
                 "verbose": 2,
                 "hpo_n_iter": 10,
                 "max_models_to_train": 10,
-                "worker.max_workers": 2
+                "worker.max_workers": 2,
+                "billing.plan_type": "trial"
             },
             "staging": {
                 "debug": False,
                 "verbose": 1,
                 "hpo_n_iter": 30,
                 "max_models_to_train": 30,
-                "worker.max_workers": 4
+                "worker.max_workers": 4,
+                "billing.plan_type": "pro"
             },
             "production": {
                 "debug": False,
@@ -446,7 +584,8 @@ class AutoMLConfig:
                 "max_models_to_train": 50,
                 "worker.max_workers": 8,
                 "monitoring.enabled": True,
-                "monitoring.alerting_enabled": True
+                "monitoring.alerting_enabled": True,
+                "billing.enable_metering": True
             }
         }
         
@@ -491,34 +630,3 @@ def save_config(config: AutoMLConfig, filepath: str) -> None:
     """Save configuration to file."""
     config.to_yaml(filepath)
     logger.info(f"Configuration saved to {filepath}")
-
-
-# Example usage
-if __name__ == "__main__":
-    # Create default config
-    config = AutoMLConfig()
-    
-    # Set production environment
-    config.environment = "production"
-    config.apply_environment_config()
-    
-    # Enable specific features
-    config.storage.backend = "minio"
-    config.monitoring.prometheus_enabled = True
-    config.worker.enabled = True
-    config.llm.enabled = True
-    
-    # Validate
-    config.validate()
-    
-    # Save to file
-    save_config(config, "config.yaml")
-    
-    # Load from file
-    loaded_config = load_config("config.yaml")
-    
-    print(f"Config loaded: Environment={loaded_config.environment}")
-    print(f"Storage backend: {loaded_config.storage.backend}")
-    print(f"Monitoring enabled: {loaded_config.monitoring.enabled}")
-    print(f"Worker backend: {loaded_config.worker.backend}")
-    print(f"LLM provider: {loaded_config.llm.provider}")
