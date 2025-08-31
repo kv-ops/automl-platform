@@ -55,14 +55,14 @@ from automl_platform.llm import AutoMLLLMAssistant, DataCleaningAgent
 from automl_platform.prompts import PromptTemplates, PromptOptimizer
 
 # Infrastructure and billing
-from automl_platform.infrastructure import TenantManager, SecurityManager, DeploymentManager
-from automl_platform.billing import BillingManager, UsageTracker, PlanType, BillingPeriod
+from automl_platform.api.infrastructure import TenantManager, SecurityManager, DeploymentManager
+from automl_platform.api.billing import BillingManager, UsageTracker, PlanType, BillingPeriod
 
 # Data connectors
-from automl_platform.connectors import ConnectorFactory, ConnectionConfig
+from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
 
 # Streaming
-from automl_platform.streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
+from automl_platform.api.streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
