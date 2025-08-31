@@ -1,6 +1,6 @@
 """
-Enhanced LLM Integration Module with RAG, Agents, and Data Cleaning
-Inspired by DataRobot and Akkio's GPT-4 capabilities
+Enhanced LLM Integration Module with Advanced RAG, WebSocket Chat, and Improved Data Cleaning
+Complete implementation for production AutoML platform
 """
 
 import pandas as pd
@@ -17,21 +17,29 @@ from dataclasses import dataclass, asdict
 import redis
 from pathlib import Path
 import re
+from functools import lru_cache
 
 # LLM providers
 import openai
 from anthropic import Anthropic
 
-# Vector stores
+# Vector stores and embeddings
 import chromadb
 from chromadb.config import Settings
 import faiss
 import pickle
 
-# Text processing
+# Advanced RAG components
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.schema import Document
+from langchain.chains import RetrievalQA
+from langchain.memory import ConversationBufferMemory
+from langchain.vectorstores import Chroma, FAISS
+
+# WebSocket support
+import websockets
+from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +73,17 @@ class LLMProvider:
 
 
 class OpenAIProvider(LLMProvider):
-    """OpenAI GPT provider."""
+    """OpenAI GPT provider with GPT-4 Vision support."""
     
-    def __init__(self, api_key: str, model_name: str = "gpt-4"):
+    def __init__(self, api_key: str, model_name: str = "gpt-4-turbo-preview"):
         super().__init__(api_key, model_name)
         openai.api_key = api_key
         
-        # Pricing per 1K tokens (as of 2024)
+        # Updated pricing for 2024
         self.pricing = {
+            "gpt-4-turbo-preview": {"input": 0.01, "output": 0.03},
             "gpt-4": {"input": 0.03, "output": 0.06},
-            "gpt-4-turbo": {"input": 0.01, "output": 0.03},
+            "gpt-4-vision-preview": {"input": 0.01, "output": 0.03},
             "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015}
         }
     
@@ -82,13 +91,26 @@ class OpenAIProvider(LLMProvider):
                        max_tokens: int = 1000, **kwargs) -> LLMResponse:
         """Generate response from OpenAI."""
         try:
+            # Support for function calling
+            functions = kwargs.pop('functions', None)
+            
+            messages = [{"role": "user", "content": prompt}]
+            
+            params = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                **kwargs
+            }
+            
+            if functions:
+                params["functions"] = functions
+                params["function_call"] = "auto"
+            
             response = await asyncio.to_thread(
                 openai.ChatCompletion.create,
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
+                **params
             )
             
             content = response.choices[0].message.content
@@ -102,12 +124,18 @@ class OpenAIProvider(LLMProvider):
             self.total_tokens += tokens
             self.total_cost += cost
             
+            # Handle function calls
+            function_call = response.choices[0].message.get("function_call")
+            
             return LLMResponse(
-                content=content,
+                content=content or json.dumps(function_call) if function_call else content,
                 model=self.model_name,
                 tokens_used=tokens,
                 cost=cost,
-                metadata={"finish_reason": response.choices[0].finish_reason}
+                metadata={
+                    "finish_reason": response.choices[0].finish_reason,
+                    "function_call": function_call
+                }
             )
             
         except Exception as e:
@@ -116,7 +144,7 @@ class OpenAIProvider(LLMProvider):
 
 
 class AnthropicProvider(LLMProvider):
-    """Anthropic Claude provider."""
+    """Anthropic Claude provider with Claude 3 support."""
     
     def __init__(self, api_key: str, model_name: str = "claude-3-opus-20240229"):
         super().__init__(api_key, model_name)
@@ -167,16 +195,44 @@ class AnthropicProvider(LLMProvider):
 
 
 class LLMCache:
-    """Redis-based cache for LLM responses."""
+    """Enhanced Redis-based cache for LLM responses with semantic similarity."""
     
     def __init__(self, redis_url: str = "redis://localhost:6379/0", ttl: int = 3600):
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
         self.ttl = ttl
+        self.embeddings = OpenAIEmbeddings()
     
     def _get_key(self, prompt: str, model: str) -> str:
         """Generate cache key."""
         content = f"{model}:{prompt}"
         return f"llm:cache:{hashlib.sha256(content.encode()).hexdigest()}"
+    
+    async def get_semantic(self, prompt: str, model: str, threshold: float = 0.95) -> Optional[LLMResponse]:
+        """Get cached response using semantic similarity."""
+        try:
+            # Get prompt embedding
+            prompt_embedding = await asyncio.to_thread(
+                self.embeddings.embed_query, prompt
+            )
+            
+            # Search for similar prompts in cache
+            pattern = f"llm:cache:*"
+            for key in self.redis_client.scan_iter(match=pattern):
+                cached_data = self.redis_client.get(key)
+                if cached_data:
+                    data = json.loads(cached_data)
+                    if data.get('model') == model and 'embedding' in data:
+                        # Calculate similarity
+                        similarity = np.dot(prompt_embedding, data['embedding'])
+                        if similarity > threshold:
+                            response_dict = data.copy()
+                            response_dict['cached'] = True
+                            del response_dict['embedding']
+                            return LLMResponse(**response_dict)
+        except Exception as e:
+            logger.warning(f"Semantic cache lookup failed: {e}")
+        
+        return None
     
     def get(self, prompt: str, model: str) -> Optional[LLMResponse]:
         """Get cached response."""
@@ -191,25 +247,35 @@ class LLMCache:
             logger.warning(f"Cache get failed: {e}")
         return None
     
-    def set(self, prompt: str, response: LLMResponse):
-        """Cache response."""
+    def set(self, prompt: str, response: LLMResponse, embedding: Optional[List[float]] = None):
+        """Cache response with optional embedding."""
         key = self._get_key(prompt, response.model)
         try:
+            data = asdict(response)
+            if embedding:
+                data['embedding'] = embedding
             self.redis_client.setex(
                 key, self.ttl,
-                json.dumps(asdict(response), default=str)
+                json.dumps(data, default=str)
             )
         except Exception as e:
             logger.warning(f"Cache set failed: {e}")
 
 
-class RAGSystem:
-    """Retrieval-Augmented Generation system."""
+class AdvancedRAGSystem:
+    """Advanced Retrieval-Augmented Generation system with hybrid search."""
     
     def __init__(self, vector_store: str = "chromadb", embedding_model: str = "text-embedding-ada-002"):
         self.vector_store_type = vector_store
         self.embedding_model = embedding_model
         self.embeddings = OpenAIEmbeddings(model=embedding_model)
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        self.memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
         
         # Initialize vector store
         if vector_store == "chromadb":
@@ -218,124 +284,342 @@ class RAGSystem:
                 persist_directory="./chroma_db"
             ))
             self.collection = self.client.get_or_create_collection("automl_docs")
+            self.vector_store = Chroma(
+                client=self.client,
+                collection_name="automl_docs",
+                embedding_function=self.embeddings
+            )
         elif vector_store == "faiss":
             self.index = None
             self.documents = []
+            self.metadata = []
+            self.vector_store = None
     
-    def add_documents(self, documents: List[str], metadata: List[Dict] = None):
-        """Add documents to vector store."""
+    def add_documents(self, documents: List[str], metadata: List[Dict] = None, 
+                     doc_type: str = "general"):
+        """Add documents to vector store with metadata."""
+        # Split documents
+        texts = []
+        metadatas = []
+        
+        for i, doc in enumerate(documents):
+            chunks = self.text_splitter.split_text(doc)
+            for j, chunk in enumerate(chunks):
+                texts.append(chunk)
+                meta = metadata[i].copy() if metadata else {}
+                meta.update({
+                    "doc_type": doc_type,
+                    "chunk_index": j,
+                    "total_chunks": len(chunks),
+                    "timestamp": datetime.now().isoformat()
+                })
+                metadatas.append(meta)
+        
         if self.vector_store_type == "chromadb":
-            # Generate embeddings
-            embeddings = self.embeddings.embed_documents(documents)
-            
-            # Add to ChromaDB
-            self.collection.add(
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadata or [{}] * len(documents),
-                ids=[f"doc_{i}" for i in range(len(documents))]
-            )
+            self.vector_store.add_texts(texts, metadatas=metadatas)
         
         elif self.vector_store_type == "faiss":
             # Generate embeddings
-            embeddings = np.array(self.embeddings.embed_documents(documents))
+            embeddings = np.array(self.embeddings.embed_documents(texts))
             
             # Initialize or update FAISS index
             if self.index is None:
                 dimension = embeddings.shape[1]
                 self.index = faiss.IndexFlatL2(dimension)
+                # Add metadata index
+                self.index = faiss.IndexIDMap(self.index)
             
-            self.index.add(embeddings)
-            self.documents.extend(documents)
+            # Add to index with IDs
+            ids = np.arange(len(self.documents), len(self.documents) + len(texts))
+            self.index.add_with_ids(embeddings, ids)
+            self.documents.extend(texts)
+            self.metadata.extend(metadatas)
+            
+            # Create FAISS vector store
+            self.vector_store = FAISS(
+                embedding_function=self.embeddings.embed_query,
+                index=self.index,
+                docstore=self.documents,
+                index_to_docstore_id={i: i for i in range(len(self.documents))}
+            )
     
-    def search(self, query: str, k: int = 5) -> List[Tuple[str, float]]:
-        """Search for relevant documents."""
+    def hybrid_search(self, query: str, k: int = 5, 
+                     filter_dict: Dict = None) -> List[Tuple[str, float, Dict]]:
+        """Hybrid search combining semantic and keyword search."""
+        results = []
+        
+        # Semantic search
         query_embedding = self.embeddings.embed_query(query)
         
         if self.vector_store_type == "chromadb":
-            results = self.collection.query(
+            # ChromaDB search with filters
+            where_clause = filter_dict if filter_dict else {}
+            search_results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=k
+                n_results=k,
+                where=where_clause
             )
             
-            if results["documents"]:
-                return list(zip(results["documents"][0], results["distances"][0]))
-            
+            if search_results["documents"]:
+                for doc, dist, meta in zip(
+                    search_results["documents"][0],
+                    search_results["distances"][0],
+                    search_results["metadatas"][0]
+                ):
+                    results.append((doc, float(dist), meta))
+        
         elif self.vector_store_type == "faiss" and self.index:
+            # FAISS search
             query_vec = np.array([query_embedding])
             distances, indices = self.index.search(query_vec, k)
             
-            results = []
             for idx, dist in zip(indices[0], distances[0]):
                 if idx < len(self.documents):
-                    results.append((self.documents[idx], float(dist)))
-            return results
+                    results.append((
+                        self.documents[idx],
+                        float(dist),
+                        self.metadata[idx] if idx < len(self.metadata) else {}
+                    ))
         
-        return []
+        # Keyword search enhancement
+        keywords = self._extract_keywords(query)
+        for keyword in keywords:
+            for i, doc in enumerate(self.documents[:k*2]):  # Search more docs
+                if keyword.lower() in doc.lower():
+                    # Boost keyword matches
+                    found = False
+                    for j, (d, _, _) in enumerate(results):
+                        if d == doc:
+                            results[j] = (d, results[j][1] * 0.8, results[j][2])
+                            found = True
+                            break
+                    if not found and len(results) < k:
+                        results.append((doc, 1.0, self.metadata[i] if i < len(self.metadata) else {}))
+        
+        # Sort by distance and return top k
+        results.sort(key=lambda x: x[1])
+        return results[:k]
+    
+    def _extract_keywords(self, text: str) -> List[str]:
+        """Extract keywords from text."""
+        # Simple keyword extraction
+        import nltk
+        try:
+            nltk.download('stopwords', quiet=True)
+            nltk.download('punkt', quiet=True)
+            from nltk.corpus import stopwords
+            from nltk.tokenize import word_tokenize
+            
+            stop_words = set(stopwords.words('english'))
+            word_tokens = word_tokenize(text.lower())
+            keywords = [w for w in word_tokens if w not in stop_words and w.isalnum()]
+            return keywords[:5]  # Top 5 keywords
+        except:
+            # Fallback to simple split
+            return text.lower().split()[:5]
+    
+    def create_qa_chain(self, llm_provider: LLMProvider):
+        """Create a QA chain with the vector store."""
+        from langchain.chains import ConversationalRetrievalChain
+        
+        # Create LangChain LLM wrapper
+        class LLMWrapper:
+            def __init__(self, provider):
+                self.provider = provider
+            
+            async def agenerate(self, prompts, **kwargs):
+                responses = []
+                for prompt in prompts:
+                    response = await self.provider.generate(prompt, **kwargs)
+                    responses.append(response.content)
+                return responses
+        
+        llm = LLMWrapper(llm_provider)
+        
+        # Create QA chain
+        qa_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=self.vector_store.as_retriever(search_kwargs={"k": 5}),
+            memory=self.memory,
+            return_source_documents=True
+        )
+        
+        return qa_chain
 
 
-class DataCleaningAgent:
-    """Intelligent data cleaning agent inspired by Akkio."""
+class EnhancedDataCleaningAgent:
+    """Enhanced intelligent data cleaning agent with advanced capabilities."""
     
     def __init__(self, llm_provider: LLMProvider):
         self.llm = llm_provider
         self.cleaning_history = []
+        self.cleaning_patterns = self._load_cleaning_patterns()
+    
+    def _load_cleaning_patterns(self) -> Dict[str, Any]:
+        """Load common data cleaning patterns."""
+        return {
+            "missing_values": {
+                "numeric": ["mean", "median", "mode", "forward_fill", "backward_fill", "interpolate"],
+                "categorical": ["mode", "constant", "forward_fill", "backward_fill"],
+                "time_series": ["interpolate", "forward_fill", "backward_fill", "seasonal_decompose"]
+            },
+            "outliers": {
+                "methods": ["iqr", "zscore", "isolation_forest", "local_outlier_factor"],
+                "actions": ["remove", "cap", "transform", "flag"]
+            },
+            "encoding": {
+                "categorical": ["one_hot", "label", "target", "ordinal", "binary"],
+                "text": ["tfidf", "count", "word2vec", "bert"]
+            },
+            "scaling": {
+                "methods": ["standard", "minmax", "robust", "maxabs", "quantile"]
+            }
+        }
     
     async def analyze_data_issues(self, df: pd.DataFrame, sample_size: int = 100) -> Dict[str, Any]:
-        """Analyze data quality issues."""
+        """Analyze data quality issues with detailed recommendations."""
         sample = df.head(sample_size)
         
-        # Create data summary
-        summary = {
+        # Comprehensive data profiling
+        profile = {
             "shape": df.shape,
             "columns": list(df.columns),
             "dtypes": df.dtypes.to_dict(),
             "missing": df.isnull().sum().to_dict(),
+            "missing_percent": (df.isnull().sum() / len(df) * 100).to_dict(),
+            "unique_counts": df.nunique().to_dict(),
+            "duplicates": df.duplicated().sum(),
+            "memory_usage": df.memory_usage(deep=True).sum() / 1024**2,  # MB
             "sample": sample.to_dict('records')[:5]
         }
         
+        # Statistical analysis for numeric columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            profile["statistics"] = df[numeric_cols].describe().to_dict()
+            
+            # Detect skewness
+            from scipy import stats
+            profile["skewness"] = {col: stats.skew(df[col].dropna()) for col in numeric_cols}
+            
+            # Detect outliers
+            outliers = {}
+            for col in numeric_cols:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                outlier_count = ((df[col] < Q1 - 1.5 * IQR) | (df[col] > Q3 + 1.5 * IQR)).sum()
+                if outlier_count > 0:
+                    outliers[col] = outlier_count
+            profile["outliers"] = outliers
+        
+        # Analyze categorical columns
+        categorical_cols = df.select_dtypes(include=['object']).columns
+        if len(categorical_cols) > 0:
+            profile["high_cardinality"] = {
+                col: df[col].nunique() 
+                for col in categorical_cols 
+                if df[col].nunique() > len(df) * 0.5
+            }
+        
+        # Create comprehensive prompt
         prompt = f"""
-        Analyze this dataset for quality issues:
+        Analyze this dataset for quality issues and provide detailed recommendations:
         
-        Shape: {summary['shape']}
-        Columns: {summary['columns']}
-        Data Types: {summary['dtypes']}
-        Missing Values: {summary['missing']}
-        Sample Data: {json.dumps(summary['sample'], indent=2)}
-        
-        Identify:
-        1. Data quality issues (missing values, outliers, incorrect types)
-        2. Suggested transformations
-        3. Potential feature engineering opportunities
-        4. Columns that might need special handling
+        Dataset Profile:
+        - Shape: {profile['shape']}
+        - Memory Usage: {profile['memory_usage']:.2f} MB
+        - Missing Values: {json.dumps(profile['missing_percent'], indent=2)}
+        - Duplicates: {profile['duplicates']}
+        - Outliers: {json.dumps(profile.get('outliers', {}), indent=2)}
+        - Skewness: {json.dumps(profile.get('skewness', {}), indent=2)}
+        - High Cardinality: {json.dumps(profile.get('high_cardinality', {}), indent=2)}
         
         Provide a structured JSON response with:
         {{
-            "issues": [...],
-            "transformations": [...],
-            "feature_suggestions": [...],
-            "warnings": [...]
+            "critical_issues": [...],
+            "data_quality_score": 0-100,
+            "cleaning_steps": [
+                {{
+                    "step": 1,
+                    "issue": "...",
+                    "action": "...",
+                    "code": "...",
+                    "impact": "high/medium/low"
+                }}
+            ],
+            "feature_engineering_opportunities": [...],
+            "warnings": [...],
+            "estimated_cleaning_time": "minutes"
         }}
         """
         
-        response = await self.llm.generate(prompt, temperature=0.3)
+        response = await self.llm.generate(prompt, temperature=0.3, max_tokens=1500)
         
         try:
             analysis = json.loads(response.content)
+            analysis["profile"] = profile
         except:
             analysis = {
-                "issues": ["Could not parse LLM response"],
-                "transformations": [],
-                "feature_suggestions": [],
-                "warnings": []
+                "critical_issues": ["Could not parse LLM response"],
+                "data_quality_score": self._calculate_quality_score(profile),
+                "cleaning_steps": self._generate_default_cleaning_steps(profile),
+                "feature_engineering_opportunities": [],
+                "warnings": [],
+                "profile": profile
             }
         
         return analysis
     
+    def _calculate_quality_score(self, profile: Dict) -> float:
+        """Calculate data quality score."""
+        score = 100.0
+        
+        # Penalize for missing values
+        max_missing = max(profile.get('missing_percent', {}).values(), default=0)
+        score -= min(max_missing, 30)
+        
+        # Penalize for duplicates
+        duplicate_ratio = profile.get('duplicates', 0) / profile['shape'][0]
+        score -= duplicate_ratio * 20
+        
+        # Penalize for outliers
+        outlier_ratio = sum(profile.get('outliers', {}).values()) / (profile['shape'][0] * len(profile.get('outliers', {})))
+        score -= outlier_ratio * 10
+        
+        return max(0, score)
+    
+    def _generate_default_cleaning_steps(self, profile: Dict) -> List[Dict]:
+        """Generate default cleaning steps based on profile."""
+        steps = []
+        
+        # Handle missing values
+        for col, missing_pct in profile.get('missing_percent', {}).items():
+            if missing_pct > 0:
+                steps.append({
+                    "step": len(steps) + 1,
+                    "issue": f"Missing values in {col} ({missing_pct:.1f}%)",
+                    "action": "Fill with median" if col in profile.get('statistics', {}) else "Fill with mode",
+                    "code": f"df['{col}'].fillna(df['{col}'].median(), inplace=True)" if col in profile.get('statistics', {}) else f"df['{col}'].fillna(df['{col}'].mode()[0], inplace=True)",
+                    "impact": "high" if missing_pct > 20 else "medium"
+                })
+        
+        # Handle duplicates
+        if profile.get('duplicates', 0) > 0:
+            steps.append({
+                "step": len(steps) + 1,
+                "issue": f"Duplicate rows ({profile['duplicates']})",
+                "action": "Remove duplicates",
+                "code": "df.drop_duplicates(inplace=True)",
+                "impact": "medium"
+            })
+        
+        return steps
+    
     async def suggest_cleaning_code(self, df: pd.DataFrame, issue: str) -> str:
-        """Generate Python code to fix data issues."""
+        """Generate Python code to fix data issues with validation."""
         prompt = f"""
-        Generate Python code to fix this data issue:
+        Generate production-ready Python code to fix this data issue:
         
         Issue: {issue}
         
@@ -344,51 +628,70 @@ class DataCleaningAgent:
         - Shape: {df.shape}
         - Data types: {df.dtypes.to_dict()}
         
-        Provide clean, executable Python code using pandas.
+        Requirements:
+        1. Use pandas and numpy
+        2. Handle edge cases
+        3. Include error handling
+        4. Add logging
+        5. Preserve data types
+        6. Include comments
+        
         The dataframe variable is 'df'.
-        Include comments explaining each step.
         """
         
-        response = await self.llm.generate(prompt, temperature=0.2)
+        response = await self.llm.generate(prompt, temperature=0.2, max_tokens=1000)
         
-        # Extract code from response
+        # Extract and validate code
         code = self._extract_code(response.content)
+        
+        # Add safety checks
+        if "exec" in code or "eval" in code or "__import__" in code:
+            logger.warning("Potentially unsafe code detected")
+            code = "# Unsafe code detected - manual review required\n" + code
         
         # Log cleaning action
         self.cleaning_history.append({
             "timestamp": datetime.now().isoformat(),
             "issue": issue,
-            "code": code
+            "code": code,
+            "validated": self._validate_code(code)
         })
         
         return code
     
-    async def interactive_clean(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Interactive data cleaning conversation."""
+    def _validate_code(self, code: str) -> bool:
+        """Validate Python code syntax."""
+        try:
+            compile(code, '<string>', 'exec')
+            return True
+        except SyntaxError:
+            return False
+    
+    async def auto_clean(self, df: pd.DataFrame, target_quality_score: float = 80.0) -> pd.DataFrame:
+        """Automatically clean data to reach target quality score."""
         df_cleaned = df.copy()
+        max_iterations = 5
         
-        # Initial analysis
-        analysis = await self.analyze_data_issues(df_cleaned)
-        
-        print("\n=== Data Quality Analysis ===")
-        print(f"Found {len(analysis['issues'])} issues:")
-        for i, issue in enumerate(analysis['issues'], 1):
-            print(f"{i}. {issue}")
-        
-        # Process each issue
-        for issue in analysis['issues']:
-            print(f"\n--- Addressing: {issue} ---")
+        for iteration in range(max_iterations):
+            # Analyze current state
+            analysis = await self.analyze_data_issues(df_cleaned)
             
-            # Get cleaning code
-            code = await self.suggest_cleaning_code(df_cleaned, issue)
-            print(f"Suggested fix:\n{code}")
+            current_score = analysis.get('data_quality_score', 0)
+            logger.info(f"Iteration {iteration + 1}: Quality score = {current_score:.1f}")
             
-            # Execute if approved (in production, add user confirmation)
-            try:
-                exec(code, {"df": df_cleaned, "pd": pd, "np": np})
-                print("✓ Applied successfully")
-            except Exception as e:
-                print(f"✗ Error applying fix: {e}")
+            if current_score >= target_quality_score:
+                logger.info(f"Target quality score reached: {current_score:.1f}")
+                break
+            
+            # Apply cleaning steps
+            for step in analysis.get('cleaning_steps', [])[:3]:  # Apply top 3 steps per iteration
+                try:
+                    code = step.get('code', '')
+                    if code and self._validate_code(code):
+                        exec(code, {"df": df_cleaned, "pd": pd, "np": np})
+                        logger.info(f"Applied: {step.get('action', 'cleaning step')}")
+                except Exception as e:
+                    logger.error(f"Failed to apply cleaning step: {e}")
         
         return df_cleaned
     
@@ -410,7 +713,7 @@ class DataCleaningAgent:
 
 
 class AutoMLLLMAssistant:
-    """Main LLM assistant for AutoML platform."""
+    """Main LLM assistant for AutoML platform with WebSocket support."""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -426,27 +729,30 @@ class AutoMLLLMAssistant:
         # Initialize cache
         self.cache = LLMCache() if config.get('cache_responses', True) else None
         
-        # Initialize RAG
-        self.rag = RAGSystem(
+        # Initialize Advanced RAG
+        self.rag = AdvancedRAGSystem(
             vector_store=config.get('vector_store', 'chromadb'),
             embedding_model=config.get('embedding_model', 'text-embedding-ada-002')
         ) if config.get('enable_rag', True) else None
         
         # Initialize agents
-        self.cleaning_agent = DataCleaningAgent(self.llm)
+        self.cleaning_agent = EnhancedDataCleaningAgent(self.llm)
+        
+        # Initialize WebSocket handler
+        self.websocket_handler = WebSocketChatHandler(self)
         
         # Load prompts
-        self.prompts = self._load_prompts()
+        self.prompts = self._load_enhanced_prompts()
     
-    def _load_prompts(self) -> Dict[str, str]:
-        """Load prompt templates."""
+    def _load_enhanced_prompts(self) -> Dict[str, str]:
+        """Load enhanced prompt templates."""
         prompts_dir = Path(self.config.get('prompts_dir', './prompts'))
         prompts = {}
         
-        # Default prompts if files don't exist
+        # Enhanced prompts for better suggestions
         default_prompts = {
             "feature_engineering": """
-                You are an expert data scientist. Suggest feature engineering for this dataset:
+                You are an expert data scientist specializing in feature engineering.
                 
                 Dataset Info:
                 {dataset_info}
@@ -454,7 +760,15 @@ class AutoMLLLMAssistant:
                 Task Type: {task_type}
                 Target Column: {target_column}
                 
-                Provide specific, actionable feature engineering suggestions with Python code.
+                Provide specific, actionable feature engineering suggestions:
+                1. Time-based features if applicable
+                2. Interaction features between correlated columns
+                3. Polynomial features for non-linear relationships
+                4. Domain-specific transformations
+                5. Text/categorical encoding strategies
+                
+                Include Python code using pandas and numpy.
+                Format as JSON with: name, description, code, importance (high/medium/low)
             """,
             
             "model_selection": """
@@ -463,38 +777,120 @@ class AutoMLLLMAssistant:
                 Dataset Characteristics:
                 {data_characteristics}
                 
-                Consider model complexity, training time, and interpretability.
-                Rank your recommendations and explain why.
+                Consider:
+                - Data size and dimensionality
+                - Feature types (numeric, categorical, text, time)
+                - Class imbalance if classification
+                - Potential for non-linear relationships
+                - Need for interpretability
+                
+                Rank models by expected performance and provide rationale.
+                Include both traditional and neural network approaches.
+            """,
+            
+            "column_analysis": """
+                Analyze these columns for ML modeling:
+                
+                Columns: {columns}
+                Sample Data: {sample_data}
+                
+                For each column, determine:
+                1. Data type and distribution
+                2. Potential as feature or target
+                3. Required preprocessing
+                4. Feature importance potential
+                5. Encoding strategy if categorical
+                
+                Return structured JSON analysis.
+            """,
+            
+            "code_generation": """
+                Generate production-ready AutoML code:
+                
+                Task: {task_description}
+                Dataset Info: {dataset_info}
+                
+                Requirements:
+                1. Use the automl_platform library
+                2. Include proper error handling
+                3. Add logging and progress tracking
+                4. Implement data validation
+                5. Include model explainability
+                6. Add performance monitoring
+                
+                Structure:
+                - Imports
+                - Configuration
+                - Data loading and validation
+                - Feature engineering
+                - Model training with HPO
+                - Evaluation and explainability
+                - Deployment preparation
             """,
             
             "explain_model": """
-                Explain this model's performance in simple terms:
+                Explain this model's performance for non-technical stakeholders:
                 
                 Model: {model_name}
                 Metrics: {metrics}
                 Feature Importance: {feature_importance}
                 
-                Provide insights that a non-technical stakeholder would understand.
+                Provide:
+                1. Plain English explanation of what the model does
+                2. Key performance indicators interpretation
+                3. Most important factors driving predictions
+                4. Strengths and limitations
+                5. Recommendations for improvement
+                6. Business impact assessment
             """,
             
             "error_analysis": """
-                Analyze these prediction errors:
+                Analyze these prediction errors to improve model:
                 
                 Error Statistics: {error_stats}
                 Sample Errors: {sample_errors}
                 
-                Identify patterns and suggest improvements.
+                Identify:
+                1. Systematic patterns in errors
+                2. Feature ranges with poor performance
+                3. Potential data quality issues
+                4. Model bias indicators
+                5. Suggestions for improvement
+                
+                Provide actionable recommendations with priority levels.
             """,
             
             "generate_report": """
-                Generate an executive summary for this AutoML experiment:
+                Generate comprehensive AutoML experiment report:
                 
                 Experiment ID: {experiment_id}
                 Best Model: {best_model}
                 Performance: {performance}
                 Key Features: {key_features}
                 
-                Format as a professional report with recommendations.
+                Structure:
+                # Executive Summary
+                - Key findings and recommendations
+                - Business impact
+                
+                # Technical Details
+                - Data overview and quality
+                - Feature engineering performed
+                - Models evaluated
+                - Best model architecture
+                - Performance metrics
+                
+                # Insights
+                - Feature importance analysis
+                - Error analysis
+                - Model limitations
+                
+                # Recommendations
+                - Deployment considerations
+                - Monitoring strategy
+                - Improvement opportunities
+                
+                Format as professional markdown report.
             """
         }
         
@@ -510,7 +906,7 @@ class AutoMLLLMAssistant:
     
     async def suggest_features(self, df: pd.DataFrame, target_column: str,
                               task_type: str = "classification") -> List[Dict[str, Any]]:
-        """Suggest feature engineering with code."""
+        """Suggest advanced feature engineering with code."""
         # Check cache
         cache_key = f"features_{hashlib.sha256(df.to_csv().encode()).hexdigest()[:8]}_{target_column}"
         
@@ -519,13 +915,18 @@ class AutoMLLLMAssistant:
             if cached:
                 return json.loads(cached.content)
         
-        # Prepare dataset info
+        # Prepare comprehensive dataset info
         dataset_info = {
             "shape": df.shape,
             "columns": list(df.columns),
             "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
             "sample": df.head(3).to_dict('records'),
-            "correlation_with_target": df.corrwith(df[target_column]).to_dict() if target_column in df else {}
+            "correlation_with_target": df.corrwith(df[target_column]).to_dict() if target_column in df else {},
+            "missing_values": df.isnull().sum().to_dict(),
+            "unique_counts": df.nunique().to_dict(),
+            "datetime_columns": [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])],
+            "categorical_columns": list(df.select_dtypes(include=['object']).columns),
+            "numeric_columns": list(df.select_dtypes(include=[np.number]).columns)
         }
         
         # Generate prompt
@@ -537,12 +938,15 @@ class AutoMLLLMAssistant:
         
         # Add RAG context if available
         if self.rag:
-            context = self.rag.search(f"feature engineering {task_type}", k=3)
+            context = self.rag.hybrid_search(
+                f"feature engineering {task_type} {' '.join(df.columns[:5])}", 
+                k=3
+            )
             if context:
-                prompt += "\n\nRelevant examples:\n" + "\n".join([doc for doc, _ in context])
+                prompt += "\n\nRelevant examples:\n" + "\n".join([doc for doc, _, _ in context])
         
         # Generate suggestions
-        response = await self.llm.generate(prompt, temperature=0.7, max_tokens=1500)
+        response = await self.llm.generate(prompt, temperature=0.7, max_tokens=2000)
         
         # Parse response
         suggestions = self._parse_feature_suggestions(response.content)
@@ -563,16 +967,23 @@ class AutoMLLLMAssistant:
         """Parse feature suggestions from LLM response."""
         suggestions = []
         
-        # Extract code blocks
+        # Try to parse as JSON first
+        try:
+            json_match = re.search(r'\[.*\]', text, re.DOTALL)
+            if json_match:
+                suggestions = json.loads(json_match.group())
+                return suggestions
+        except:
+            pass
+        
+        # Fallback to text parsing
         code_blocks = re.findall(r"```python\n(.*?)```", text, re.DOTALL)
         
-        # Extract descriptions
         lines = text.split('\n')
         current_suggestion = {}
         
         for i, line in enumerate(lines):
             if re.match(r"^\d+\.", line) or line.startswith("-"):
-                # New suggestion
                 if current_suggestion:
                     suggestions.append(current_suggestion)
                 
@@ -583,192 +994,22 @@ class AutoMLLLMAssistant:
                     "importance": "medium"
                 }
             
-            # Check for importance keywords
             if "high importance" in line.lower() or "critical" in line.lower():
                 current_suggestion["importance"] = "high"
             elif "low importance" in line.lower() or "optional" in line.lower():
                 current_suggestion["importance"] = "low"
         
-        # Add last suggestion
         if current_suggestion:
             suggestions.append(current_suggestion)
         
-        # Assign code blocks to suggestions
+        # Assign code blocks
         for i, code in enumerate(code_blocks[:len(suggestions)]):
             suggestions[i]["code"] = code.strip()
         
         return suggestions
     
-    async def explain_model(self, model_name: str, metrics: Dict[str, float],
-                          feature_importance: Dict[str, float] = None) -> str:
-        """Generate natural language explanation of model."""
-        prompt = self.prompts["explain_model"].format(
-            model_name=model_name,
-            metrics=json.dumps(metrics, indent=2),
-            feature_importance=json.dumps(feature_importance, indent=2) if feature_importance else "Not available"
-        )
-        
-        response = await self.llm.generate(prompt, temperature=0.5, max_tokens=800)
-        return response.content
-    
-    async def analyze_errors(self, y_true: np.ndarray, y_pred: np.ndarray,
-                           X: pd.DataFrame = None) -> Dict[str, Any]:
-        """Analyze prediction errors with LLM insights."""
-        # Calculate error statistics
-        errors = np.abs(y_true - y_pred)
-        error_stats = {
-            "mean_error": float(np.mean(errors)),
-            "std_error": float(np.std(errors)),
-            "max_error": float(np.max(errors)),
-            "error_quantiles": {
-                "25%": float(np.percentile(errors, 25)),
-                "50%": float(np.percentile(errors, 50)),
-                "75%": float(np.percentile(errors, 75)),
-                "95%": float(np.percentile(errors, 95))
-            }
-        }
-        
-        # Get worst predictions
-        worst_indices = np.argsort(errors)[-10:]
-        sample_errors = []
-        
-        for idx in worst_indices:
-            error_detail = {
-                "index": int(idx),
-                "true": float(y_true[idx]),
-                "predicted": float(y_pred[idx]),
-                "error": float(errors[idx])
-            }
-            
-            if X is not None:
-                error_detail["features"] = X.iloc[idx].to_dict()
-            
-            sample_errors.append(error_detail)
-        
-        # Generate analysis
-        prompt = self.prompts["error_analysis"].format(
-            error_stats=json.dumps(error_stats, indent=2),
-            sample_errors=json.dumps(sample_errors[:5], indent=2)  # Limit to 5 for token efficiency
-        )
-        
-        response = await self.llm.generate(prompt, temperature=0.5, max_tokens=1000)
-        
-        return {
-            "statistics": error_stats,
-            "worst_predictions": sample_errors,
-            "analysis": response.content,
-            "recommendations": self._extract_recommendations(response.content)
-        }
-    
-    def _extract_recommendations(self, text: str) -> List[str]:
-        """Extract recommendations from text."""
-        recommendations = []
-        
-        # Look for numbered or bulleted recommendations
-        patterns = [
-            r"\d+\.\s*(.+)",  # 1. Recommendation
-            r"[-•]\s*(.+)",   # - or • Recommendation
-            r"Recommendation:\s*(.+)",  # Explicit recommendation
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.MULTILINE)
-            recommendations.extend(matches)
-        
-        # Clean and deduplicate
-        recommendations = list(set([r.strip() for r in recommendations if len(r.strip()) > 10]))
-        
-        return recommendations[:10]  # Limit to top 10
-    
-    async def generate_code(self, task_description: str, 
-                          data_sample: pd.DataFrame = None) -> str:
-        """Generate AutoML code from natural language."""
-        prompt = f"""
-        Generate Python code for this AutoML task:
-        
-        Task: {task_description}
-        
-        {f"Data sample columns: {list(data_sample.columns)}" if data_sample is not None else ""}
-        {f"Data shape: {data_sample.shape}" if data_sample is not None else ""}
-        
-        Use the automl_platform library.
-        Include proper imports, configuration, and error handling.
-        Add comments explaining each step.
-        """
-        
-        response = await self.llm.generate(prompt, temperature=0.3, max_tokens=1500)
-        
-        # Extract and clean code
-        code = self._extract_code(response.content)
-        
-        # Validate code structure
-        if "import" not in code:
-            code = "from automl_platform import AutoMLOrchestrator, AutoMLConfig\nimport pandas as pd\n\n" + code
-        
-        return code
-    
-    def _extract_code(self, text: str) -> str:
-        """Extract Python code from text."""
-        # Look for code blocks
-        code_blocks = re.findall(r"```python\n(.*?)```", text, re.DOTALL)
-        
-        if code_blocks:
-            return '\n\n'.join(code_blocks)
-        
-        # Fallback: extract lines that look like code
-        lines = text.split('\n')
-        code_lines = []
-        
-        for line in lines:
-            # Simple heuristic for Python code
-            if any([
-                line.strip().startswith(('import ', 'from ', 'def ', 'class ')),
-                '=' in line and not line.strip().startswith('#'),
-                line.strip().startswith(('df', 'X', 'y', 'model', 'config')),
-                re.match(r'^\s{4,}', line)  # Indented lines
-            ]):
-                code_lines.append(line)
-        
-        return '\n'.join(code_lines)
-    
-    async def generate_report(self, experiment_data: Dict[str, Any], 
-                            format: str = "markdown") -> str:
-        """Generate comprehensive AutoML report."""
-        prompt = self.prompts["generate_report"].format(
-            experiment_id=experiment_data.get('experiment_id', 'Unknown'),
-            best_model=experiment_data.get('best_model', 'Unknown'),
-            performance=json.dumps(experiment_data.get('metrics', {}), indent=2),
-            key_features=json.dumps(experiment_data.get('top_features', []), indent=2)
-        )
-        
-        response = await self.llm.generate(prompt, temperature=0.5, max_tokens=2000)
-        
-        # Format based on output type
-        if format == "markdown":
-            return response.content
-        elif format == "html":
-            return self._markdown_to_html(response.content)
-        else:
-            return response.content
-    
-    def _markdown_to_html(self, markdown_text: str) -> str:
-        """Convert markdown to HTML."""
-        try:
-            import markdown
-            return markdown.markdown(markdown_text)
-        except ImportError:
-            # Simple conversion
-            html = markdown_text
-            html = re.sub(r'^# (.+)$', r'<h1>\1</h1>', html, flags=re.MULTILINE)
-            html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
-            html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
-            html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
-            html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
-            html = html.replace('\n\n', '</p><p>').replace('\n', '<br>')
-            return f"<p>{html}</p>"
-    
     async def chat(self, message: str, context: Dict[str, Any] = None) -> str:
-        """Interactive chat interface."""
+        """Interactive chat interface with context awareness."""
         # Add context to message
         if context:
             message = f"""
@@ -780,98 +1021,204 @@ class AutoMLLLMAssistant:
         
         # Search for relevant context in RAG
         if self.rag:
-            relevant_docs = self.rag.search(message, k=3)
+            relevant_docs = self.rag.hybrid_search(message, k=5)
             if relevant_docs:
                 message += "\n\nRelevant Information:\n"
-                for doc, score in relevant_docs:
-                    message += f"- {doc[:200]}...\n"
+                for doc, score, metadata in relevant_docs:
+                    message += f"- {doc[:200]}... (relevance: {1-score:.2f})\n"
         
         # Generate response
         response = await self.llm.generate(message, temperature=0.7, max_tokens=1000)
         
         return response.content
     
+    async def generate_code(self, task_description: str, 
+                          data_sample: pd.DataFrame = None) -> str:
+        """Generate complete AutoML code from natural language."""
+        dataset_info = ""
+        if data_sample is not None:
+            dataset_info = f"""
+            Columns: {list(data_sample.columns)}
+            Shape: {data_sample.shape}
+            Dtypes: {data_sample.dtypes.to_dict()}
+            Sample: {data_sample.head(2).to_dict('records')}
+            """
+        
+        prompt = self.prompts["code_generation"].format(
+            task_description=task_description,
+            dataset_info=dataset_info
+        )
+        
+        response = await self.llm.generate(prompt, temperature=0.3, max_tokens=2000)
+        
+        # Extract and validate code
+        code = self._extract_code(response.content)
+        
+        # Add imports if missing
+        if "import" not in code:
+            code = """from automl_platform import AutoMLOrchestrator, AutoMLConfig
+import pandas as pd
+import numpy as np
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+""" + code
+        
+        return code
+    
+    def _extract_code(self, text: str) -> str:
+        """Extract Python code from text."""
+        code_blocks = re.findall(r"```python\n(.*?)```", text, re.DOTALL)
+        
+        if code_blocks:
+            return '\n\n'.join(code_blocks)
+        
+        lines = text.split('\n')
+        code_lines = []
+        
+        for line in lines:
+            if any([
+                line.strip().startswith(('import ', 'from ', 'def ', 'class ')),
+                '=' in line and not line.strip().startswith('#'),
+                line.strip().startswith(('df', 'X', 'y', 'model', 'config')),
+                re.match(r'^\s{4,}', line)
+            ]):
+                code_lines.append(line)
+        
+        return '\n'.join(code_lines)
+    
     def get_usage_stats(self) -> Dict[str, Any]:
-        """Get LLM usage statistics."""
+        """Get comprehensive LLM usage statistics."""
         return {
             "total_tokens": self.llm.total_tokens,
             "total_cost": self.llm.total_cost,
             "provider": self.config['provider'],
             "model": self.config['model_name'],
             "cache_enabled": self.cache is not None,
-            "rag_enabled": self.rag is not None
+            "rag_enabled": self.rag is not None,
+            "cleaning_history": len(self.cleaning_agent.cleaning_history),
+            "websocket_sessions": len(self.websocket_handler.user_sessions) if hasattr(self, 'websocket_handler') else 0
         }
 
 
-# Example usage and testing
-async def main():
-    """Example usage of LLM module."""
+class WebSocketChatHandler:
+    """WebSocket handler for real-time LLM chat."""
     
-    # Configuration
-    config = {
-        'provider': 'openai',
-        'api_key': os.getenv('OPENAI_API_KEY'),
-        'model_name': 'gpt-4',
-        'cache_responses': True,
-        'enable_rag': True,
-        'vector_store': 'chromadb',
-        'embedding_model': 'text-embedding-ada-002',
-        'prompts_dir': './prompts'
-    }
+    def __init__(self, llm_assistant: 'AutoMLLLMAssistant'):
+        self.llm_assistant = llm_assistant
+        self.connections = set()
+        self.user_sessions = {}
     
-    # Initialize assistant
-    assistant = AutoMLLLMAssistant(config)
+    async def handle_connection(self, websocket, path):
+        """Handle new WebSocket connection."""
+        # Register connection
+        self.connections.add(websocket)
+        session_id = hashlib.sha256(str(websocket.remote_address).encode()).hexdigest()[:8]
+        
+        # Initialize session
+        if session_id not in self.user_sessions:
+            self.user_sessions[session_id] = {
+                "history": [],
+                "context": {},
+                "created_at": datetime.now().isoformat()
+            }
+        
+        try:
+            # Send welcome message
+            await websocket.send(json.dumps({
+                "type": "welcome",
+                "message": "Connected to AutoML Assistant",
+                "session_id": session_id
+            }))
+            
+            # Handle messages
+            async for message in websocket:
+                await self.handle_message(websocket, message, session_id)
+                
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        finally:
+            # Unregister connection
+            self.connections.remove(websocket)
     
-    # Create sample data
-    df = pd.DataFrame({
-        'age': [25, 30, 35, 40, 45],
-        'income': [30000, 45000, 55000, 65000, 80000],
-        'education_years': [12, 14, 16, 16, 18],
-        'purchased': [0, 0, 1, 1, 1]
-    })
+    async def handle_message(self, websocket, message: str, session_id: str):
+        """Handle incoming WebSocket message."""
+        try:
+            data = json.loads(message)
+            msg_type = data.get("type", "chat")
+            
+            if msg_type == "chat":
+                # Regular chat message
+                user_message = data.get("message", "")
+                context = data.get("context", {})
+                
+                # Update session
+                self.user_sessions[session_id]["history"].append({
+                    "role": "user",
+                    "content": user_message,
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # Generate response
+                response = await self.llm_assistant.chat(
+                    user_message,
+                    context={**self.user_sessions[session_id]["context"], **context}
+                )
+                
+                # Update history
+                self.user_sessions[session_id]["history"].append({
+                    "role": "assistant",
+                    "content": response,
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # Send response
+                await websocket.send(json.dumps({
+                    "type": "response",
+                    "message": response,
+                    "session_id": session_id
+                }))
+                
+            elif msg_type == "code_generation":
+                # Generate code request
+                task = data.get("task", "")
+                df_info = data.get("dataframe_info", None)
+                
+                code = await self.llm_assistant.generate_code(task, df_info)
+                
+                await websocket.send(json.dumps({
+                    "type": "code",
+                    "code": code,
+                    "session_id": session_id
+                }))
+                
+            elif msg_type == "data_analysis":
+                # Analyze data request
+                df_json = data.get("dataframe", {})
+                df = pd.DataFrame(df_json)
+                
+                analysis = await self.llm_assistant.cleaning_agent.analyze_data_issues(df)
+                
+                await websocket.send(json.dumps({
+                    "type": "analysis",
+                    "analysis": analysis,
+                    "session_id": session_id
+                }))
+                
+        except Exception as e:
+            logger.error(f"Error handling WebSocket message: {e}")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "message": str(e),
+                "session_id": session_id
+            }))
     
-    # Test feature suggestions
-    print("Testing feature suggestions...")
-    features = await assistant.suggest_features(df, 'purchased', 'classification')
-    print(f"Suggested {len(features)} features")
-    for feat in features:
-        print(f"- {feat['description']}")
-    
-    # Test model explanation
-    print("\nTesting model explanation...")
-    explanation = await assistant.explain_model(
-        "RandomForestClassifier",
-        {"accuracy": 0.85, "precision": 0.82, "recall": 0.88},
-        {"age": 0.3, "income": 0.5, "education_years": 0.2}
-    )
-    print(explanation[:500] + "...")
-    
-    # Test data cleaning
-    print("\nTesting data cleaning agent...")
-    analysis = await assistant.cleaning_agent.analyze_data_issues(df)
-    print(f"Found issues: {analysis['issues']}")
-    
-    # Test code generation
-    print("\nTesting code generation...")
-    code = await assistant.generate_code(
-        "Train a classification model to predict customer purchases based on demographics",
-        df
-    )
-    print("Generated code:")
-    print(code[:500] + "...")
-    
-    # Test chat
-    print("\nTesting chat interface...")
-    response = await assistant.chat(
-        "What's the best model for imbalanced classification?",
-        {"dataset_size": 10000, "class_ratio": "1:10"}
-    )
-    print(response[:500] + "...")
-    
-    # Show usage stats
-    print("\nUsage Statistics:")
-    print(assistant.get_usage_stats())
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    async def broadcast(self, message: Dict):
+        """Broadcast message to all connected clients."""
+        if self.connections:
+            await asyncio.gather(
+                *[ws.send(json.dumps(message)) for ws in self.connections],
+                return_exceptions=True
+            )
