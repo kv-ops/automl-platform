@@ -1,4 +1,7 @@
-"""Enhanced AutoML Orchestrator with Storage and Monitoring integration."""
+"""
+Enhanced AutoML Orchestrator with Storage, Monitoring, and LLM Integration
+Following DataRobot, Akkio, and H2O.ai best practices
+"""
 
 import pandas as pd
 import numpy as np
@@ -14,6 +17,7 @@ import logging
 from datetime import datetime
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -30,11 +34,19 @@ from .monitoring import (
     AlertManager, DriftDetector
 )
 
+# LLM Integration imports
+from .llm import AutoMLLLMAssistant
+from .data_quality_agent import IntelligentDataQualityAgent
+from .prompts import PromptTemplates
+
 logger = logging.getLogger(__name__)
 
 
 class EnhancedAutoMLOrchestrator:
-    """Enhanced AutoML orchestrator with production features."""
+    """
+    Enhanced AutoML orchestrator with production features and LLM integration.
+    Combines approaches from DataRobot, Akkio, and H2O.ai.
+    """
     
     def __init__(self, config: AutoMLConfig = None):
         """Initialize enhanced orchestrator with all components."""
@@ -65,6 +77,20 @@ class EnhancedAutoMLOrchestrator:
             self.quality_monitor = None
             self.alert_manager = None
         
+        # Initialize LLM components if enabled
+        if self.config.llm.enabled:
+            try:
+                self.llm_assistant = AutoMLLLMAssistant(self.config.llm.__dict__)
+                self.quality_agent = IntelligentDataQualityAgent(self.llm_assistant.llm)
+                logger.info("LLM components initialized successfully")
+            except Exception as e:
+                logger.warning(f"LLM initialization failed: {e}. Continuing without LLM features.")
+                self.llm_assistant = None
+                self.quality_agent = None
+        else:
+            self.llm_assistant = None
+            self.quality_agent = None
+        
         # Core components
         self.preprocessor = DataPreprocessor(self.config.to_dict())
         self.leaderboard = []
@@ -83,6 +109,11 @@ class EnhancedAutoMLOrchestrator:
         self.end_time = None
         self.total_models_trained = 0
         
+        # LLM-generated insights
+        self.llm_insights = {}
+        self.feature_suggestions = []
+        self.cleaning_report = None
+        
         logger.info(f"Enhanced orchestrator initialized with {self.config.environment} environment")
     
     def _get_alert_config(self) -> Dict:
@@ -95,14 +126,121 @@ class EnhancedAutoMLOrchestrator:
             "quality_score_threshold": self.config.monitoring.quality_score_threshold
         }
     
+    async def analyze_with_llm(self, df: pd.DataFrame, target_column: str = None):
+        """
+        Akkio-style conversational data analysis using LLM.
+        
+        Args:
+            df: DataFrame to analyze
+            target_column: Target column for supervised learning
+        
+        Returns:
+            Dict with analysis results and recommendations
+        """
+        if not self.quality_agent:
+            logger.warning("LLM not configured, skipping intelligent analysis")
+            return {}
+        
+        # DataRobot-style quality assessment
+        assessment = self.quality_agent.assess(df, target_column)
+        
+        # Generate quality report
+        quality_report = self.quality_agent.get_quality_report(assessment)
+        
+        # Store results
+        self.llm_insights['quality_assessment'] = assessment
+        self.llm_insights['quality_report'] = quality_report
+        
+        logger.info(f"LLM Analysis Complete - Quality Score: {assessment.quality_score:.1f}/100")
+        
+        return {
+            'quality_score': assessment.quality_score,
+            'alerts': assessment.alerts,
+            'warnings': assessment.warnings,
+            'recommendations': assessment.recommendations,
+            'report': quality_report
+        }
+    
+    async def suggest_features_with_llm(self, df: pd.DataFrame, target: str) -> List[Dict]:
+        """
+        Get LLM-powered feature engineering suggestions.
+        Similar to DataRobot's Feature Discovery.
+        
+        Args:
+            df: Input dataframe
+            target: Target column name
+        
+        Returns:
+            List of feature suggestions with code
+        """
+        if not self.llm_assistant:
+            logger.warning("LLM not configured, skipping feature suggestions")
+            return []
+        
+        # Get feature suggestions
+        suggestions = await self.llm_assistant.suggest_features(
+            df, target, self.task or "auto"
+        )
+        
+        # Store suggestions
+        self.feature_suggestions = suggestions
+        
+        # Log top suggestions
+        for i, suggestion in enumerate(suggestions[:3], 1):
+            logger.info(f"Feature Suggestion {i}: {suggestion['name']} (importance: {suggestion['importance']})")
+        
+        return suggestions
+    
+    async def clean_data_with_llm(self, df: pd.DataFrame, instructions: str = None) -> pd.DataFrame:
+        """
+        Akkio-style conversational data cleaning.
+        
+        Args:
+            df: DataFrame to clean
+            instructions: Natural language cleaning instructions
+        
+        Returns:
+            Cleaned DataFrame
+        """
+        if not self.quality_agent:
+            logger.warning("LLM not configured, using standard cleaning")
+            return df
+        
+        if instructions:
+            # User-provided instructions
+            cleaned_df, response = await self.quality_agent.clean(instructions, df)
+            logger.info(f"LLM Cleaning Response: {response[:200]}...")
+        else:
+            # Auto-clean based on assessment
+            assessment = self.quality_agent.assess(df)
+            
+            # Apply recommended cleaning for critical issues
+            cleaned_df = df.copy()
+            for alert in assessment.alerts:
+                if alert.get('severity') == 'critical':
+                    # Generate and apply cleaning code
+                    cleaning_prompt = f"Fix this issue: {alert['message']}"
+                    cleaned_df, _ = await self.quality_agent.clean(cleaning_prompt, cleaned_df)
+        
+        # Store cleaning report
+        self.cleaning_report = {
+            'original_shape': df.shape,
+            'cleaned_shape': cleaned_df.shape,
+            'actions_taken': len(assessment.alerts) if not instructions else 1
+        }
+        
+        return cleaned_df
+    
     def fit(self, 
             X: pd.DataFrame, 
             y: pd.Series,
             task: Optional[str] = None,
             experiment_name: Optional[str] = None,
-            reference_data: Optional[pd.DataFrame] = None) -> 'EnhancedAutoMLOrchestrator':
+            reference_data: Optional[pd.DataFrame] = None,
+            use_llm_features: bool = None,
+            use_llm_cleaning: bool = None) -> 'EnhancedAutoMLOrchestrator':
         """
-        Run enhanced AutoML pipeline with storage and monitoring.
+        Run enhanced AutoML pipeline with LLM integration.
         
         Args:
             X: Training features
@@ -110,6 +248,8 @@ class EnhancedAutoMLOrchestrator:
             task: Task type (auto-detected if None)
             experiment_name: Name for this experiment
             reference_data: Reference data for drift detection
+            use_llm_features: Whether to use LLM for feature engineering
+            use_llm_cleaning: Whether to use LLM for data cleaning
         
         Returns:
             Self for chaining
@@ -119,13 +259,38 @@ class EnhancedAutoMLOrchestrator:
         
         logger.info(f"Starting enhanced AutoML pipeline: {self.experiment_id}")
         
-        # Data quality check
+        # Use config defaults if not specified
+        if use_llm_features is None:
+            use_llm_features = self.config.llm.enable_feature_suggestions if self.config.llm.enabled else False
+        if use_llm_cleaning is None:
+            use_llm_cleaning = self.config.llm.enable_data_cleaning if self.config.llm.enabled else False
+        
+        # LLM-powered data quality analysis (async)
+        if self.quality_agent:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If loop is already running (e.g., in Jupyter), create task
+                asyncio.create_task(self.analyze_with_llm(X, y.name))
+            else:
+                # Otherwise run synchronously
+                loop.run_until_complete(self.analyze_with_llm(X, y.name))
+        
+        # Data quality check (standard + LLM if available)
         if self.quality_monitor:
             quality_report = self.quality_monitor.check_data_quality(X)
             logger.info(f"Data quality score: {quality_report['quality_score']:.1f}")
             
             if quality_report['quality_score'] < self.config.monitoring.min_quality_score:
                 logger.warning(f"Low data quality detected: {quality_report['issues']}")
+                
+                # LLM-powered cleaning if enabled
+                if use_llm_cleaning and self.quality_agent:
+                    logger.info("Applying LLM-powered data cleaning...")
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        X = asyncio.create_task(self.clean_data_with_llm(X))
+                    else:
+                        X = loop.run_until_complete(self.clean_data_with_llm(X))
                 
                 # Trigger alert
                 if self.alert_manager:
@@ -162,7 +327,20 @@ class EnhancedAutoMLOrchestrator:
         
         logger.info(f"Task detected: {self.task}")
         
-        # Feature engineering with caching
+        # LLM-powered feature engineering
+        if use_llm_features and self.llm_assistant:
+            logger.info("Generating LLM-powered feature suggestions...")
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                suggestions = asyncio.create_task(self.suggest_features_with_llm(X, y.name))
+            else:
+                suggestions = loop.run_until_complete(self.suggest_features_with_llm(X, y.name))
+            
+            # Apply top suggestions automatically
+            if suggestions and self.config.llm.enable_feature_suggestions:
+                X = self._apply_feature_suggestions(X, suggestions[:5])
+        
+        # Standard feature engineering with caching
         if self.config.enable_auto_feature_engineering and self.feature_store:
             X = self._engineer_features_with_cache(X, y)
         
@@ -172,7 +350,6 @@ class EnhancedAutoMLOrchestrator:
         
         # Setup reference data for drift detection
         if self.monitoring_service and reference_data is None:
-            # Use training data as reference
             reference_data = X.copy()
         
         # Get CV splitter and scoring
@@ -192,6 +369,14 @@ class EnhancedAutoMLOrchestrator:
         if self.leaderboard:
             self._select_best_model(X, y, reference_data)
             self._save_experiment_results()
+            
+            # Generate LLM explanation of best model
+            if self.llm_assistant:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(self._generate_model_explanation())
+                else:
+                    loop.run_until_complete(self._generate_model_explanation())
         
         self.end_time = time.time()
         training_time = self.end_time - self.start_time
@@ -203,7 +388,107 @@ class EnhancedAutoMLOrchestrator:
         if self.monitoring_service:
             self._generate_monitoring_report()
         
+        # Generate LLM report if enabled
+        if self.llm_assistant and self.config.llm.enable_report_generation:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self._generate_llm_report())
+            else:
+                loop.run_until_complete(self._generate_llm_report())
+        
         return self
+    
+    def _apply_feature_suggestions(self, X: pd.DataFrame, suggestions: List[Dict]) -> pd.DataFrame:
+        """Apply LLM-suggested features to dataframe."""
+        X_enhanced = X.copy()
+        
+        for suggestion in suggestions:
+            try:
+                # Execute feature engineering code
+                local_vars = {"df": X_enhanced, "pd": pd, "np": np}
+                exec(suggestion['code'], {}, local_vars)
+                X_enhanced = local_vars.get("df", X_enhanced)
+                logger.info(f"Applied feature: {suggestion['name']}")
+            except Exception as e:
+                logger.warning(f"Failed to apply feature {suggestion['name']}: {e}")
+        
+        return X_enhanced
+    
+    async def _generate_model_explanation(self):
+        """Generate LLM explanation of the best model."""
+        if not self.llm_assistant or not self.leaderboard:
+            return
+        
+        best_model = self.leaderboard[0]
+        
+        explanation = await self.llm_assistant.explain_model(
+            model_name=best_model['model'],
+            metrics=best_model['metrics'],
+            feature_importance=self.feature_importance
+        )
+        
+        self.llm_insights['model_explanation'] = explanation
+        logger.info("Model explanation generated via LLM")
+    
+    async def _generate_llm_report(self):
+        """Generate comprehensive report using LLM."""
+        if not self.llm_assistant:
+            return
+        
+        experiment_data = {
+            'experiment_id': self.experiment_id,
+            'best_model': self.leaderboard[0]['model'] if self.leaderboard else None,
+            'metrics': self.leaderboard[0]['metrics'] if self.leaderboard else {},
+            'top_features': list(self.feature_importance.keys())[:10] if self.feature_importance else [],
+            'training_time': self.end_time - self.start_time if self.end_time else None,
+            'models_trained': self.total_models_trained
+        }
+        
+        report = await self.llm_assistant.generate_report(
+            experiment_data,
+            format="markdown"
+        )
+        
+        # Save report
+        if self.config.output_dir:
+            report_path = Path(self.config.output_dir) / self.experiment_id / "llm_report.md"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(report)
+            logger.info(f"LLM report saved to {report_path}")
+        
+        self.llm_insights['report'] = report
+    
+    async def chat_with_assistant(self, message: str, context: Dict[str, Any] = None) -> str:
+        """
+        Chat with LLM assistant about the experiment.
+        Akkio-style conversational interface.
+        
+        Args:
+            message: User message
+            context: Additional context
+        
+        Returns:
+            Assistant response
+        """
+        if not self.llm_assistant:
+            return "LLM assistant not configured. Please enable LLM in configuration."
+        
+        # Add experiment context
+        if context is None:
+            context = {}
+        
+        context.update({
+            'experiment_id': self.experiment_id,
+            'task': self.task,
+            'models_trained': self.total_models_trained,
+            'best_model': self.leaderboard[0] if self.leaderboard else None,
+            'feature_suggestions': self.feature_suggestions[:3] if self.feature_suggestions else [],
+            'quality_score': self.llm_insights.get('quality_assessment', {}).get('quality_score')
+        })
+        
+        response = await self.llm_assistant.chat(message, context)
+        
+        return response
     
     def _get_models_to_train(self) -> Dict[str, Any]:
         """Get models to train based on configuration."""
@@ -448,7 +733,8 @@ class EnhancedAutoMLOrchestrator:
                     'tags': [self.experiment_id, self.task, model_name],
                     'description': f"Model trained in experiment {self.experiment_id}",
                     'author': self.config.user_id or 'automl',
-                    'tenant_id': self.config.tenant_id
+                    'tenant_id': self.config.tenant_id,
+                    'llm_insights': self.llm_insights.get('model_explanation', '')
                 }
                 
                 model_path = self.storage_manager.save_model(pipeline, metadata, version)
@@ -595,7 +881,10 @@ class EnhancedAutoMLOrchestrator:
                     'training_time': r['training_time']
                 }
                 for r in self.leaderboard[:10]  # Top 10 models
-            ]
+            ],
+            'llm_insights': self.llm_insights,
+            'feature_suggestions': self.feature_suggestions[:5] if self.feature_suggestions else [],
+            'cleaning_report': self.cleaning_report
         }
         
         # Save as JSON artifact
@@ -613,6 +902,14 @@ class EnhancedAutoMLOrchestrator:
             return
         
         report = self.monitoring_service.create_global_dashboard()
+        
+        # Add LLM insights if available
+        if self.llm_insights:
+            report['llm_analysis'] = {
+                'quality_score': self.llm_insights.get('quality_assessment', {}).get('quality_score'),
+                'feature_suggestions_count': len(self.feature_suggestions),
+                'model_explanation_available': 'model_explanation' in self.llm_insights
+            }
         
         # Save report
         report_path = Path(self.config.monitoring.report_output_dir) / self.experiment_id
@@ -730,7 +1027,7 @@ class EnhancedAutoMLOrchestrator:
         # Save pipeline
         joblib.dump(self.best_pipeline, filepath)
         
-        # Save enhanced metadata
+        # Save enhanced metadata including LLM insights
         metadata = {
             'experiment_id': self.experiment_id,
             'task': self.task,
@@ -741,7 +1038,10 @@ class EnhancedAutoMLOrchestrator:
             'dataset_hash': self.dataset_hash,
             'model_registry': self.model_registry,
             'training_time': self.end_time - self.start_time if self.end_time else None,
-            'config': self.config.to_dict()
+            'config': self.config.to_dict(),
+            'llm_insights': self.llm_insights,
+            'feature_suggestions': self.feature_suggestions,
+            'cleaning_report': self.cleaning_report
         }
         
         metadata_path = filepath.with_suffix('.meta.json')
@@ -768,6 +1068,9 @@ class EnhancedAutoMLOrchestrator:
                 self.experiment_id = metadata.get('experiment_id')
                 self.dataset_hash = metadata.get('dataset_hash')
                 self.model_registry = metadata.get('model_registry', {})
+                self.llm_insights = metadata.get('llm_insights', {})
+                self.feature_suggestions = metadata.get('feature_suggestions', [])
+                self.cleaning_report = metadata.get('cleaning_report')
         
         logger.info(f"Pipeline loaded from {filepath}")
     
@@ -807,7 +1110,8 @@ class EnhancedAutoMLOrchestrator:
                 'metrics': self.leaderboard[0]['metrics'],
                 'parameters': self.leaderboard[0].get('params', {}),
                 'feature_importance': self.feature_importance,
-                'training_time': self.leaderboard[0]['training_time']
+                'training_time': self.leaderboard[0]['training_time'],
+                'llm_explanation': self.llm_insights.get('model_explanation', '')
             }
         else:
             # Return info about specific model from registry
@@ -818,7 +1122,23 @@ class EnhancedAutoMLOrchestrator:
         if not self.monitoring_service:
             return {}
         
-        return self.monitoring_service.create_global_dashboard()
+        metrics = self.monitoring_service.create_global_dashboard()
+        
+        # Add LLM metrics if available
+        if self.llm_assistant:
+            metrics['llm_usage'] = self.llm_assistant.get_usage_stats()
+        
+        return metrics
+    
+    def get_llm_insights(self) -> Dict:
+        """Get all LLM-generated insights."""
+        return {
+            'quality_assessment': self.llm_insights.get('quality_assessment'),
+            'feature_suggestions': self.feature_suggestions,
+            'model_explanation': self.llm_insights.get('model_explanation'),
+            'cleaning_report': self.cleaning_report,
+            'report': self.llm_insights.get('report')
+        }
     
     def retrain(self, X: pd.DataFrame, y: pd.Series,
                model_name: str = None) -> 'EnhancedAutoMLOrchestrator':
@@ -848,9 +1168,25 @@ class EnhancedAutoMLOrchestrator:
 
 # Convenience function
 def create_automl_pipeline(config_path: str = None,
-                          environment: str = None) -> EnhancedAutoMLOrchestrator:
-    """Create an enhanced AutoML pipeline with configuration."""
+                          environment: str = None,
+                          enable_llm: bool = None) -> EnhancedAutoMLOrchestrator:
+    """
+    Create an enhanced AutoML pipeline with configuration.
+    
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name (development/production)
+        enable_llm: Whether to enable LLM features
+    
+    Returns:
+        Configured orchestrator instance
+    """
     config = load_config(config_path, environment)
+    
+    # Override LLM setting if specified
+    if enable_llm is not None:
+        config.llm.enabled = enable_llm
+    
     return EnhancedAutoMLOrchestrator(config)
 
 
@@ -874,17 +1210,38 @@ if __name__ == "__main__":
     config.storage.backend = "local"  # or "minio" for production
     config.monitoring.enabled = True
     config.worker.enabled = False  # Set to True for parallel training
+    config.llm.enabled = True  # Enable LLM features
+    config.llm.api_key = os.getenv("OPENAI_API_KEY")  # Set your API key
     
     # Create orchestrator
     orchestrator = EnhancedAutoMLOrchestrator(config)
     
-    # Train models
-    orchestrator.fit(X, y, experiment_name="demo_experiment")
+    # Train models with LLM enhancements
+    orchestrator.fit(
+        X, y, 
+        experiment_name="demo_experiment_with_llm",
+        use_llm_features=True,
+        use_llm_cleaning=True
+    )
     
     # Get leaderboard
     leaderboard = orchestrator.get_leaderboard()
     print("\nLeaderboard:")
     print(leaderboard.head())
+    
+    # Get LLM insights
+    insights = orchestrator.get_llm_insights()
+    print("\nLLM Insights Available:")
+    for key in insights.keys():
+        if insights[key]:
+            print(f"  - {key}: ✓")
+    
+    # Chat with assistant about results
+    loop = asyncio.get_event_loop()
+    response = loop.run_until_complete(
+        orchestrator.chat_with_assistant("Why did the best model perform well?")
+    )
+    print(f"\nAssistant Response: {response[:200]}...")
     
     # Make predictions
     X_test = X.iloc[:10]
@@ -893,7 +1250,7 @@ if __name__ == "__main__":
     
     # Get monitoring metrics
     metrics = orchestrator.get_monitoring_metrics()
-    print(f"\nMonitoring metrics: {metrics}")
+    print(f"\nMonitoring metrics available: {list(metrics.keys())}")
     
     # Save best model
     model_path = orchestrator.save_pipeline()
