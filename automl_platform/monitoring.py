@@ -2,7 +2,7 @@
 Monitoring module for ML Platform
 Handles model performance tracking, data drift detection, and system metrics
 Integrates with Prometheus for metrics export
-WITH COMPLETE SLACK/EMAIL INTEGRATION
+WITH COMPLETE SLACK/EMAIL INTEGRATION AND BILLING TRACKING
 """
 
 import os
@@ -46,10 +46,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelPerformanceMetrics:
-    """Container for model performance metrics"""
+    """Container for model performance metrics with billing info"""
     model_id: str
     timestamp: str
     prediction_count: int
+    tenant_id: str = "default"
     
     # Classification metrics
     accuracy: Optional[float] = None
@@ -76,26 +77,34 @@ class ModelPerformanceMetrics:
     concept_drift_detected: bool = False
     drift_metrics: Optional[Dict] = None
     
+    # Billing metrics
+    compute_time_seconds: float = 0.0
+    memory_usage_mb: float = 0.0
+    api_calls_count: int = 0
+    
     def to_dict(self):
         return asdict(self)
 
 
 class DriftDetector:
-    """Detects data and concept drift in production"""
+    """Detects data and concept drift in production with alerting"""
     
     def __init__(self, 
                  reference_data: pd.DataFrame = None,
-                 sensitivity: float = 0.05):
+                 sensitivity: float = 0.05,
+                 alert_callback: callable = None):
         """
         Initialize drift detector
         
         Args:
             reference_data: Reference dataset for comparison
             sensitivity: P-value threshold for drift detection
+            alert_callback: Function to call when drift detected
         """
         self.reference_data = reference_data
         self.sensitivity = sensitivity
         self.drift_history = []
+        self.alert_callback = alert_callback
         
         if reference_data is not None:
             self._calculate_reference_stats()
@@ -119,12 +128,13 @@ class DriftDetector:
                     'value_counts': self.reference_data[col].value_counts().to_dict()
                 }
     
-    def detect_data_drift(self, current_data: pd.DataFrame) -> Dict:
+    def detect_data_drift(self, current_data: pd.DataFrame, tenant_id: str = "default") -> Dict:
         """
-        Detect data drift using statistical tests
+        Detect data drift using statistical tests with tenant tracking
         
         Args:
             current_data: Current production data
+            tenant_id: Tenant identifier for billing
             
         Returns:
             Dictionary with drift detection results
@@ -137,7 +147,8 @@ class DriftDetector:
             "drift_detected": False,
             "drifted_features": [],
             "drift_scores": {},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "tenant_id": tenant_id
         }
         
         # Use Evidently if available for comprehensive drift detection
@@ -201,6 +212,10 @@ class DriftDetector:
         # Store in history
         self.drift_history.append(drift_results)
         
+        # Trigger alert if drift detected
+        if drift_results["drift_detected"] and self.alert_callback:
+            self.alert_callback(drift_results)
+        
         return drift_results
     
     def detect_concept_drift(self, 
@@ -243,13 +258,19 @@ class DriftDetector:
                 drift_detected = True
                 drift_points.append(i)
         
-        return {
+        result = {
             "concept_drift_detected": drift_detected,
             "drift_points": drift_points,
             "mean_error": float(np.mean(errors)),
             "std_error": float(np.std(errors)),
             "timestamp": datetime.now().isoformat()
         }
+        
+        # Trigger alert if concept drift detected
+        if drift_detected and self.alert_callback:
+            self.alert_callback(result)
+        
+        return result
     
     def calculate_psi(self, 
                      expected: pd.Series,
@@ -298,13 +319,15 @@ class DriftDetector:
 
 
 class ModelMonitor:
-    """Main monitoring class for ML models in production"""
+    """Main monitoring class for ML models in production with billing integration"""
     
     def __init__(self, 
                  model_id: str,
                  model_type: str = "classification",
                  reference_data: pd.DataFrame = None,
-                 prometheus_port: int = 8000):
+                 prometheus_port: int = 8000,
+                 tenant_id: str = "default",
+                 billing_tracker: Optional[Any] = None):
         """
         Initialize model monitor
         
@@ -313,32 +336,44 @@ class ModelMonitor:
             model_type: Type of model ('classification' or 'regression')
             reference_data: Reference dataset for drift detection
             prometheus_port: Port for Prometheus metrics endpoint
+            tenant_id: Tenant identifier for multi-tenancy
+            billing_tracker: Billing tracker instance
         """
         self.model_id = model_id
         self.model_type = model_type
         self.reference_data = reference_data
         self.prometheus_port = prometheus_port
+        self.tenant_id = tenant_id
+        self.billing_tracker = billing_tracker
         
-        # Initialize drift detector
-        self.drift_detector = DriftDetector(reference_data)
+        # Initialize drift detector with alert callback
+        self.drift_detector = DriftDetector(
+            reference_data, 
+            alert_callback=self._drift_alert_callback
+        )
         
         # Performance history
         self.performance_history = []
         self.prediction_history = []
+        
+        # Billing metrics
+        self.total_predictions = 0
+        self.total_compute_time = 0.0
+        self.total_api_calls = 0
         
         # Initialize Prometheus metrics if available
         if PROMETHEUS_AVAILABLE:
             self._init_prometheus_metrics()
     
     def _init_prometheus_metrics(self):
-        """Initialize Prometheus metrics"""
+        """Initialize Prometheus metrics with billing metrics"""
         self.registry = CollectorRegistry()
         
         # Counters
         self.prediction_counter = Counter(
             'ml_predictions_total',
             'Total number of predictions',
-            ['model_id'],
+            ['model_id', 'tenant_id'],
             registry=self.registry
         )
         
@@ -346,6 +381,21 @@ class ModelMonitor:
             'ml_prediction_errors_total',
             'Total number of prediction errors',
             ['model_id', 'error_type'],
+            registry=self.registry
+        )
+        
+        # Billing metrics
+        self.billing_counter = Counter(
+            'ml_billing_api_calls_total',
+            'Total API calls for billing',
+            ['model_id', 'tenant_id'],
+            registry=self.registry
+        )
+        
+        self.compute_time_counter = Counter(
+            'ml_billing_compute_seconds_total',
+            'Total compute time in seconds',
+            ['model_id', 'tenant_id'],
             registry=self.registry
         )
         
@@ -368,7 +418,7 @@ class ModelMonitor:
         self.prediction_latency = Histogram(
             'ml_prediction_duration_seconds',
             'Prediction latency in seconds',
-            ['model_id'],
+            ['model_id', 'tenant_id'],
             buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
             registry=self.registry
         )
@@ -383,13 +433,42 @@ class ModelMonitor:
         
         logger.info(f"Prometheus metrics initialized for model {self.model_id}")
     
+    def _drift_alert_callback(self, drift_info: Dict):
+        """Callback for drift detection alerts"""
+        alert = {
+            'type': 'drift_detected',
+            'model_id': self.model_id,
+            'tenant_id': self.tenant_id,
+            'drift_info': drift_info,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Send to monitoring integration
+        from .monitoring import MonitoringIntegration
+        
+        # Send Slack alert
+        if os.getenv('SLACK_WEBHOOK_URL'):
+            MonitoringIntegration.send_to_slack(alert, os.getenv('SLACK_WEBHOOK_URL'))
+        
+        # Send email alert
+        if os.getenv('ALERT_EMAIL_RECIPIENTS'):
+            smtp_config = {
+                'host': os.getenv('SMTP_HOST', 'localhost'),
+                'port': int(os.getenv('SMTP_PORT', 587)),
+                'from_email': os.getenv('SMTP_FROM_EMAIL', 'alerts@automl.com'),
+                'username': os.getenv('SMTP_USERNAME'),
+                'password': os.getenv('SMTP_PASSWORD')
+            }
+            recipients = os.getenv('ALERT_EMAIL_RECIPIENTS').split(',')
+            MonitoringIntegration.send_to_email(alert, smtp_config, recipients)
+    
     def log_prediction(self,
                       features: pd.DataFrame,
                       predictions: np.ndarray,
                       actuals: np.ndarray = None,
                       prediction_time: float = None):
         """
-        Log predictions for monitoring
+        Log predictions for monitoring with billing tracking
         
         Args:
             features: Input features
@@ -397,23 +476,54 @@ class ModelMonitor:
             actuals: Actual values (if available)
             prediction_time: Time taken for prediction
         """
+        # Track for billing
+        self.total_predictions += len(predictions)
+        self.total_api_calls += 1
+        
+        if prediction_time:
+            self.total_compute_time += prediction_time
+        
+        # Track in billing system if available
+        if self.billing_tracker:
+            self.billing_tracker.track_predictions(self.tenant_id, len(predictions))
+            self.billing_tracker.track_api_call(self.tenant_id, 'prediction')
+            if prediction_time:
+                self.billing_tracker.track_compute_time(self.tenant_id, prediction_time)
+        
         # Store prediction
         prediction_record = {
             'timestamp': datetime.now().isoformat(),
             'features': features.to_dict('records') if len(features) < 100 else None,
             'predictions': predictions.tolist() if len(predictions) < 100 else predictions.mean(),
             'actuals': actuals.tolist() if actuals is not None and len(actuals) < 100 else None,
-            'prediction_time': prediction_time
+            'prediction_time': prediction_time,
+            'tenant_id': self.tenant_id
         }
         
         self.prediction_history.append(prediction_record)
         
         # Update Prometheus metrics if available
         if PROMETHEUS_AVAILABLE:
-            self.prediction_counter.labels(model_id=self.model_id).inc(len(predictions))
+            self.prediction_counter.labels(
+                model_id=self.model_id,
+                tenant_id=self.tenant_id
+            ).inc(len(predictions))
+            
+            self.billing_counter.labels(
+                model_id=self.model_id,
+                tenant_id=self.tenant_id
+            ).inc()
             
             if prediction_time:
-                self.prediction_latency.labels(model_id=self.model_id).observe(prediction_time)
+                self.prediction_latency.labels(
+                    model_id=self.model_id,
+                    tenant_id=self.tenant_id
+                ).observe(prediction_time)
+                
+                self.compute_time_counter.labels(
+                    model_id=self.model_id,
+                    tenant_id=self.tenant_id
+                ).inc(prediction_time)
             
             for pred in predictions:
                 self.prediction_value.labels(model_id=self.model_id).observe(float(pred))
@@ -431,7 +541,7 @@ class ModelMonitor:
                             actuals: np.ndarray,
                             sample_weight: np.ndarray = None) -> ModelPerformanceMetrics:
         """
-        Calculate model performance metrics
+        Calculate model performance metrics with billing info
         
         Args:
             predictions: Model predictions
@@ -441,10 +551,14 @@ class ModelMonitor:
         Returns:
             ModelPerformanceMetrics object
         """
+        import time
+        start_time = time.time()
+        
         metrics = ModelPerformanceMetrics(
             model_id=self.model_id,
             timestamp=datetime.now().isoformat(),
-            prediction_count=len(predictions)
+            prediction_count=len(predictions),
+            tenant_id=self.tenant_id
         )
         
         try:
@@ -482,12 +596,22 @@ class ModelMonitor:
                 if np.any(mask):
                     metrics.mape = np.mean(np.abs((actuals[mask] - predictions[mask]) / actuals[mask])) * 100
             
+            # Calculate compute time
+            metrics.compute_time_seconds = time.time() - start_time
+            
+            # Track API call
+            metrics.api_calls_count = 1
+            
             # Update Prometheus metrics
             if PROMETHEUS_AVAILABLE and metrics.accuracy is not None:
                 self.accuracy_gauge.labels(model_id=self.model_id).set(metrics.accuracy)
             
             # Store in history
             self.performance_history.append(metrics)
+            
+            # Track in billing
+            if self.billing_tracker:
+                self.billing_tracker.track_compute_time(self.tenant_id, metrics.compute_time_seconds)
             
             logger.info(f"Performance calculated for model {self.model_id}: "
                        f"Accuracy={metrics.accuracy:.3f}" if metrics.accuracy else f"R2={metrics.r2:.3f}")
@@ -509,7 +633,7 @@ class ModelMonitor:
         Returns:
             Drift detection results
         """
-        drift_results = self.drift_detector.detect_data_drift(current_data)
+        drift_results = self.drift_detector.detect_data_drift(current_data, self.tenant_id)
         
         # Update Prometheus metrics
         if PROMETHEUS_AVAILABLE:
@@ -526,7 +650,7 @@ class ModelMonitor:
     def get_performance_summary(self, 
                                last_n_days: int = 7) -> Dict:
         """
-        Get performance summary for the last N days
+        Get performance summary for the last N days with billing info
         
         Args:
             last_n_days: Number of days to look back
@@ -546,9 +670,15 @@ class ModelMonitor:
         
         summary = {
             "model_id": self.model_id,
+            "tenant_id": self.tenant_id,
             "period": f"Last {last_n_days} days",
             "total_predictions": sum(m.prediction_count for m in recent_metrics),
-            "metrics": {}
+            "metrics": {},
+            "billing": {
+                "total_api_calls": sum(m.api_calls_count for m in recent_metrics),
+                "total_compute_seconds": sum(m.compute_time_seconds for m in recent_metrics),
+                "avg_latency_seconds": np.mean([m.compute_time_seconds for m in recent_metrics])
+            }
         }
         
         # Aggregate metrics
@@ -584,7 +714,7 @@ class ModelMonitor:
     def create_monitoring_report(self, 
                                 output_path: str = None) -> Dict:
         """
-        Create comprehensive monitoring report
+        Create comprehensive monitoring report with billing info
         
         Args:
             output_path: Path to save report (optional)
@@ -595,6 +725,7 @@ class ModelMonitor:
         report = {
             "model_id": self.model_id,
             "model_type": self.model_type,
+            "tenant_id": self.tenant_id,
             "report_timestamp": datetime.now().isoformat(),
             "performance_summary": self.get_performance_summary(),
             "drift_analysis": {
@@ -606,6 +737,12 @@ class ModelMonitor:
                 "total_predictions": len(self.prediction_history),
                 "avg_prediction_time": np.mean([p["prediction_time"] for p in self.prediction_history if p.get("prediction_time")])
                     if self.prediction_history else None
+            },
+            "billing_summary": {
+                "total_predictions": self.total_predictions,
+                "total_api_calls": self.total_api_calls,
+                "total_compute_time_seconds": self.total_compute_time,
+                "estimated_cost": self._estimate_cost()
             }
         }
         
@@ -621,10 +758,25 @@ class ModelMonitor:
             logger.info(f"Monitoring report saved to {output_path}")
         
         return report
+    
+    def _estimate_cost(self) -> float:
+        """Estimate cost based on usage"""
+        # Simple cost model (customize based on your pricing)
+        cost_per_1k_predictions = 0.01
+        cost_per_compute_hour = 0.10
+        cost_per_1k_api_calls = 0.001
+        
+        total_cost = (
+            (self.total_predictions / 1000) * cost_per_1k_predictions +
+            (self.total_compute_time / 3600) * cost_per_compute_hour +
+            (self.total_api_calls / 1000) * cost_per_1k_api_calls
+        )
+        
+        return round(total_cost, 4)
 
 
 class DataQualityMonitor:
-    """Monitor data quality in production"""
+    """Monitor data quality in production with advanced checks"""
     
     def __init__(self, expected_schema: Dict = None):
         """
@@ -636,23 +788,29 @@ class DataQualityMonitor:
         self.expected_schema = expected_schema
         self.quality_checks_history = []
     
-    def check_data_quality(self, data: pd.DataFrame) -> Dict:
+    def check_data_quality(self, data: pd.DataFrame, tenant_id: str = "default") -> Dict:
         """
         Perform comprehensive data quality checks
         
         Args:
             data: Input data to check
+            tenant_id: Tenant identifier
             
         Returns:
             Data quality report
         """
+        import psutil
+        memory_before = psutil.Process().memory_info().rss / 1024**2  # MB
+        
         quality_report = {
             "timestamp": datetime.now().isoformat(),
+            "tenant_id": tenant_id,
             "rows": len(data),
             "columns": len(data.columns),
             "issues": [],
             "warnings": [],
-            "quality_score": 100.0
+            "quality_score": 100.0,
+            "memory_usage_mb": memory_before
         }
         
         # Check for missing values
@@ -733,6 +891,19 @@ class DataQualityMonitor:
                     "ratio": float(cardinality / len(data))
                 })
         
+        # Check for data leakage indicators
+        for col in data.columns:
+            # Check if column is perfectly correlated with index
+            if pd.api.types.is_numeric_dtype(data[col]):
+                correlation_with_index = data[col].corr(pd.Series(range(len(data))))
+                if abs(correlation_with_index) > 0.99:
+                    quality_report["warnings"].append({
+                        "type": "potential_data_leakage",
+                        "column": col,
+                        "correlation_with_index": float(correlation_with_index),
+                        "severity": "high"
+                    })
+        
         # Use Evidently for advanced quality checks if available
         if EVIDENTLY_AVAILABLE:
             try:
@@ -741,6 +912,10 @@ class DataQualityMonitor:
                 quality_report["evidently_report"] = quality_preset.as_dict()
             except Exception as e:
                 logger.error(f"Evidently quality check failed: {e}")
+        
+        # Calculate memory after processing
+        memory_after = psutil.Process().memory_info().rss / 1024**2
+        quality_report["memory_usage_mb"] = memory_after - memory_before
         
         # Ensure quality score doesn't go below 0
         quality_report["quality_score"] = max(0, quality_report["quality_score"])
@@ -780,6 +955,7 @@ class DataQualityMonitor:
             "avg_quality_score": np.mean([c["quality_score"] for c in recent_checks]),
             "min_quality_score": np.min([c["quality_score"] for c in recent_checks]),
             "max_quality_score": np.max([c["quality_score"] for c in recent_checks]),
+            "avg_memory_usage_mb": np.mean([c.get("memory_usage_mb", 0) for c in recent_checks]),
             "common_issues": defaultdict(int)
         }
         
@@ -795,22 +971,30 @@ class DataQualityMonitor:
 
 # Alert Manager for automated alerting
 class AlertManager:
-    """Manage alerts based on monitoring metrics"""
+    """Manage alerts based on monitoring metrics with multi-channel support"""
     
     def __init__(self, 
                  alert_config: Dict = None,
-                 notification_handler = None):
+                 notification_handlers: Dict = None):
         """
         Initialize alert manager
         
         Args:
             alert_config: Alert configuration with thresholds
-            notification_handler: Function to handle notifications
+            notification_handlers: Dictionary of notification handlers
         """
         self.alert_config = alert_config or self._default_config()
-        self.notification_handler = notification_handler or self._default_notification
+        self.notification_handlers = notification_handlers or {}
         self.active_alerts = []
         self.alert_history = []
+        
+        # Set default handlers if not provided
+        if 'log' not in self.notification_handlers:
+            self.notification_handlers['log'] = self._log_notification
+        if 'slack' not in self.notification_handlers:
+            self.notification_handlers['slack'] = self._slack_notification
+        if 'email' not in self.notification_handlers:
+            self.notification_handlers['email'] = self._email_notification
     
     def _default_config(self) -> Dict:
         """Default alert configuration"""
@@ -819,12 +1003,37 @@ class AlertManager:
             "drift_threshold": 0.5,
             "error_rate_threshold": 0.05,
             "latency_threshold": 1.0,  # seconds
-            "quality_score_threshold": 70
+            "quality_score_threshold": 70,
+            "billing_threshold": 1000.0,  # dollars
+            "notification_channels": ["log", "slack", "email"]
         }
     
-    def _default_notification(self, alert: Dict):
-        """Default notification handler (just logs)"""
+    def _log_notification(self, alert: Dict):
+        """Log notification handler"""
         logger.warning(f"ALERT: {alert}")
+    
+    def _slack_notification(self, alert: Dict):
+        """Slack notification handler"""
+        webhook_url = os.getenv('SLACK_WEBHOOK_URL')
+        if webhook_url:
+            from .monitoring import MonitoringIntegration
+            MonitoringIntegration.send_to_slack(alert, webhook_url)
+    
+    def _email_notification(self, alert: Dict):
+        """Email notification handler"""
+        recipients = os.getenv('ALERT_EMAIL_RECIPIENTS')
+        if recipients:
+            from .monitoring import MonitoringIntegration
+            smtp_config = {
+                'host': os.getenv('SMTP_HOST', 'localhost'),
+                'port': int(os.getenv('SMTP_PORT', 587)),
+                'from_email': os.getenv('SMTP_FROM_EMAIL', 'alerts@automl.com'),
+                'username': os.getenv('SMTP_USERNAME'),
+                'password': os.getenv('SMTP_PASSWORD')
+            }
+            MonitoringIntegration.send_to_email(
+                alert, smtp_config, recipients.split(',')
+            )
     
     def check_alerts(self, metrics: Dict) -> List[Dict]:
         """
@@ -882,11 +1091,26 @@ class AlertManager:
             }
             triggered_alerts.append(alert)
         
+        # Check billing alert
+        if "billing_amount" in metrics and metrics["billing_amount"] > self.alert_config["billing_threshold"]:
+            alert = {
+                "type": "high_billing",
+                "severity": "high",
+                "message": f"Billing amount (${metrics['billing_amount']:.2f}) exceeds threshold (${self.alert_config['billing_threshold']:.2f})",
+                "timestamp": datetime.now().isoformat(),
+                "metrics": metrics
+            }
+            triggered_alerts.append(alert)
+        
         # Process triggered alerts
         for alert in triggered_alerts:
             self.active_alerts.append(alert)
             self.alert_history.append(alert)
-            self.notification_handler(alert)
+            
+            # Send to configured channels
+            for channel in self.alert_config.get("notification_channels", ["log"]):
+                if channel in self.notification_handlers:
+                    self.notification_handlers[channel](alert)
         
         return triggered_alerts
     
@@ -935,6 +1159,7 @@ class MonitoringIntegration:
         grafana_data = {
             "dashboardId": monitor.model_id,
             "title": f"Model {monitor.model_id} Dashboard",
+            "tenant": monitor.tenant_id,
             "panels": [
                 {
                     "id": 1,
@@ -962,6 +1187,18 @@ class MonitoringIntegration:
                     "type": "gauge",
                     "title": "Data Quality Score",
                     "value": metrics.get("metrics", {}).get("quality_score", 100)
+                },
+                {
+                    "id": 4,
+                    "type": "stat",
+                    "title": "Total API Calls",
+                    "value": metrics.get("billing", {}).get("total_api_calls", 0)
+                },
+                {
+                    "id": 5,
+                    "type": "stat",
+                    "title": "Compute Time (hours)",
+                    "value": round(metrics.get("billing", {}).get("total_compute_seconds", 0) / 3600, 2)
                 }
             ]
         }
@@ -990,6 +1227,7 @@ class MonitoringIntegration:
                         {"title": "Severity", "value": alert.get('severity', 'unknown'), "short": True},
                         {"title": "Timestamp", "value": alert.get('timestamp', 'N/A'), "short": True},
                         {"title": "Model ID", "value": alert.get('model_id', 'N/A'), "short": True},
+                        {"title": "Tenant ID", "value": alert.get('tenant_id', 'N/A'), "short": True},
                         {"title": "Message", "value": alert.get('message', 'No message'), "short": False}
                     ],
                     "footer": "AutoML Platform",
@@ -1000,7 +1238,7 @@ class MonitoringIntegration:
         
         # Add metrics if available
         if 'metrics' in alert and alert['metrics']:
-            metrics_text = "\n".join([f"• {k}: {v}" for k, v in alert['metrics'].items()[:5]])
+            metrics_text = "\n".join([f"• {k}: {v}" for k, v in list(alert['metrics'].items())[:5]])
             slack_message["attachments"][0]["fields"].append({
                 "title": "Metrics",
                 "value": metrics_text,
@@ -1039,6 +1277,7 @@ Severity: {alert.get('severity', 'unknown')}
 Message: {alert.get('message', 'No message')}
 Timestamp: {alert.get('timestamp', 'N/A')}
 Model ID: {alert.get('model_id', 'N/A')}
+Tenant ID: {alert.get('tenant_id', 'N/A')}
 
 Metrics:
 {json.dumps(alert.get('metrics', {}), indent=2)}
@@ -1100,15 +1339,17 @@ Please do not reply to this email.
             <p><strong>Message:</strong> {alert.get('message', 'No message')}</p>
             <p><strong>Timestamp:</strong> {alert.get('timestamp', 'N/A')}</p>
             <p><strong>Model ID:</strong> {alert.get('model_id', 'N/A')}</p>
+            <p><strong>Tenant ID:</strong> {alert.get('tenant_id', 'N/A')}</p>
             
             <h4>Metrics:</h4>
             <div>
-                {self._format_metrics_html(alert.get('metrics', {}))}
+                {MonitoringIntegration._format_metrics_html(alert.get('metrics', {}))}
             </div>
             
             <div class="footer">
                 <p>This is an automated alert from the AutoML Platform.</p>
                 <p>Please do not reply to this email.</p>
+                <p>To update alert settings, visit your dashboard.</p>
             </div>
         </div>
     </div>
@@ -1150,9 +1391,11 @@ Please do not reply to this email.
             return "<p>No metrics available</p>"
         
         html = ""
-        for key, value in metrics.items():
+        for key, value in list(metrics.items())[:10]:  # Limit to 10 metrics
             if isinstance(value, float):
                 value = f"{value:.4f}"
+            elif isinstance(value, dict):
+                value = json.dumps(value, indent=2)[:200] + "..."
             html += f'<div class="metric-item"><strong>{key}:</strong> {value}</div>'
         
         return html
@@ -1185,24 +1428,27 @@ Please do not reply to this email.
 
 # Main monitoring service
 class MonitoringService:
-    """Central monitoring service for all models"""
+    """Central monitoring service for all models with billing integration"""
     
-    def __init__(self, storage_manager = None):
+    def __init__(self, storage_manager = None, billing_tracker = None):
         """
         Initialize monitoring service
         
         Args:
             storage_manager: Storage manager for persisting monitoring data
+            billing_tracker: Billing tracker for cost monitoring
         """
         self.monitors = {}
         self.quality_monitor = DataQualityMonitor()
         self.alert_manager = AlertManager()
         self.storage_manager = storage_manager
+        self.billing_tracker = billing_tracker
     
     def register_model(self, 
                        model_id: str,
                        model_type: str,
-                       reference_data: pd.DataFrame = None) -> ModelMonitor:
+                       reference_data: pd.DataFrame = None,
+                       tenant_id: str = "default") -> ModelMonitor:
         """
         Register a model for monitoring
         
@@ -1210,11 +1456,16 @@ class MonitoringService:
             model_id: Model identifier
             model_type: Type of model
             reference_data: Reference dataset
+            tenant_id: Tenant identifier
             
         Returns:
             ModelMonitor instance
         """
-        monitor = ModelMonitor(model_id, model_type, reference_data)
+        monitor = ModelMonitor(
+            model_id, model_type, reference_data,
+            tenant_id=tenant_id,
+            billing_tracker=self.billing_tracker
+        )
         self.monitors[model_id] = monitor
         logger.info(f"Model {model_id} registered for monitoring")
         return monitor
@@ -1240,8 +1491,11 @@ class MonitoringService:
         """Check health status of all monitored models"""
         health_report = {
             "timestamp": datetime.now().isoformat(),
-            "models": {}
+            "models": {},
+            "billing_summary": {}
         }
+        
+        total_cost = 0.0
         
         for model_id, monitor in self.monitors.items():
             summary = monitor.get_performance_summary()
@@ -1258,8 +1512,19 @@ class MonitoringService:
             
             health_report["models"][model_id] = {
                 "status": status,
-                "summary": summary
+                "summary": summary,
+                "tenant_id": monitor.tenant_id
             }
+            
+            # Aggregate billing
+            model_cost = monitor._estimate_cost()
+            total_cost += model_cost
+        
+        health_report["billing_summary"] = {
+            "total_estimated_cost": total_cost,
+            "models_count": len(self.monitors),
+            "timestamp": datetime.now().isoformat()
+        }
         
         return health_report
     
@@ -1270,18 +1535,32 @@ class MonitoringService:
             "total_models": len(self.monitors),
             "models": [],
             "alerts": self.alert_manager.get_alert_summary(),
-            "data_quality_trend": self.quality_monitor.get_quality_trend()
+            "data_quality_trend": self.quality_monitor.get_quality_trend(),
+            "billing": {
+                "total_predictions": 0,
+                "total_api_calls": 0,
+                "total_compute_hours": 0,
+                "estimated_total_cost": 0
+            }
         }
         
         for model_id, monitor in self.monitors.items():
             model_info = {
                 "model_id": model_id,
                 "model_type": monitor.model_type,
+                "tenant_id": monitor.tenant_id,
                 "performance": monitor.get_performance_summary(last_n_days=1),
                 "total_predictions": len(monitor.prediction_history),
-                "last_drift_check": monitor.drift_detector.drift_history[-1] if monitor.drift_detector.drift_history else None
+                "last_drift_check": monitor.drift_detector.drift_history[-1] if monitor.drift_detector.drift_history else None,
+                "estimated_cost": monitor._estimate_cost()
             }
             dashboard["models"].append(model_info)
+            
+            # Aggregate billing
+            dashboard["billing"]["total_predictions"] += monitor.total_predictions
+            dashboard["billing"]["total_api_calls"] += monitor.total_api_calls
+            dashboard["billing"]["total_compute_hours"] += monitor.total_compute_time / 3600
+            dashboard["billing"]["estimated_total_cost"] += model_info["estimated_cost"]
         
         return dashboard
     
@@ -1298,7 +1577,7 @@ class MonitoringService:
                 self.storage_manager.save_dataset(
                     data,
                     f"monitoring_{model_id}_performance",
-                    tenant_id="monitoring"
+                    tenant_id=monitor.tenant_id
                 )
             
             # Save drift history
@@ -1307,7 +1586,7 @@ class MonitoringService:
                 self.storage_manager.save_dataset(
                     data,
                     f"monitoring_{model_id}_drift",
-                    tenant_id="monitoring"
+                    tenant_id=monitor.tenant_id
                 )
         
         logger.info("Monitoring data saved to storage")
