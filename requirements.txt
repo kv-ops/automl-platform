@@ -127,17 +127,7 @@ flake8>=6.1.0
 # ---------- Performance ----------
 numba>=0.58.0
 
-# ==============================================================================
-# Installation Notes:
-# ==============================================================================
-# 1. Basic installation: pip install -r requirements.txt
-# 2. For optional connectors/streaming: Uncomment specific packages
-# 3. For GPU support: Replace faiss-cpu with faiss-gpu
-# 4. Use virtual environment recommended
-# 
-# Installation command:
-# pip install -r requirements.txt
-# 
-# For development:
-# pip install -r requirements.txt pytest black flake8
-# ==============================================================================
+# ---------- Testing Dependencies ----------
+pytest>=7.4.0
+pytest-cov>=2.12.0
+pytest-asyncio>=0.21.0
