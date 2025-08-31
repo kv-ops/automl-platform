@@ -7,46 +7,46 @@ from pathlib import Path
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text() if (this_directory / "README.md").exists() else ""
 
-# Core requirements (minimal set)
+# Core requirements (minimal set) - UPDATED FOR PYTHON 3.9+
 install_requires = [
-    "pandas>=1.3.0",
-    "numpy>=1.21.0",
-    "scikit-learn>=1.0.0",
-    "scipy>=1.7.0",
-    "joblib>=1.1.0",
-    "pyyaml>=5.4.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0",  # Updated to match requirements.txt
+    "joblib>=1.3.0",
+    "pyyaml>=6.0.1",
 ]
 
 # Optional dependencies
 extras_require = {
     # Hyperparameter optimization
     "hpo": [
-        "optuna>=2.10.0",
+        "optuna>=3.4.0",
         "optuna-dashboard>=0.8.0",
     ],
     
     # Boosting algorithms
     "boosting": [
-        "xgboost>=1.5.0",
-        "lightgbm>=3.2.0",
-        "catboost>=1.0.0",
+        "xgboost>=2.0.0",
+        "lightgbm>=4.0.0",
+        "catboost>=1.2.0",
     ],
     
     # Imbalanced learning
     "imbalance": [
-        "imbalanced-learn>=0.8.0",
+        "imbalanced-learn>=0.10.0",
     ],
     
     # Model explainability
     "explain": [
-        "shap>=0.40.0",
+        "shap>=0.43.0",
         "lime>=0.2.0",
     ],
     
     # Time series
     "timeseries": [
-        "statsmodels>=0.12.0",
-        "prophet>=1.0.0",
+        "statsmodels>=0.13.0",
+        "prophet>=1.1.0",
         "pmdarima>=1.8.0",
         "sktime>=0.13.0",
     ],
@@ -60,27 +60,27 @@ extras_require = {
     
     # API
     "api": [
-        "fastapi>=0.68.0",
-        "uvicorn[standard]>=0.15.0",
-        "pydantic>=1.8.0",
-        "python-multipart>=0.0.5",
-        "aiofiles>=0.8.0",
+        "fastapi>=0.104.0",
+        "uvicorn[standard]>=0.24.0",
+        "pydantic>=2.4.0",
+        "python-multipart>=0.0.6",
+        "aiofiles>=23.2.0",
     ],
     
     # Visualization
     "viz": [
-        "matplotlib>=3.3.0",
-        "seaborn>=0.11.0",
-        "plotly>=5.0.0",
+        "matplotlib>=3.7.0",
+        "seaborn>=0.12.0",
+        "plotly>=5.18.0",
     ],
     
     # Development
     "dev": [
-        "pytest>=6.2.0",
+        "pytest>=7.4.0",
         "pytest-cov>=2.12.0",
-        "pytest-asyncio>=0.18.0",
-        "black>=21.0",
-        "flake8>=3.9.0",
+        "pytest-asyncio>=0.21.0",
+        "black>=23.11.0",
+        "flake8>=6.1.0",
         "mypy>=0.910",
         "isort>=5.9.0",
         "pre-commit>=2.15.0",
@@ -133,8 +133,8 @@ setup(
         ]
     },
     
-    # Dependencies
-    python_requires=">=3.8",
+    # Dependencies - UPDATED TO PYTHON 3.9+
+    python_requires=">=3.9",  # Changed from >=3.8 to >=3.9
     install_requires=install_requires,
     extras_require=extras_require,
     
@@ -148,7 +148,7 @@ setup(
         ],
     },
     
-    # Classifiers
+    # Classifiers - REMOVED 3.8, ADDED 3.12
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -157,10 +157,10 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Operating System :: OS Independent",
         "Environment :: Console",
         "Environment :: Web Environment",
@@ -191,7 +191,7 @@ setup(
     # Testing
     test_suite="tests",
     tests_require=[
-        "pytest>=6.2.0",
+        "pytest>=7.4.0",
         "pytest-cov>=2.12.0",
     ],
     
