@@ -2,6 +2,7 @@
 Storage module for ML Platform
 Handles model versioning, dataset storage, and artifact management
 Compatible with S3/MinIO for cloud-native deployment
+WITH DOCKER/ONNX/PMML EXPORT SUPPORT
 """
 
 import os
@@ -16,6 +17,7 @@ import logging
 from dataclasses import dataclass, asdict
 import pandas as pd
 import numpy as np
+from io import BytesIO
 
 try:
     from minio import Minio
@@ -628,6 +630,266 @@ class StorageManager:
         """Get version history of a model"""
         all_models = self.list_models(tenant_id)
         return [m for m in all_models if m.get('model_id') == model_id]
+    
+    # NEW: Export methods as requested in the prompt
+    def export_model_to_docker(self, model_id: str, version: str = None, 
+                              tenant_id: str = "default", output_dir: str = "./docker_export") -> str:
+        """Export model as Docker container with FastAPI serving"""
+        model, metadata = self.load_model(model_id, version, tenant_id)
+        
+        output_path = Path(output_dir) / f"{model_id}_v{version or 'latest'}"
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save model
+        model_file = output_path / "model.pkl"
+        joblib.dump(model, model_file)
+        
+        # Create FastAPI app
+        app_content = f'''from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Dict, Any, List
+import joblib
+import pandas as pd
+import numpy as np
+import json
+
+app = FastAPI(title="Model {model_id}", version="{version or 'latest'}")
+model = joblib.load("model.pkl")
+metadata = {json.dumps(metadata, indent=2)}
+
+class PredictRequest(BaseModel):
+    data: Dict[str, Any]
+
+class BatchPredictRequest(BaseModel):
+    data: List[Dict[str, Any]]
+
+@app.get("/")
+def info():
+    return metadata
+
+@app.post("/predict")
+def predict(request: PredictRequest):
+    try:
+        df = pd.DataFrame([request.data])
+        prediction = model.predict(df)
+        result = prediction.tolist() if hasattr(prediction, 'tolist') else prediction
+        return {{"prediction": result}}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/predict_batch")
+def predict_batch(request: BatchPredictRequest):
+    try:
+        df = pd.DataFrame(request.data)
+        predictions = model.predict(df)
+        results = predictions.tolist() if hasattr(predictions, 'tolist') else predictions
+        return {{"predictions": results}}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/health")
+def health():
+    return {{"status": "healthy", "model_id": "{model_id}", "version": "{version or 'latest'}"}}
+'''
+        
+        (output_path / "app.py").write_text(app_content)
+        
+        # Create requirements.txt
+        requirements = """fastapi==0.104.1
+uvicorn==0.24.0
+pandas==2.0.3
+scikit-learn==1.3.0
+xgboost==2.0.0
+lightgbm==4.1.0
+catboost==1.2.2
+joblib==1.3.2
+numpy==1.24.3"""
+        
+        (output_path / "requirements.txt").write_text(requirements)
+        
+        # Create Dockerfile
+        dockerfile = f"""FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \\
+    gcc \\
+    g++ \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY app.py .
+COPY model.pkl .
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
+  CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+
+# Run application
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+"""
+        (output_path / "Dockerfile").write_text(dockerfile)
+        
+        # Create docker-compose.yml
+        compose = f"""version: '3.8'
+
+services:
+  model-api:
+    build: .
+    container_name: {model_id}-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_ID={model_id}
+      - MODEL_VERSION={version or 'latest'}
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    networks:
+      - model-network
+
+networks:
+  model-network:
+    driver: bridge
+"""
+        (output_path / "docker-compose.yml").write_text(compose)
+        
+        # Create deployment script
+        deploy_script = f"""#!/bin/bash
+# Build and deploy model container
+
+echo "Building Docker image for {model_id}..."
+docker build -t {model_id}:{version or 'latest'} .
+
+echo "Starting container..."
+docker-compose up -d
+
+echo "Model API available at http://localhost:8000"
+echo "View logs: docker-compose logs -f"
+echo "Stop: docker-compose down"
+"""
+        deploy_path = output_path / "deploy.sh"
+        deploy_path.write_text(deploy_script)
+        deploy_path.chmod(0o755)
+        
+        logger.info(f"Docker export completed at {output_path}")
+        return str(output_path)
+    
+    def export_model_to_onnx(self, model_id: str, version: str = None,
+                            tenant_id: str = "default", output_path: str = None) -> str:
+        """Export model to ONNX format"""
+        try:
+            import skl2onnx
+            from skl2onnx import convert_sklearn
+            from skl2onnx.common.data_types import FloatTensorType
+            
+            model, metadata = self.load_model(model_id, version, tenant_id)
+            
+            if output_path is None:
+                output_path = f"./{model_id}_v{version or 'latest'}.onnx"
+            
+            # Define input type based on feature count
+            n_features = len(metadata.get('feature_names', []))
+            if n_features == 0:
+                raise ValueError("Feature names not found in metadata")
+            
+            initial_type = [('float_input', FloatTensorType([None, n_features]))]
+            
+            # Convert to ONNX
+            onx = convert_sklearn(model, initial_types=initial_type, target_opset=12)
+            
+            # Save ONNX model
+            with open(output_path, "wb") as f:
+                f.write(onx.SerializeToString())
+            
+            logger.info(f"ONNX export completed at {output_path}")
+            return output_path
+            
+        except ImportError:
+            logger.error("skl2onnx not installed. Install with: pip install skl2onnx")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to export to ONNX: {e}")
+            raise
+    
+    def export_model_to_pmml(self, model_id: str, version: str = None,
+                            tenant_id: str = "default", output_path: str = None) -> str:
+        """Export model to PMML format"""
+        try:
+            from sklearn2pmml import sklearn2pmml
+            from sklearn2pmml.pipeline import PMMLPipeline
+            
+            model, metadata = self.load_model(model_id, version, tenant_id)
+            
+            if output_path is None:
+                output_path = f"./{model_id}_v{version or 'latest'}.pmml"
+            
+            # Wrap model in PMML pipeline if needed
+            if not isinstance(model, PMMLPipeline):
+                pmml_pipeline = PMMLPipeline([("model", model)])
+            else:
+                pmml_pipeline = model
+            
+            # Export to PMML
+            sklearn2pmml(pmml_pipeline, output_path, with_repr=True)
+            
+            logger.info(f"PMML export completed at {output_path}")
+            return output_path
+            
+        except ImportError:
+            logger.error("sklearn2pmml not installed. Install with: pip install sklearn2pmml")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to export to PMML: {e}")
+            raise
+    
+    def export_model_to_tensorflow(self, model_id: str, version: str = None,
+                                  tenant_id: str = "default", output_path: str = None) -> str:
+        """Export model to TensorFlow SavedModel format for TF Serving"""
+        try:
+            import tensorflow as tf
+            from tensorflow import keras
+            
+            model, metadata = self.load_model(model_id, version, tenant_id)
+            
+            if output_path is None:
+                output_path = f"./{model_id}_tf_v{version or 'latest'}"
+            
+            # Create a simple TF model that wraps sklearn predictions
+            n_features = len(metadata.get('feature_names', []))
+            
+            @tf.function
+            def predict_fn(inputs):
+                # Convert TF tensor to numpy for sklearn
+                numpy_inputs = inputs.numpy()
+                predictions = model.predict(numpy_inputs)
+                return tf.constant(predictions, dtype=tf.float32)
+            
+            # Create TF SavedModel
+            module = tf.Module()
+            module.predict = tf.function(
+                func=predict_fn,
+                input_signature=[tf.TensorSpec(shape=[None, n_features], dtype=tf.float32)]
+            )
+            
+            tf.saved_model.save(module, output_path)
+            
+            logger.info(f"TensorFlow SavedModel export completed at {output_path}")
+            return output_path
+            
+        except ImportError:
+            logger.error("TensorFlow not installed. Install with: pip install tensorflow")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to export to TensorFlow: {e}")
+            raise
 
 
 # Feature Store functionality
@@ -692,60 +954,3 @@ class FeatureStore:
         # This would need to be implemented based on storage backend
         # For now, return cached keys
         return list(set(k.split(':')[0] for k in self.feature_cache.keys()))
-
-
-# Example usage
-if __name__ == "__main__":
-    # Example with local storage
-    storage = StorageManager(backend="local", base_path="./ml_storage")
-    
-    # Example with MinIO
-    # storage = StorageManager(
-    #     backend="minio",
-    #     endpoint="localhost:9000",
-    #     access_key="minioadmin",
-    #     secret_key="minioadmin"
-    # )
-    
-    # Save a dummy model
-    from sklearn.ensemble import RandomForestClassifier
-    model = RandomForestClassifier(n_estimators=10)
-    
-    metadata = {
-        "model_id": "test_model",
-        "model_type": "classification",
-        "algorithm": "RandomForest",
-        "metrics": {"accuracy": 0.95, "f1": 0.93},
-        "parameters": {"n_estimators": 10},
-        "feature_names": ["feature1", "feature2"],
-        "target_name": "target"
-    }
-    
-    path = storage.save_model(model, metadata, version="1.0.0")
-    print(f"Model saved at: {path}")
-    
-    # Load model
-    loaded_model, loaded_metadata = storage.load_model("test_model", version="1.0.0")
-    print(f"Model loaded: {loaded_metadata['model_id']}")
-    
-    # Feature store example
-    feature_store = FeatureStore(storage)
-    
-    # Save features
-    import numpy as np
-    features_df = pd.DataFrame({
-        'feature1': np.random.randn(100),
-        'feature2': np.random.randn(100),
-        'feature3': np.random.randn(100)
-    })
-    
-    feature_store.save_features(
-        features_df,
-        "test_features",
-        version="1.0.0",
-        metadata={"description": "Test feature set"}
-    )
-    
-    # Load features
-    loaded_features = feature_store.load_features("test_features", version="1.0.0")
-    print(f"Features loaded: {loaded_features.shape}")
