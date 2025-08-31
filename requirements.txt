@@ -1,11 +1,11 @@
 # ==============================================================================
 # AutoML Platform Requirements - Production Ready
 # Python >= 3.8 required
-# Inspired by DataRobot, Akkio, H2O.ai architectures
+# Compatible with the automl_platform structure
 # ==============================================================================
 
 # ---------- Core ML Dependencies ----------
-pandas>=1.5.0,<2.0.0
+pandas>=1.5.0,<3.0.0
 numpy>=1.24.0,<2.0.0
 scikit-learn>=1.2.0,<2.0.0
 scipy>=1.10.0,<2.0.0
@@ -14,192 +14,127 @@ pyyaml>=6.0
 
 # ---------- AutoML & HPO ----------
 optuna>=3.0.0,<4.0.0
-optuna-dashboard>=0.10.0
 hyperopt>=0.2.7
-ray[tune]>=2.3.0  # For distributed HPO
 
 # ---------- Boosting & Advanced Algorithms ----------
-xgboost>=1.7.0,<2.0.0
+xgboost>=1.7.0,<3.0.0
 lightgbm>=3.3.0,<5.0.0
 catboost>=1.1.0,<2.0.0
 
-# ---------- Neural Networks (TabNet, FT-Transformer) ----------
+# ---------- Neural Networks ----------
 pytorch-tabnet>=4.0
 torch>=2.0.0
-tensorflow>=2.12.0  # For TabNet alternative implementations
+tensorflow>=2.12.0,<3.0.0
 
 # ---------- Time Series ----------
 prophet>=1.1.0
 statsmodels>=0.13.0,<1.0.0
-pmdarima>=2.0.0,<3.0.0
-sktime>=0.16.0,<1.0.0
 
 # ---------- Imbalanced Learning ----------
 imbalanced-learn>=0.10.0,<1.0.0
-focal-loss>=0.0.7
 
 # ---------- API Framework ----------
 fastapi>=0.104.0,<1.0.0
-uvicorn[standard]>=0.24.0
+uvicorn[standard]>=0.24.0,<1.0.0
 pydantic>=2.4.0,<3.0.0
 python-multipart>=0.0.6
 aiofiles>=23.2.0
 websockets>=11.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-slowapi>=0.1.8  # Rate limiting
+slowapi>=0.1.8
 
-# ---------- LLM Integration (Jour 5-6) ----------
+# ---------- LLM Integration ----------
 openai>=1.3.0
 anthropic>=0.7.0
 langchain>=0.0.340
 langchain-community>=0.0.10
 chromadb>=0.4.18
-faiss-cpu>=1.7.4  # Use faiss-gpu for GPU support
+faiss-cpu>=1.7.4
 tiktoken>=0.5.1
-sentence-transformers>=2.2.0
 
 # ---------- Storage & Caching ----------
 minio>=7.2.0
-boto3>=1.29.0  # AWS S3
+boto3>=1.29.0
 redis>=5.0.0
-diskcache>=5.6.0
 
 # ---------- Monitoring & Drift Detection ----------
-evidently>=0.4.10
-alibi-detect>=0.11.0
 prometheus-client>=0.19.0
-grafana-api>=1.0.3
 
-# ---------- UI/Dashboard (Streamlit) ----------
+# ---------- UI/Dashboard ----------
 streamlit>=1.29.0
-streamlit-chat>=0.1.1
-streamlit-aggrid>=0.3.4
 plotly>=5.18.0
-altair>=5.1.0
-bokeh>=3.3.0
 
 # ---------- Worker/Queue Management ----------
 celery>=5.3.0
-celery[redis]>=5.3.0
-flower>=2.0.0  # Celery monitoring
-kombu>=5.3.0
-
-# ---------- Distributed Computing ----------
-dask[complete]>=2023.11.0
-dask-ml>=2023.3.0
-ray>=2.8.0
+redis>=5.0.0
 
 # ---------- Model Explainability ----------
 shap>=0.43.0
-lime>=0.2.0
-interpret>=0.5.0
-eli5>=0.13.0
-
-# ---------- Data Quality & Profiling ----------
-great-expectations>=0.17.0
-pandas-profiling>=3.6.0
-ydata-profiling>=4.6.0
-sweetviz>=2.3.0
 
 # ---------- Visualization ----------
 matplotlib>=3.7.0,<4.0.0
 seaborn>=0.12.0,<1.0.0
-yellowbrick>=1.5
 
 # ---------- Data Formats & Connectors ----------
 pyarrow>=14.0.0
-fastparquet>=2023.10.0
 openpyxl>=3.1.0
-xlsxwriter>=3.1.0
-h5py>=3.10.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 pymongo>=4.5.0
 
-# ---------- Web Scraping (for RAG) ----------
-beautifulsoup4>=4.12.0
+# ---------- Cloud Connectors (Optional) ----------
+# Snowflake
+snowflake-connector-python>=3.0.0
+
+# BigQuery
+google-cloud-bigquery>=3.11.0
+
+# Databricks
+databricks-sql-connector>=2.9.0
+
+# ---------- Streaming (Optional) ----------
+kafka-python>=2.0.2
+pulsar-client>=3.3.0
+
+# ---------- Infrastructure (Optional) ----------
+docker>=6.1.0
+kubernetes>=27.2.0
+
+# ---------- Web & HTTP ----------
 requests>=2.31.0
 aiohttp>=3.9.0
-httpx>=0.25.0
 
-# ---------- Development & Testing ----------
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
-pytest-mock>=3.12.0
-black>=23.11.0
-flake8>=6.1.0
-mypy>=1.7.0
-isort>=5.12.0
-pre-commit>=3.5.0
-
-# ---------- Documentation ----------
-sphinx>=7.2.0
-sphinx-rtd-theme>=1.3.0
-sphinx-autodoc-typehints>=1.25.0
-mkdocs>=1.5.0
-mkdocs-material>=9.4.0
+# ---------- Security ----------
+cryptography>=41.0.0
+pyjwt>=2.8.0
 
 # ---------- Utilities ----------
 tqdm>=4.66.0
 python-dotenv>=1.0.0
 click>=8.1.0
-rich>=13.7.0
 tabulate>=0.9.0
-humanize>=4.8.0
-pendulum>=2.1.0
 
-# ---------- Security ----------
-cryptography>=41.0.0
-pyjwt>=2.8.0
-python-secrets>=23.1.0
+# ---------- Development & Testing (Optional) ----------
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.11.0
+flake8>=6.1.0
 
 # ---------- Performance ----------
 numba>=0.58.0
-cython>=3.0.0
-line-profiler>=4.1.0
-memory-profiler>=0.61.0
-
-# ---------- MLOps ----------
-mlflow>=2.8.0
-wandb>=0.16.0
-neptune-client>=1.8.0
-comet-ml>=3.35.0
-
-# ---------- Feature Store ----------
-feast>=0.35.0
-tecton>=0.7.0  # Optional, requires account
-
-# ---------- AutoML Specific ----------
-auto-sklearn>=0.15.0  # Optional, for comparison
-h2o>=3.44.0  # H2O AutoML
-autogluon>=0.8.0  # AWS AutoGluon
-
-# ---------- Cloud Providers (Optional) ----------
-# google-cloud-storage>=2.10.0
-# azure-storage-blob>=12.19.0
-# azure-ml-automl-core>=1.53.0
-
-# ---------- GPU Support (Optional) ----------
-# cupy-cuda11x>=12.0.0  # For NVIDIA GPU
-# rapids>=23.10  # RAPIDS suite for GPU ML
-
-# ---------- Additional LLM Providers (Optional) ----------
-# cohere>=4.37.0
-# huggingface-hub>=0.19.0
-# transformers>=4.35.0
 
 # ==============================================================================
 # Installation Notes:
 # ==============================================================================
-# 1. For basic installation: pip install -r requirements.txt
-# 2. For GPU support: Uncomment GPU packages and ensure CUDA is installed
-# 3. For specific cloud providers: Uncomment relevant packages
-# 4. Some packages may conflict; use virtual environment
-# 5. For production: Consider using pip-tools for dependency resolution
-#
-# Recommended installation order for complex dependencies:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# 1. Basic installation: pip install -r requirements.txt
+# 2. For optional connectors/streaming: Uncomment specific packages
+# 3. For GPU support: Replace faiss-cpu with faiss-gpu
+# 4. Use virtual environment recommended
+# 
+# Installation command:
 # pip install -r requirements.txt
+# 
+# For development:
+# pip install -r requirements.txt pytest black flake8
 # ==============================================================================
