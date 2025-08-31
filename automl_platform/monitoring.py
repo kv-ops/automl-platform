@@ -2,6 +2,7 @@
 Monitoring module for ML Platform
 Handles model performance tracking, data drift detection, and system metrics
 Integrates with Prometheus for metrics export
+WITH COMPLETE SLACK/EMAIL INTEGRATION
 """
 
 import os
@@ -969,63 +970,217 @@ class MonitoringIntegration:
     
     @staticmethod
     def send_to_slack(alert: Dict, webhook_url: str):
-        """Send alert to Slack"""
+        """Send alert to Slack with proper formatting"""
         import requests
         
+        # Color mapping based on severity
+        color_map = {
+            "high": "danger",
+            "medium": "warning",
+            "low": "good"
+        }
+        
         slack_message = {
-            "text": f"🚨 ML Model Alert: {alert['type']}",
+            "text": f"🚨 ML Model Alert: {alert['type'].replace('_', ' ').title()}",
             "attachments": [
                 {
-                    "color": "danger" if alert['severity'] == "high" else "warning",
+                    "color": color_map.get(alert.get('severity', 'medium'), "warning"),
                     "fields": [
-                        {"title": "Severity", "value": alert['severity'], "short": True},
-                        {"title": "Timestamp", "value": alert['timestamp'], "short": True},
-                        {"title": "Message", "value": alert['message'], "short": False}
-                    ]
+                        {"title": "Alert Type", "value": alert['type'], "short": True},
+                        {"title": "Severity", "value": alert.get('severity', 'unknown'), "short": True},
+                        {"title": "Timestamp", "value": alert.get('timestamp', 'N/A'), "short": True},
+                        {"title": "Model ID", "value": alert.get('model_id', 'N/A'), "short": True},
+                        {"title": "Message", "value": alert.get('message', 'No message'), "short": False}
+                    ],
+                    "footer": "AutoML Platform",
+                    "footer_icon": "https://platform.slack-edge.com/img/default_application_icon.png"
                 }
             ]
         }
         
+        # Add metrics if available
+        if 'metrics' in alert and alert['metrics']:
+            metrics_text = "\n".join([f"• {k}: {v}" for k, v in alert['metrics'].items()[:5]])
+            slack_message["attachments"][0]["fields"].append({
+                "title": "Metrics",
+                "value": metrics_text,
+                "short": False
+            })
+        
         try:
-            response = requests.post(webhook_url, json=slack_message)
+            response = requests.post(webhook_url, json=slack_message, timeout=5)
             response.raise_for_status()
-            logger.info("Alert sent to Slack successfully")
-        except Exception as e:
+            logger.info(f"Alert sent to Slack successfully: {alert['type']}")
+            return True
+        except requests.exceptions.RequestException as e:
             logger.error(f"Failed to send alert to Slack: {e}")
+            return False
     
     @staticmethod
     def send_to_email(alert: Dict, smtp_config: Dict, recipients: List[str]):
-        """Send alert via email"""
+        """Send alert via email with HTML formatting"""
         import smtplib
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
         
-        msg = MIMEMultipart()
-        msg['From'] = smtp_config['from_email']
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['From'] = smtp_config.get('from_email', 'automl@platform.com')
         msg['To'] = ', '.join(recipients)
-        msg['Subject'] = f"ML Model Alert: {alert['type']}"
+        msg['Subject'] = f"[{alert.get('severity', 'INFO').upper()}] ML Model Alert: {alert['type']}"
         
-        body = f"""
-        Alert Type: {alert['type']}
-        Severity: {alert['severity']}
-        Message: {alert['message']}
-        Timestamp: {alert['timestamp']}
+        # Plain text version
+        text_body = f"""
+ML Model Alert
+==============
+
+Alert Type: {alert['type']}
+Severity: {alert.get('severity', 'unknown')}
+Message: {alert.get('message', 'No message')}
+Timestamp: {alert.get('timestamp', 'N/A')}
+Model ID: {alert.get('model_id', 'N/A')}
+
+Metrics:
+{json.dumps(alert.get('metrics', {}), indent=2)}
+
+---
+This is an automated alert from the AutoML Platform.
+Please do not reply to this email.
+"""
         
-        Metrics:
-        {json.dumps(alert.get('metrics', {}), indent=2)}
-        """
+        # HTML version
+        severity_colors = {
+            "high": "#dc3545",
+            "medium": "#ffc107",
+            "low": "#28a745"
+        }
         
-        msg.attach(MIMEText(body, 'plain'))
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
+        .alert-container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .alert-header {{ 
+            background: {severity_colors.get(alert.get('severity', 'medium'), '#17a2b8')};
+            color: white;
+            padding: 15px;
+            border-radius: 5px 5px 0 0;
+        }}
+        .alert-body {{ 
+            background: #f8f9fa;
+            padding: 20px;
+            border: 1px solid #dee2e6;
+            border-radius: 0 0 5px 5px;
+        }}
+        .metric-item {{ 
+            background: white;
+            padding: 10px;
+            margin: 5px 0;
+            border-left: 3px solid {severity_colors.get(alert.get('severity', 'medium'), '#17a2b8')};
+        }}
+        .footer {{ 
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+            color: #6c757d;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="alert-container">
+        <div class="alert-header">
+            <h2>🚨 ML Model Alert</h2>
+            <h3>{alert['type'].replace('_', ' ').title()}</h3>
+        </div>
+        <div class="alert-body">
+            <p><strong>Severity:</strong> {alert.get('severity', 'unknown').upper()}</p>
+            <p><strong>Message:</strong> {alert.get('message', 'No message')}</p>
+            <p><strong>Timestamp:</strong> {alert.get('timestamp', 'N/A')}</p>
+            <p><strong>Model ID:</strong> {alert.get('model_id', 'N/A')}</p>
+            
+            <h4>Metrics:</h4>
+            <div>
+                {self._format_metrics_html(alert.get('metrics', {}))}
+            </div>
+            
+            <div class="footer">
+                <p>This is an automated alert from the AutoML Platform.</p>
+                <p>Please do not reply to this email.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+        
+        # Attach parts
+        msg.attach(MIMEText(text_body, 'plain'))
+        msg.attach(MIMEText(html_body, 'html'))
         
         try:
-            server = smtplib.SMTP(smtp_config['host'], smtp_config['port'])
-            server.starttls()
-            server.login(smtp_config['username'], smtp_config['password'])
+            # Connect to server
+            if smtp_config.get('use_tls', True):
+                server = smtplib.SMTP(smtp_config['host'], smtp_config.get('port', 587))
+                server.starttls()
+            else:
+                server = smtplib.SMTP_SSL(smtp_config['host'], smtp_config.get('port', 465))
+            
+            # Login if credentials provided
+            if smtp_config.get('username') and smtp_config.get('password'):
+                server.login(smtp_config['username'], smtp_config['password'])
+            
+            # Send email
             server.send_message(msg)
             server.quit()
-            logger.info("Alert sent via email successfully")
+            
+            logger.info(f"Alert sent via email successfully to {recipients}")
+            return True
+            
         except Exception as e:
             logger.error(f"Failed to send email alert: {e}")
+            return False
+    
+    @staticmethod
+    def _format_metrics_html(metrics: Dict) -> str:
+        """Format metrics as HTML"""
+        if not metrics:
+            return "<p>No metrics available</p>"
+        
+        html = ""
+        for key, value in metrics.items():
+            if isinstance(value, float):
+                value = f"{value:.4f}"
+            html += f'<div class="metric-item"><strong>{key}:</strong> {value}</div>'
+        
+        return html
+    
+    @staticmethod
+    def send_to_webhook(alert: Dict, webhook_url: str, headers: Dict = None):
+        """Send alert to generic webhook"""
+        import requests
+        
+        payload = {
+            "alert": alert,
+            "platform": "AutoML",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        try:
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                headers=headers or {},
+                timeout=5
+            )
+            response.raise_for_status()
+            logger.info(f"Alert sent to webhook successfully: {webhook_url}")
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send alert to webhook: {e}")
+            return False
 
 
 # Main monitoring service
@@ -1156,95 +1311,3 @@ class MonitoringService:
                 )
         
         logger.info("Monitoring data saved to storage")
-
-
-# Example usage and testing
-if __name__ == "__main__":
-    # Create sample data
-    np.random.seed(42)
-    n_samples = 1000
-    
-    # Reference data (training data characteristics)
-    reference_data = pd.DataFrame({
-        'feature1': np.random.normal(0, 1, n_samples),
-        'feature2': np.random.normal(5, 2, n_samples),
-        'feature3': np.random.choice(['A', 'B', 'C'], n_samples),
-        'target': np.random.choice([0, 1], n_samples)
-    })
-    
-    # Production data (with some drift)
-    production_data = pd.DataFrame({
-        'feature1': np.random.normal(0.5, 1.2, 100),  # Drift in mean and std
-        'feature2': np.random.normal(5, 2, 100),
-        'feature3': np.random.choice(['A', 'B', 'C', 'D'], 100),  # New category
-        'target': np.random.choice([0, 1], 100)
-    })
-    
-    # Initialize monitoring
-    monitor = ModelMonitor(
-        model_id="test_model_001",
-        model_type="classification",
-        reference_data=reference_data
-    )
-    
-    # Simulate predictions
-    predictions = np.random.choice([0, 1], 100, p=[0.4, 0.6])
-    actuals = production_data['target'].values
-    
-    # Log predictions
-    monitor.log_prediction(
-        features=production_data.drop('target', axis=1),
-        predictions=predictions,
-        actuals=actuals,
-        prediction_time=0.05
-    )
-    
-    # Check drift
-    drift_results = monitor.check_drift(production_data.drop('target', axis=1))
-    print("Drift Detection Results:")
-    print(f"  Drift detected: {drift_results['drift_detected']}")
-    print(f"  Drifted features: {drift_results.get('drifted_features', [])}")
-    
-    # Get performance summary
-    summary = monitor.get_performance_summary()
-    print("\nPerformance Summary:")
-    print(json.dumps(summary, indent=2, default=str))
-    
-    # Data quality check
-    quality_monitor = DataQualityMonitor(
-        expected_schema={
-            'feature1': 'float64',
-            'feature2': 'float64',
-            'feature3': 'object'
-        }
-    )
-    
-    quality_report = quality_monitor.check_data_quality(production_data.drop('target', axis=1))
-    print("\nData Quality Report:")
-    print(f"  Quality Score: {quality_report['quality_score']:.1f}")
-    print(f"  Issues: {len(quality_report['issues'])}")
-    print(f"  Warnings: {len(quality_report['warnings'])}")
-    
-    # Alert checking
-    alert_manager = AlertManager()
-    alerts = alert_manager.check_alerts({
-        'accuracy': 0.75,  # Below threshold
-        'drift_score': 0.6,  # Above threshold
-        'quality_score': 65  # Below threshold
-    })
-    
-    print("\nTriggered Alerts:")
-    for alert in alerts:
-        print(f"  - {alert['type']}: {alert['message']}")
-    
-    # Create monitoring report
-    report = monitor.create_monitoring_report()
-    print("\nMonitoring Report Generated:")
-    print(f"  Model ID: {report['model_id']}")
-    print(f"  Total Predictions: {report['prediction_statistics']['total_predictions']}")
-    
-    # Export Prometheus metrics (if available)
-    if PROMETHEUS_AVAILABLE:
-        metrics_bytes = monitor.export_metrics()
-        print("\nPrometheus Metrics:")
-        print(metrics_bytes.decode()[:500])  # First 500 chars
