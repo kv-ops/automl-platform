@@ -35,11 +35,34 @@ from slowapi.middleware import SlowAPIMiddleware
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry
 import uvicorn
 
-# Import your modules
+# AutoML Platform imports - Updated paths
 from automl_platform.config import AutoMLConfig, load_config
-from automl_platform.enhanced_orchestrator import EnhancedAutoMLOrchestrator
+from automl_platform.orchestrator import AutoMLOrchestrator
+from automl_platform.data_prep import DataPreprocessor, validate_data
+from automl_platform.model_selection import get_available_models, get_param_grid, get_cv_splitter
+from automl_platform.metrics import calculate_metrics, detect_task
+from automl_platform.feature_engineering import AutoFeatureEngineer
+from automl_platform.ensemble import AutoMLEnsemble, create_diverse_ensemble
+from automl_platform.inference import load_pipeline, predict, predict_proba, save_predictions
+from automl_platform.data_quality_agent import IntelligentDataQualityAgent, DataQualityAssessment
+
+# Storage and monitoring
 from automl_platform.storage import StorageManager
 from automl_platform.monitoring import MonitoringService, DataQualityMonitor
+
+# LLM integration
+from automl_platform.llm import AutoMLLLMAssistant, DataCleaningAgent
+from automl_platform.prompts import PromptTemplates, PromptOptimizer
+
+# Infrastructure and billing
+from automl_platform.infrastructure import TenantManager, SecurityManager, DeploymentManager
+from automl_platform.billing import BillingManager, UsageTracker, PlanType, BillingPeriod
+
+# Data connectors
+from automl_platform.connectors import ConnectorFactory, ConnectionConfig
+
+# Streaming
+from automl_platform.streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -130,6 +153,31 @@ async def lifespan(app: FastAPI):
     # Initialize monitoring
     app.state.monitoring = MonitoringService(app.state.storage) if config.monitoring.enabled else None
     
+    # Initialize infrastructure components
+    app.state.tenant_manager = TenantManager(db_url=getattr(config, 'database_url', 'sqlite:///automl.db'))
+    app.state.security_manager = SecurityManager(secret_key=getattr(config, 'secret_key', 'default-secret'))
+    app.state.billing_manager = BillingManager(tenant_manager=app.state.tenant_manager)
+    app.state.usage_tracker = UsageTracker(billing_manager=app.state.billing_manager)
+    
+    # Initialize deployment manager
+    app.state.deployment_manager = DeploymentManager(app.state.tenant_manager)
+    
+    # Initialize LLM assistant if configured
+    if hasattr(config, 'llm') and config.llm.enabled:
+        llm_config = {
+            'provider': config.llm.provider,
+            'api_key': config.llm.api_key,
+            'model_name': config.llm.model_name,
+            'enable_rag': config.llm.enable_rag,
+            'cache_responses': config.llm.cache_responses
+        }
+        app.state.llm_assistant = AutoMLLLMAssistant(llm_config)
+    else:
+        app.state.llm_assistant = None
+    
+    # Initialize data quality agent
+    app.state.quality_agent = IntelligentDataQualityAgent(llm_provider=app.state.llm_assistant.llm if app.state.llm_assistant else None)
+    
     # Initialize orchestrators pool
     app.state.orchestrators = {}
     
@@ -162,8 +210,8 @@ app = FastAPI(
     title="AutoML Platform API",
     description="Production-ready AutoML platform with monitoring and storage",
     version="2.0.0",
-    docs_url="/docs" if config.api.enable_docs else None,
-    redoc_url="/redoc" if config.api.enable_docs else None,
+    docs_url="/docs" if getattr(config.api, 'enable_docs', True) else None,
+    redoc_url="/redoc" if getattr(config.api, 'enable_docs', True) else None,
     lifespan=lifespan
 )
 
@@ -174,10 +222,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # CORS middleware
-if config.api.enable_cors:
+if getattr(config.api, 'enable_cors', True):
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=config.api.cors_origins,
+        allow_origins=getattr(config.api, 'cors_origins', ["*"]),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -193,18 +241,18 @@ def create_token(user_id: str) -> str:
     """Create JWT token"""
     payload = {
         "user_id": user_id,
-        "exp": datetime.utcnow() + timedelta(minutes=config.api.jwt_expiration_minutes)
+        "exp": datetime.utcnow() + timedelta(minutes=getattr(config.api, 'jwt_expiration_minutes', 60))
     }
-    return jwt.encode(payload, config.api.jwt_secret, algorithm=config.api.jwt_algorithm)
+    return jwt.encode(payload, getattr(config.api, 'jwt_secret', 'secret'), algorithm=getattr(config.api, 'jwt_algorithm', 'HS256'))
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
     """Verify JWT token"""
-    if not config.api.enable_auth:
+    if not getattr(config.api, 'enable_auth', False):
         return "anonymous"
     
     token = credentials.credentials
     try:
-        payload = jwt.decode(token, config.api.jwt_secret, algorithms=[config.api.jwt_algorithm])
+        payload = jwt.decode(token, getattr(config.api, 'jwt_secret', 'secret'), algorithms=[getattr(config.api, 'jwt_algorithm', 'HS256')])
         return payload["user_id"]
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
@@ -258,6 +306,26 @@ class DataQualityReport(BaseModel):
     warnings: List[Dict[str, Any]]
     statistics: Dict[str, Any]
 
+class FeatureEngineeringRequest(BaseModel):
+    """Feature engineering request"""
+    dataset_id: str
+    target_column: str
+    max_features: int = 20
+    feature_types: str = "all"
+
+class TenantRequest(BaseModel):
+    """Tenant creation request"""
+    name: str
+    plan: str = "free"
+    features: Optional[Dict[str, bool]] = None
+
+class ConnectorRequest(BaseModel):
+    """Data connector request"""
+    connection_type: str
+    connection_config: Dict[str, Any]
+    query: Optional[str] = None
+    table_name: Optional[str] = None
+
 # ============================================================================
 # Middleware
 # ============================================================================
@@ -299,14 +367,14 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "2.0.0",
-        "environment": config.environment
+        "environment": getattr(config, 'environment', 'development')
     }
 
 @app.get("/metrics")
 async def get_metrics():
     """Prometheus metrics endpoint"""
     return StreamingResponse(
-        generate_latest(metrics_registry),
+        BytesIO(generate_latest(metrics_registry)),
         media_type=CONTENT_TYPE_LATEST
     )
 
@@ -317,9 +385,9 @@ async def get_status(request: Request, user_id: str = Depends(verify_token)):
     return {
         "status": "operational",
         "active_experiments": len(app.state.orchestrators),
-        "models_available": active_models._value.get(),
-        "storage_backend": config.storage.backend,
-        "monitoring_enabled": config.monitoring.enabled,
+        "models_available": active_models._value.get() if hasattr(active_models._value, 'get') else 0,
+        "storage_backend": config.storage.backend if hasattr(config, 'storage') else 'none',
+        "monitoring_enabled": config.monitoring.enabled if hasattr(config, 'monitoring') else False,
         "user_id": user_id
     }
 
@@ -337,15 +405,17 @@ async def upload_data(
 ):
     """Upload dataset"""
     # Validate file
-    if not file.filename.endswith(tuple(config.api.allowed_extensions)):
-        raise HTTPException(400, f"Invalid file type. Allowed: {config.api.allowed_extensions}")
+    allowed_extensions = getattr(config.api, 'allowed_extensions', ['.csv', '.parquet', '.json', '.xlsx'])
+    if not file.filename.endswith(tuple(allowed_extensions)):
+        raise HTTPException(400, f"Invalid file type. Allowed: {allowed_extensions}")
     
     # Check file size
     contents = await file.read()
     file_size = len(contents)
     
-    if file_size > config.api.max_upload_size_mb * 1024 * 1024:
-        raise HTTPException(413, f"File too large. Maximum size: {config.api.max_upload_size_mb} MB")
+    max_upload_size = getattr(config.api, 'max_upload_size_mb', 100) * 1024 * 1024
+    if file_size > max_upload_size:
+        raise HTTPException(413, f"File too large. Maximum size: {max_upload_size // (1024*1024)} MB")
     
     upload_size.observe(file_size)
     
@@ -378,9 +448,16 @@ async def upload_data(
     
     # Data quality check
     quality_report = None
-    if app.state.monitoring:
-        quality_monitor = DataQualityMonitor()
-        quality_report = quality_monitor.check_data_quality(df)
+    if app.state.quality_agent:
+        try:
+            assessment = app.state.quality_agent.assess(df)
+            quality_report = {
+                "quality_score": assessment.quality_score,
+                "alerts": assessment.alerts[:5],  # Limit for response size
+                "warnings": assessment.warnings[:5]
+            }
+        except Exception as e:
+            logger.error(f"Quality assessment failed: {e}")
     
     return {
         "dataset_id": dataset_id,
@@ -409,7 +486,7 @@ async def get_dataset_info(
             "shape": list(df.shape),
             "columns": list(df.columns),
             "head": df.head(10).to_dict('records'),
-            "statistics": df.describe().to_dict()
+            "statistics": df.describe().to_dict() if len(df.select_dtypes(include=[np.number]).columns) > 0 else {}
         }
     except FileNotFoundError:
         raise HTTPException(404, f"Dataset {dataset_id} not found")
@@ -429,20 +506,79 @@ async def check_data_quality(
     
     try:
         df = app.state.storage.load_dataset(dataset_id, tenant_id=user_id)
-        quality_monitor = DataQualityMonitor()
-        report = quality_monitor.check_data_quality(df)
+        assessment = app.state.quality_agent.assess(df)
         
         return DataQualityReport(
-            quality_score=report["quality_score"],
-            issues=report.get("issues", []),
-            warnings=report.get("warnings", []),
+            quality_score=assessment.quality_score,
+            issues=assessment.alerts,
+            warnings=assessment.warnings,
             statistics={
-                "rows": report["rows"],
-                "columns": report["columns"]
+                "rows": assessment.statistics.get("rows", len(df)),
+                "columns": assessment.statistics.get("columns", len(df.columns))
             }
         )
     except Exception as e:
         raise HTTPException(500, f"Quality check failed: {str(e)}")
+
+# ============================================================================
+# Feature Engineering Endpoints
+# ============================================================================
+
+@app.post("/api/v1/features/engineer")
+@limiter.limit("5/minute")
+async def engineer_features(
+    request: Request,
+    feature_request: FeatureEngineeringRequest,
+    user_id: str = Depends(verify_token)
+):
+    """Automatically engineer features"""
+    if not app.state.storage:
+        raise HTTPException(503, "Storage not configured")
+    
+    try:
+        # Load dataset
+        df = app.state.storage.load_dataset(feature_request.dataset_id, tenant_id=user_id)
+        
+        # Initialize feature engineer
+        engineer = AutoFeatureEngineer(
+            max_features=feature_request.max_features,
+            feature_types=feature_request.feature_types,
+            task='auto'
+        )
+        
+        # Separate features and target
+        if feature_request.target_column in df.columns:
+            X = df.drop(columns=[feature_request.target_column])
+            y = df[feature_request.target_column]
+        else:
+            X = df
+            y = None
+        
+        # Engineer features
+        engineer.fit(X, y)
+        X_engineered = engineer.transform(X)
+        
+        # Create new dataset
+        if y is not None:
+            df_engineered = pd.concat([X_engineered, y], axis=1)
+        else:
+            df_engineered = X_engineered
+        
+        # Save engineered dataset
+        new_dataset_id = f"{feature_request.dataset_id}_engineered"
+        path = app.state.storage.save_dataset(df_engineered, new_dataset_id, tenant_id=user_id)
+        
+        return {
+            "original_dataset_id": feature_request.dataset_id,
+            "new_dataset_id": new_dataset_id,
+            "original_features": len(X.columns),
+            "engineered_features": len(X_engineered.columns),
+            "features_added": len(X_engineered.columns) - len(X.columns),
+            "selected_features": engineer.selected_features_[:10] if engineer.selected_features_ else []
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Feature engineering failed: {str(e)}")
 
 # ============================================================================
 # Training Endpoints
@@ -480,14 +616,14 @@ async def start_training(
     experiment_id = train_request.experiment_name or f"exp_{uuid.uuid4().hex[:8]}"
     
     # Configure orchestrator
-    train_config = config.copy()
+    train_config = AutoMLConfig()
     if train_request.algorithms:
         train_config.algorithms = train_request.algorithms
     if train_request.optimize_metric:
         train_config.scoring = train_request.optimize_metric
     
     # Create orchestrator
-    orchestrator = EnhancedAutoMLOrchestrator(train_config)
+    orchestrator = AutoMLOrchestrator(train_config)
     app.state.orchestrators[experiment_id] = {
         "orchestrator": orchestrator,
         "status": "running",
@@ -522,7 +658,7 @@ async def run_training(orchestrator, X, y, experiment_id, task):
     """Run training in background"""
     try:
         # Train models
-        orchestrator.fit(X, y, task=task, experiment_name=experiment_id)
+        orchestrator.fit(X, y, task=task)
         
         # Update status
         app.state.orchestrators[experiment_id]["status"] = "completed"
@@ -564,21 +700,21 @@ async def get_experiment_status(
     # Calculate progress
     if exp["status"] == "completed":
         progress = 1.0
-    elif orchestrator.total_models_trained > 0:
+    elif hasattr(orchestrator, 'total_models_trained') and orchestrator.total_models_trained > 0:
         progress = min(orchestrator.total_models_trained / len(orchestrator.leaderboard), 1.0)
     else:
         progress = 0.0
     
     # Get best score
     best_score = None
-    if orchestrator.leaderboard:
+    if hasattr(orchestrator, 'leaderboard') and orchestrator.leaderboard:
         best_score = orchestrator.leaderboard[0]["cv_score"]
     
     return ExperimentInfo(
         experiment_id=experiment_id,
         status=exp["status"],
         progress=progress,
-        models_trained=orchestrator.total_models_trained,
+        models_trained=getattr(orchestrator, 'total_models_trained', 0),
         best_score=best_score,
         elapsed_time=elapsed_time,
         eta=None if exp["status"] == "completed" else (elapsed_time / progress - elapsed_time) if progress > 0 else None
@@ -601,12 +737,19 @@ async def get_leaderboard(
         raise HTTPException(403, "Access denied")
     
     orchestrator = exp["orchestrator"]
-    leaderboard = orchestrator.get_leaderboard(top_n=top_n)
     
-    return {
-        "experiment_id": experiment_id,
-        "leaderboard": leaderboard.to_dict('records') if not leaderboard.empty else []
-    }
+    try:
+        leaderboard = orchestrator.get_leaderboard(top_n=top_n)
+        return {
+            "experiment_id": experiment_id,
+            "leaderboard": leaderboard.to_dict('records') if not leaderboard.empty else []
+        }
+    except Exception as e:
+        logger.error(f"Failed to get leaderboard: {e}")
+        return {
+            "experiment_id": experiment_id,
+            "leaderboard": []
+        }
 
 # ============================================================================
 # Model Management Endpoints
@@ -622,21 +765,25 @@ async def list_models(
     if not app.state.storage:
         raise HTTPException(503, "Storage not configured")
     
-    models = app.state.storage.list_models(tenant_id=user_id)
-    
-    return {
-        "models": [
-            ModelInfo(
-                model_id=m["model_id"],
-                algorithm=m["algorithm"],
-                metrics=m["metrics"],
-                version=m["version"],
-                created_at=m["created_at"],
-                status="active"
-            )
-            for m in models
-        ]
-    }
+    try:
+        models = app.state.storage.list_models(tenant_id=user_id)
+        
+        return {
+            "models": [
+                ModelInfo(
+                    model_id=m.get("model_id", "unknown"),
+                    algorithm=m.get("algorithm", "unknown"),
+                    metrics=m.get("metrics", {}),
+                    version=m.get("version", "1.0.0"),
+                    created_at=m.get("created_at", datetime.now().isoformat()),
+                    status="active"
+                )
+                for m in models
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Failed to list models: {e}")
+        return {"models": []}
 
 @app.get("/api/v1/models/{model_id}")
 @limiter.limit("10/minute")
@@ -670,13 +817,16 @@ async def delete_model(
     if not app.state.storage:
         raise HTTPException(503, "Storage not configured")
     
-    success = app.state.storage.delete_model(model_id, version, tenant_id=user_id)
-    
-    if success:
-        active_models.dec()
-        return {"message": f"Model {model_id} deleted successfully"}
-    else:
-        raise HTTPException(404, f"Model {model_id} not found")
+    try:
+        success = app.state.storage.delete_model(model_id, version, tenant_id=user_id)
+        
+        if success:
+            active_models.dec()
+            return {"message": f"Model {model_id} deleted successfully"}
+        else:
+            raise HTTPException(404, f"Model {model_id} not found")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to delete model: {str(e)}")
 
 # ============================================================================
 # Prediction Endpoints
@@ -684,7 +834,7 @@ async def delete_model(
 
 @app.post("/api/v1/predict")
 @limiter.limit("100/minute")
-async def predict(
+async def predict_single(
     request: Request,
     predict_request: PredictRequest,
     user_id: str = Depends(verify_token)
@@ -792,76 +942,190 @@ async def predict_batch(
         raise HTTPException(500, f"Batch prediction failed: {str(e)}")
 
 # ============================================================================
-# Monitoring Endpoints
+# Data Connectors Endpoints
 # ============================================================================
 
-@app.get("/api/v1/monitoring/drift/{model_id}")
-@limiter.limit("10/minute")
-async def get_drift_status(
-    request: Request,
-    model_id: str,
-    user_id: str = Depends(verify_token)
-):
-    """Get drift status for a model"""
-    if not app.state.monitoring:
-        raise HTTPException(503, "Monitoring not configured")
-    
-    monitor = app.state.monitoring.get_monitor(model_id)
-    if not monitor:
-        raise HTTPException(404, f"Monitor for model {model_id} not found")
-    
-    # Get latest drift results
-    if monitor.drift_detector.drift_history:
-        latest_drift = monitor.drift_detector.drift_history[-1]
-    else:
-        latest_drift = {"drift_detected": False, "message": "No drift checks performed yet"}
-    
-    return {
-        "model_id": model_id,
-        "drift_status": latest_drift,
-        "performance_summary": monitor.get_performance_summary()
-    }
-
-@app.get("/api/v1/monitoring/performance/{model_id}")
-@limiter.limit("10/minute")
-async def get_performance_metrics(
-    request: Request,
-    model_id: str,
-    days: int = 7,
-    user_id: str = Depends(verify_token)
-):
-    """Get performance metrics for a model"""
-    if not app.state.monitoring:
-        raise HTTPException(503, "Monitoring not configured")
-    
-    monitor = app.state.monitoring.get_monitor(model_id)
-    if not monitor:
-        raise HTTPException(404, f"Monitor for model {model_id} not found")
-    
-    return monitor.get_performance_summary(last_n_days=days)
-
-@app.post("/api/v1/monitoring/alert")
+@app.post("/api/v1/connectors/test")
 @limiter.limit("5/minute")
-async def configure_alert(
+async def test_connection(
     request: Request,
-    model_id: str,
-    alert_type: str,
-    threshold: float,
-    notification_channel: str,
+    connector_request: ConnectorRequest,
     user_id: str = Depends(verify_token)
 ):
-    """Configure monitoring alert"""
-    if not app.state.monitoring:
-        raise HTTPException(503, "Monitoring not configured")
-    
-    # This would configure alerts in your monitoring system
-    return {
-        "message": "Alert configured successfully",
-        "model_id": model_id,
-        "alert_type": alert_type,
-        "threshold": threshold,
-        "channel": notification_channel
-    }
+    """Test database connection"""
+    try:
+        # Create connection config
+        config = ConnectionConfig(
+            connection_type=connector_request.connection_type,
+            **connector_request.connection_config
+        )
+        
+        # Create connector
+        connector = ConnectorFactory.create_connector(config)
+        
+        # Test connection
+        success = connector.test_connection()
+        
+        return {
+            "connection_type": connector_request.connection_type,
+            "success": success,
+            "message": "Connection successful" if success else "Connection failed"
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Connection test failed: {str(e)}")
+
+@app.post("/api/v1/connectors/query")
+@limiter.limit("10/minute")
+async def execute_query(
+    request: Request,
+    connector_request: ConnectorRequest,
+    user_id: str = Depends(verify_token)
+):
+    """Execute query on external database"""
+    try:
+        # Create connection config
+        config = ConnectionConfig(
+            connection_type=connector_request.connection_type,
+            **connector_request.connection_config
+        )
+        
+        # Create connector
+        connector = ConnectorFactory.create_connector(config)
+        
+        # Execute query or read table
+        if connector_request.query:
+            df = connector.query(connector_request.query)
+        elif connector_request.table_name:
+            df = connector.read_table(connector_request.table_name)
+        else:
+            raise HTTPException(400, "Either query or table_name must be provided")
+        
+        # Disconnect
+        connector.disconnect()
+        
+        # Save as dataset
+        dataset_id = f"external_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if app.state.storage:
+            app.state.storage.save_dataset(df, dataset_id, tenant_id=user_id)
+        
+        return {
+            "dataset_id": dataset_id,
+            "shape": list(df.shape),
+            "columns": list(df.columns),
+            "preview": df.head(5).to_dict('records')
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Query execution failed: {str(e)}")
+
+# ============================================================================
+# Tenant Management Endpoints
+# ============================================================================
+
+@app.post("/api/v1/tenants")
+@limiter.limit("5/minute")
+async def create_tenant(
+    request: Request,
+    tenant_request: TenantRequest,
+    user_id: str = Depends(verify_token)
+):
+    """Create new tenant"""
+    try:
+        tenant = app.state.tenant_manager.create_tenant(
+            name=tenant_request.name,
+            plan=tenant_request.plan
+        )
+        
+        # Generate API key
+        api_key = app.state.security_manager.generate_api_key(tenant.tenant_id)
+        
+        return {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "plan": tenant.plan,
+            "api_key": api_key,
+            "created_at": tenant.created_at.isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Failed to create tenant: {str(e)}")
+
+@app.get("/api/v1/tenants/{tenant_id}")
+@limiter.limit("10/minute")
+async def get_tenant(
+    request: Request,
+    tenant_id: str,
+    user_id: str = Depends(verify_token)
+):
+    """Get tenant information"""
+    try:
+        tenant = app.state.tenant_manager.get_tenant(tenant_id)
+        if not tenant:
+            raise HTTPException(404, "Tenant not found")
+        
+        return {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "plan": tenant.plan,
+            "max_cpu_cores": tenant.max_cpu_cores,
+            "max_memory_gb": tenant.max_memory_gb,
+            "max_storage_gb": tenant.max_storage_gb,
+            "features": tenant.features
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get tenant: {str(e)}")
+
+# ============================================================================
+# Billing Endpoints
+# ============================================================================
+
+@app.post("/api/v1/billing/subscription")
+@limiter.limit("5/minute")
+async def create_subscription(
+    request: Request,
+    tenant_id: str,
+    plan: str,
+    billing_period: str = "monthly",
+    user_id: str = Depends(verify_token)
+):
+    """Create subscription for tenant"""
+    try:
+        plan_type = PlanType(plan)
+        period_type = BillingPeriod(billing_period)
+        
+        result = app.state.billing_manager.create_subscription(
+            tenant_id=tenant_id,
+            plan_type=plan_type,
+            billing_period=period_type
+        )
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(500, f"Failed to create subscription: {str(e)}")
+
+@app.get("/api/v1/billing/usage/{tenant_id}")
+@limiter.limit("10/minute")
+async def get_usage(
+    request: Request,
+    tenant_id: str,
+    user_id: str = Depends(verify_token)
+):
+    """Get usage statistics for tenant"""
+    try:
+        usage = app.state.usage_tracker.get_usage(tenant_id)
+        bill = app.state.billing_manager.calculate_bill(tenant_id)
+        
+        return {
+            "tenant_id": tenant_id,
+            "usage": usage,
+            "billing": bill
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get usage: {str(e)}")
 
 # ============================================================================
 # WebSocket Endpoints
@@ -889,8 +1153,8 @@ async def websocket_experiment_updates(
                     "type": "experiment_update",
                     "experiment_id": experiment_id,
                     "status": exp["status"],
-                    "models_trained": orchestrator.total_models_trained,
-                    "best_score": orchestrator.leaderboard[0]["cv_score"] if orchestrator.leaderboard else None
+                    "models_trained": getattr(orchestrator, 'total_models_trained', 0),
+                    "best_score": orchestrator.leaderboard[0]["cv_score"] if hasattr(orchestrator, 'leaderboard') and orchestrator.leaderboard else None
                 }
                 
                 await websocket.send_json(update)
@@ -904,8 +1168,8 @@ async def websocket_experiment_updates(
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
-        del app.state.websocket_connections[f"exp_{experiment_id}"]
-        await websocket.close()
+        if f"exp_{experiment_id}" in app.state.websocket_connections:
+            del app.state.websocket_connections[f"exp_{experiment_id}"]
 
 # ============================================================================
 # Authentication Endpoints
@@ -930,46 +1194,61 @@ async def refresh_token(request: Request, user_id: str = Depends(verify_token)):
     return {"access_token": new_token, "token_type": "bearer"}
 
 # ============================================================================
-# Admin Endpoints
+# LLM Endpoints
 # ============================================================================
 
-@app.get("/api/v1/admin/experiments")
-@limiter.limit("5/minute")
-async def list_all_experiments(
+@app.post("/api/v1/llm/chat")
+@limiter.limit("20/minute")
+async def llm_chat(
     request: Request,
+    message: str,
+    context: Optional[Dict[str, Any]] = None,
     user_id: str = Depends(verify_token)
 ):
-    """List all experiments (admin only)"""
-    if user_id != "admin":
-        raise HTTPException(403, "Admin access required")
+    """Chat with LLM assistant"""
+    if not app.state.llm_assistant:
+        raise HTTPException(503, "LLM not configured")
     
-    experiments = []
-    for exp_id, exp in app.state.orchestrators.items():
-        experiments.append({
-            "experiment_id": exp_id,
-            "user_id": exp["user_id"],
-            "status": exp["status"],
-            "start_time": exp["start_time"]
-        })
-    
-    return {"experiments": experiments}
+    try:
+        response = await app.state.llm_assistant.chat(message, context)
+        return {
+            "message": message,
+            "response": response,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(500, f"LLM chat failed: {str(e)}")
 
-@app.delete("/api/v1/admin/experiments/{experiment_id}")
-@limiter.limit("5/minute")
-async def delete_experiment(
+@app.post("/api/v1/llm/features/suggest")
+@limiter.limit("10/minute")
+async def llm_suggest_features(
     request: Request,
-    experiment_id: str,
+    dataset_id: str,
+    target_column: str,
+    task_type: str = "classification",
     user_id: str = Depends(verify_token)
 ):
-    """Delete experiment (admin only)"""
-    if user_id != "admin":
-        raise HTTPException(403, "Admin access required")
+    """Get AI-powered feature suggestions"""
+    if not app.state.llm_assistant:
+        raise HTTPException(503, "LLM not configured")
     
-    if experiment_id in app.state.orchestrators:
-        del app.state.orchestrators[experiment_id]
-        return {"message": f"Experiment {experiment_id} deleted"}
-    else:
-        raise HTTPException(404, f"Experiment {experiment_id} not found")
+    try:
+        # Load dataset
+        df = app.state.storage.load_dataset(dataset_id, tenant_id=user_id)
+        
+        # Get suggestions
+        suggestions = await app.state.llm_assistant.suggest_features(
+            df, target_column, task_type
+        )
+        
+        return {
+            "dataset_id": dataset_id,
+            "target_column": target_column,
+            "suggestions": suggestions[:10]  # Limit to top 10
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, f"Feature suggestion failed: {str(e)}")
 
 # ============================================================================
 # Run Application
@@ -978,8 +1257,8 @@ async def delete_experiment(
 if __name__ == "__main__":
     uvicorn.run(
         "app:app",
-        host=config.api.host,
-        port=config.api.port,
-        reload=config.debug,
-        log_level="info" if config.verbose else "error"
+        host=getattr(config.api, 'host', '0.0.0.0'),
+        port=getattr(config.api, 'port', 8000),
+        reload=getattr(config, 'debug', False),
+        log_level="info" if getattr(config, 'verbose', True) else "error"
     )
