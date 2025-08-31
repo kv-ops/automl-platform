@@ -575,7 +575,18 @@ class AutoGluonEnsemble(AutoMLEnsemble):
             X_bag = X[indices]
             y_bag = y[indices]
             
-            # Train stacking ensemble on bag
+            # Train stacking ensemble on bag  # FIXED: Removed erroneous assignment
+            bag_ensemble = AutoMLEnsemble(
+                base_models=self.base_models.copy(),
+                ensemble_method='stacking',
+                n_layers=self.n_layers,
+                cv_folds=self.cv_folds,
+                use_probabilities=self.use_probabilities,
+                weighted=self.weighted,
+                task=self.task,
+                random_state=self.random_state + bag
+            )
+            
             bag_ensemble.fit(X_bag, y_bag)
             self.bagged_models_.append(bag_ensemble)
         
@@ -914,15 +925,4 @@ if __name__ == "__main__":
     # Evaluate
     from sklearn.metrics import accuracy_score
     acc = accuracy_score(y_test, y_pred)
-    print(f"Ensemble accuracy: {acc:.4f}") = AutoMLEnsemble(
-                base_models=self.base_models.copy(),
-                ensemble_method='stacking',
-                n_layers=self.n_layers,
-                cv_folds=self.cv_folds,
-                use_probabilities=self.use_probabilities,
-                weighted=self.weighted,
-                task=self.task,
-                random_state=self.random_state + bag
-            )
-            
-            bag_ensemble
+    print(f"Ensemble accuracy: {acc:.4f}")  # FIXED: Removed syntax error
