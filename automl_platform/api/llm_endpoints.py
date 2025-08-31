@@ -12,6 +12,7 @@ import json
 import asyncio
 from datetime import datetime
 import uuid
+import io  # ADDED: Missing import
 
 from ..llm import AutoMLLLMAssistant, DataCleaningAgent
 from ..data_quality_agent import IntelligentDataQualityAgent, DataQualityAssessment
@@ -398,7 +399,7 @@ async def download_report(experiment_id: str, format: str = "pdf"):
     content = b"Report content here"
     
     return StreamingResponse(
-        io.BytesIO(content),
+        io.BytesIO(content),  # FIXED: Now io is imported
         media_type="application/pdf" if format == "pdf" else "text/markdown",
         headers={
             "Content-Disposition": f"attachment; filename=report_{experiment_id}.{format}"
