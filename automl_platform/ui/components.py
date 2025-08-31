@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 import json
+import time  # ADDED: Missing import
 from datetime import datetime, timedelta
 
 
@@ -830,7 +831,7 @@ def show_loading_animation(message: str = "Processing..."):
         progress_bar = st.progress(0)
         for i in range(100):
             progress_bar.progress(i + 1)
-            time.sleep(0.01)
+            time.sleep(0.01)  # FIXED: Now time is imported
         progress_bar.empty()
 
 
