@@ -1,246 +1,190 @@
 """
-AutoML Platform API Module
+AutoML Platform - Production-ready machine learning automation
 
-This module contains API-specific components for the AutoML platform including:
-- Infrastructure management and multi-tenant isolation
-- Billing and subscription management
-- Data connectors for external data sources
-- Streaming processing capabilities
-- LLM endpoints for AI-powered features
-- Authentication, SSO, and RGPD compliance endpoints
+A comprehensive platform for automated machine learning with advanced features including:
+- Automated model selection and hyperparameter optimization
+- Feature engineering and data preprocessing
+- Model monitoring and drift detection
+- Multi-tenant architecture with billing
+- LLM integration for intelligent assistance
+- Real-time streaming capabilities
+- Enterprise-grade security and deployment
+- SSO authentication (Keycloak, Auth0, Okta)
+- RGPD/GDPR compliance with full data subject rights
+- Immutable audit trail with hash chain
 
-These modules are designed to be used with the main AutoML platform to provide
-enterprise-grade features and integrations.
+Version: 2.0.0
 """
 
 __version__ = "2.0.0"
+__author__ = "AutoML Platform Team"
+__email__ = "support@automl-platform.com"
 
-# API-specific imports for convenience
-try:
-    from .billing import BillingManager, UsageTracker, PlanType, BillingPeriod
-    from .infrastructure import TenantManager, SecurityManager, DeploymentManager
-    from .connectors import ConnectorFactory, ConnectionConfig
-    from .streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
-    from .llm_endpoints import router as llm_router
-    from .auth_endpoints import create_auth_router, sso_router, rgpd_router
-except ImportError as e:
-    # Handle missing dependencies gracefully
-    import warnings
-    warnings.warn(
-        f"Some API modules could not be imported: {e}. "
-        "Please ensure all dependencies are installed.",
-        ImportWarning
-    )
+# Core imports for easy access
+from .config import AutoMLConfig, load_config
+from .orchestrator import AutoMLOrchestrator
+from .data_prep import DataPreprocessor, validate_data
+from .metrics import calculate_metrics, detect_task
+from .model_selection import get_available_models
 
-# Available components when importing from api
+# Authentication and Security imports
+from .auth import (
+    init_auth_system,
+    auth_router,
+    get_current_user,
+    require_permission,
+    require_plan
+)
+from .sso_service import SSOService, SSOProvider
+from .audit_service import AuditService, AuditEventType, AuditSeverity
+from .rgpd_compliance_service import (
+    RGPDComplianceService,
+    GDPRRequestType,
+    ConsentType,
+    get_rgpd_service
+)
+from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
+
+# Make commonly used classes available at package level
 __all__ = [
-    # Billing
-    "BillingManager",
-    "UsageTracker", 
-    "PlanType",
-    "BillingPeriod",
+    # Core AutoML
+    "AutoMLConfig",
+    "load_config", 
+    "AutoMLOrchestrator",
+    "DataPreprocessor",
+    "validate_data",
+    "calculate_metrics",
+    "detect_task",
+    "get_available_models",
     
-    # Infrastructure
-    "TenantManager",
-    "SecurityManager",
-    "DeploymentManager",
+    # Authentication & Security
+    "init_auth_system",
+    "auth_router",
+    "get_current_user",
+    "require_permission",
+    "require_plan",
     
-    # Connectors
-    "ConnectorFactory",
-    "ConnectionConfig",
+    # SSO
+    "SSOService",
+    "SSOProvider",
     
-    # Streaming
-    "StreamingOrchestrator",
-    "StreamConfig",
-    "MLStreamProcessor",
+    # Audit
+    "AuditService",
+    "AuditEventType",
+    "AuditSeverity",
     
-    # LLM
-    "llm_router",
+    # RGPD/GDPR
+    "RGPDComplianceService",
+    "GDPRRequestType",
+    "ConsentType",
+    "get_rgpd_service",
     
-    # Authentication & RGPD
-    "create_auth_router",
-    "sso_router",
-    "rgpd_router",
+    # Middleware
+    "UnifiedAuthMiddleware",
+    "RGPDMiddleware",
+    "setup_auth_middleware"
 ]
 
-# API module information
-API_INFO = {
-    "name": "automl_platform.api",
+# Package metadata
+PACKAGE_INFO = {
+    "name": "automl_platform",
     "version": __version__,
-    "description": "API components for enterprise AutoML features",
-    "components": {
-        "billing": "Subscription and usage management",
-        "infrastructure": "Multi-tenant architecture and security",
-        "connectors": "External data source integrations",
-        "streaming": "Real-time data processing",
-        "llm_endpoints": "AI-powered features and assistance",
-        "auth_endpoints": "SSO authentication and RGPD compliance"
-    },
-    "dependencies": {
-        "required": [
-            "fastapi>=0.104.0",
-            "sqlalchemy>=2.0.0",
-            "cryptography>=41.0.0",
-            "jwt>=1.3.1",
-            "redis>=4.0.0",
-            "pydantic>=2.0.0"
-        ],
-        "optional": {
-            "billing": ["stripe", "paypal"],
-            "infrastructure": ["docker", "kubernetes"], 
-            "connectors": [
-                "snowflake-connector-python",
-                "google-cloud-bigquery",
-                "databricks-sql-connector",
-                "psycopg2-binary",
-                "pymongo"
-            ],
-            "streaming": ["kafka-python", "pulsar-client", "redis"],
-            "llm": ["openai", "anthropic", "chromadb", "langchain"],
-            "auth": ["python-keycloak", "authlib", "python-jose"]
-        }
+    "description": "Production-ready AutoML platform with advanced features",
+    "requires_python": ">=3.8",
+    "license": "MIT",
+    "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr"],
+    "classifiers": [
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+    ],
+    "features": {
+        "core": ["automl", "feature_engineering", "model_selection"],
+        "enterprise": ["multi_tenant", "billing", "monitoring"],
+        "security": ["sso", "rbac", "audit_trail", "encryption"],
+        "compliance": ["rgpd", "gdpr", "data_retention", "consent_management"],
+        "advanced": ["llm_integration", "streaming", "drift_detection"]
     }
 }
 
-def get_api_info():
-    """Get API module information and dependencies."""
-    return API_INFO.copy()
+def get_version():
+    """Get the current version of the AutoML platform."""
+    return __version__
 
-def check_dependencies():
-    """Check which optional dependencies are available."""
-    available_deps = {}
-    
-    # Check billing dependencies
-    billing_deps = []
-    try:
-        import stripe
-        billing_deps.append("stripe")
-    except ImportError:
-        pass
-    
-    try:
-        import paypalrestsdk
-        billing_deps.append("paypal")
-    except ImportError:
-        pass
-    
-    available_deps["billing"] = billing_deps
-    
-    # Check infrastructure dependencies  
-    infra_deps = []
-    try:
-        import docker
-        infra_deps.append("docker")
-    except ImportError:
-        pass
-        
-    try:
-        import kubernetes
-        infra_deps.append("kubernetes")
-    except ImportError:
-        pass
-    
-    available_deps["infrastructure"] = infra_deps
-    
-    # Check connector dependencies
-    connector_deps = []
-    deps_to_check = [
-        ("snowflake.connector", "snowflake"),
-        ("google.cloud.bigquery", "bigquery"),
-        ("databricks.sql", "databricks"),
-        ("psycopg2", "postgresql"),
-        ("pymongo", "mongodb")
-    ]
-    
-    for module_name, dep_name in deps_to_check:
-        try:
-            __import__(module_name)
-            connector_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["connectors"] = connector_deps
-    
-    # Check streaming dependencies
-    streaming_deps = []
-    streaming_to_check = [
-        ("kafka", "kafka"),
-        ("pulsar", "pulsar"),
-        ("redis", "redis")
-    ]
-    
-    for module_name, dep_name in streaming_to_check:
-        try:
-            __import__(module_name)
-            streaming_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["streaming"] = streaming_deps
-    
-    # Check LLM dependencies
-    llm_deps = []
-    llm_to_check = [
-        ("openai", "openai"),
-        ("anthropic", "anthropic"), 
-        ("chromadb", "chromadb"),
-        ("langchain", "langchain")
-    ]
-    
-    for module_name, dep_name in llm_to_check:
-        try:
-            __import__(module_name)
-            llm_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["llm"] = llm_deps
-    
-    # Check auth dependencies
-    auth_deps = []
-    auth_to_check = [
-        ("keycloak", "python-keycloak"),
-        ("authlib", "authlib"),
-        ("jose", "python-jose"),
-        ("passlib", "passlib")
-    ]
-    
-    for module_name, dep_name in auth_to_check:
-        try:
-            __import__(module_name)
-            auth_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["auth"] = auth_deps
-    
-    return available_deps
+def get_package_info():
+    """Get package metadata information."""
+    return PACKAGE_INFO.copy()
 
-def create_api_app():
+def initialize_platform(config_path: str = None, environment: str = "production"):
     """
-    Create and configure the FastAPI application with all routers and middleware.
+    Initialize the AutoML platform with all services.
+    
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name (development, staging, production)
     
     Returns:
-        FastAPI app instance
+        Dictionary with initialized services
+    """
+    # Load configuration
+    config = load_config(config_path, environment)
+    
+    # Initialize services
+    services = {}
+    
+    # Initialize authentication system
+    if config.api.enable_auth:
+        services["auth"] = init_auth_system()
+    
+    # Initialize SSO if enabled
+    if config.api.enable_sso:
+        services["sso"] = SSOService()
+    
+    # Initialize audit service
+    services["audit"] = AuditService()
+    
+    # Initialize RGPD service if enabled
+    if config.rgpd.enabled:
+        services["rgpd"] = RGPDComplianceService(
+            audit_service=services["audit"]
+        )
+    
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"AutoML Platform initialized in {environment} mode")
+    
+    return services
+
+def create_app(config_path: str = None, environment: str = "production"):
+    """
+    Create FastAPI application with all services configured.
+    
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name
+    
+    Returns:
+        FastAPI application instance
     """
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     
-    # Import middleware and config
-    from ..auth_middleware import setup_auth_middleware
-    from ..config import load_config
+    # Load configuration
+    config = load_config(config_path, environment)
     
-    # Create app
+    # Create FastAPI app
     app = FastAPI(
-        title="AutoML Platform API",
+        title="AutoML Platform",
         description="Enterprise AutoML Platform with SSO, RGPD compliance, and multi-tenant support",
         version=__version__,
-        docs_url="/docs",
-        redoc_url="/redoc"
+        docs_url="/docs" if config.api.enable_docs else None,
+        redoc_url="/redoc" if config.api.enable_docs else None
     )
-    
-    # Load configuration
-    config = load_config()
     
     # Add CORS middleware if enabled
     if config.api.enable_cors:
@@ -252,94 +196,39 @@ def create_api_app():
             allow_headers=["*"],
         )
     
-    # Setup authentication middleware
+    # Setup authentication and RGPD middleware
     setup_auth_middleware(app, config)
     
     # Register routers
-    try:
-        # Auth & RGPD endpoints
-        from .auth_endpoints import create_auth_router
-        auth_router = create_auth_router()
-        app.include_router(auth_router, prefix="/api/auth", tags=["Authentication & RGPD"])
-    except ImportError:
-        pass
+    from .api import create_auth_router
     
-    try:
-        # LLM endpoints
-        from .llm_endpoints import router as llm_router
-        app.include_router(llm_router, prefix="/api/llm", tags=["LLM"])
-    except ImportError:
-        pass
+    # Auth & RGPD routes
+    auth_router = create_auth_router()
+    app.include_router(auth_router, prefix="/api")
     
-    try:
-        # Billing endpoints
-        from .billing_routes import billing_router
-        app.include_router(billing_router, prefix="/api/billing", tags=["Billing"])
-    except ImportError:
-        pass
-    
-    # Health check endpoint
+    # Health check
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
+        from datetime import datetime
         return {
             "status": "healthy",
             "version": __version__,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
-    # Root endpoint
-    @app.get("/")
-    async def root():
-        """Root endpoint with API information."""
-        return {
-            "name": "AutoML Platform API",
-            "version": __version__,
-            "docs": "/docs",
-            "health": "/health"
+            "timestamp": datetime.utcnow().isoformat(),
+            "services": {
+                "auth": config.api.enable_auth,
+                "sso": config.api.enable_sso,
+                "rgpd": config.rgpd.enabled,
+                "monitoring": config.monitoring.enabled
+            }
         }
     
     return app
 
-# Module initialization
-def _initialize_api():
-    """Initialize API module and check for critical dependencies."""
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Check for critical dependencies
-    missing_critical = []
-    
-    try:
-        import fastapi
-    except ImportError:
-        missing_critical.append("fastapi")
-    
-    try:
-        import sqlalchemy
-    except ImportError:
-        missing_critical.append("sqlalchemy")
-    
-    try:
-        import redis
-    except ImportError:
-        missing_critical.append("redis")
-    
-    try:
-        import pydantic
-    except ImportError:
-        missing_critical.append("pydantic")
-        
-    if missing_critical:
-        logger.error(
-            f"Critical dependencies missing for API module: {missing_critical}. "
-            "Please install required dependencies."
-        )
-    else:
-        logger.info("AutoML Platform API module initialized successfully")
-    
-    return len(missing_critical) == 0
-
-# Initialize on import
-from datetime import datetime
-_api_initialized = _initialize_api()
+# Check Python version compatibility
+import sys
+if sys.version_info < (3, 8):
+    raise RuntimeError(
+        f"AutoML Platform requires Python 3.8 or later. "
+        f"Current version: {sys.version_info.major}.{sys.version_info.minor}"
+    )
