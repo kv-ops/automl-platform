@@ -6,6 +6,7 @@ Place in: automl_platform/api/billing_middleware.py
 Implements request-level quota checking, usage tracking, and billing enforcement.
 """
 
+import uuid  # AJOUT: Import manquant
 import time
 import json
 import logging
@@ -370,7 +371,7 @@ class InvoiceGenerator:
             
             # Generate invoice
             invoice = {
-                "invoice_id": str(uuid.uuid4()),
+                "invoice_id": str(uuid.uuid4()),  # Utilisation correcte d'uuid
                 "tenant_id": tenant_id,
                 "billing_period": bill['billing_period'],
                 "invoice_date": datetime.utcnow().isoformat(),
