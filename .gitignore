@@ -42,6 +42,38 @@ ENV/
 env/
 .venv
 .env
+automl_env/
+
+# ============== MLOps & Model Registry ==============
+# MLflow
+mlruns/
+mlflow_artifacts/
+mlflow.db
+mlflow.db-journal
+*.mlflow
+
+# Model exports
+exported_models/
+*.onnx
+*.pmml
+*.tflite
+*.mlmodel
+*.pb
+model_registry/
+
+# ============== Workflow Orchestration ==============
+# Airflow
+~/airflow/
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+unittests.cfg
+airflow_home/
+dags/__pycache__/
+
+# Prefect
+.prefect/
+prefect.db
 
 # ============== IDEs ==============
 # VS Code
@@ -111,10 +143,9 @@ models/
 *.h5
 *.pt
 *.pth
-*.onnx
-*.pb
 model.pkl
 pipeline.joblib
+best_model.pkl
 !tests/models/*.joblib
 
 # ============== Logs ==============
@@ -122,6 +153,8 @@ pipeline.joblib
 logs/
 *.out
 *.err
+celery.log
+flower.log
 
 # ============== Testing ==============
 .pytest_cache/
@@ -134,7 +167,6 @@ coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
-.pytest_cache/
 nosetests.xml
 test-results/
 
@@ -189,6 +221,7 @@ config_local.yml
 secrets.yaml
 secrets.yml
 *.secret
+mlflow_config.py
 
 # ============== Output ==============
 automl_output/
@@ -234,6 +267,12 @@ yarn.lock
 *.old
 .~*
 
+# ============== Generated Scripts ==============
+start_mlflow.sh
+start_api.sh
+start_dashboard.sh
+start_*.sh
+
 # ============== AutoML Specific ==============
 leaderboard.csv
 train_predictions.csv
@@ -242,16 +281,21 @@ train_metrics.json
 alerts.json
 reference_data.pkl
 config.yaml.backup
+ab_test_results.json
+retraining_history.json
 
 # ============== Don't Ignore ==============
 !.gitignore
 !.github/
 !requirements.txt
+!requirements-gpu.txt
 !setup.py
 !setup.cfg
 !README.md
 !LICENSE
 !CONTRIBUTING.md
 !CHANGELOG.md
+!DEPLOYMENT_GUIDE.md
 !config.yaml
 !pyproject.toml
+!install_mlops.sh
