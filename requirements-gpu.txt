@@ -1,0 +1,30 @@
+# GPU-specific requirements
+# Place in: requirements-gpu.txt
+
+# PyTorch with CUDA support
+torch==2.1.0+cu118
+torchvision==0.16.0+cu118
+torchaudio==2.1.0+cu118
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+# TabNet for neural networks on tabular data
+pytorch-tabnet==4.1.0
+
+# CUDA-accelerated libraries
+cupy-cuda11x==12.3.0
+pycuda==2022.2.2
+
+# GPU monitoring
+gputil==1.4.0
+nvidia-ml-py3==7.352.0
+
+# RAPIDS for GPU-accelerated data processing (optional, requires specific CUDA setup)
+# cudf==23.10.0
+# cuml==23.10.0
+# cugraph==23.10.0
+
+# TensorRT for optimized inference (optional)
+# tensorrt==8.6.1
+
+# ONNX Runtime with GPU support
+onnxruntime-gpu==1.16.3
