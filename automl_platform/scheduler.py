@@ -12,11 +12,12 @@ import os
 import json
 import logging
 import asyncio
+import uuid  # AJOUT: Import manquant
+from concurrent.futures import ThreadPoolExecutor  # AJOUT: Import manquant
 from typing import Dict, List, Optional, Any, Tuple, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-import uuid
 import redis
 import psutil
 import threading
@@ -128,7 +129,11 @@ PLAN_LIMITS = {
         "queue_priority": 10,
         "max_job_duration_minutes": 30,
         "max_memory_gb": 4,
-        "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.BATCH]
+        "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.BATCH],
+        "api_rate_limit": 10,  # AJOUT: Pour billing_middleware
+        "llm_calls_per_month": 0,  # AJOUT: Pour billing_middleware
+        "max_api_calls_per_day": 100,  # AJOUT: Pour billing
+        "max_predictions_per_month": 1000  # AJOUT: Pour billing
     },
     PlanType.TRIAL.value: {
         "max_concurrent_jobs": 2,
@@ -138,7 +143,11 @@ PLAN_LIMITS = {
         "queue_priority": 30,
         "max_job_duration_minutes": 60,
         "max_memory_gb": 8,
-        "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.CPU_PRIORITY, QueueType.BATCH]
+        "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.CPU_PRIORITY, QueueType.BATCH],
+        "api_rate_limit": 60,
+        "llm_calls_per_month": 100,
+        "max_api_calls_per_day": 1000,
+        "max_predictions_per_month": 10000
     },
     PlanType.PRO.value: {
         "max_concurrent_jobs": 5,
@@ -149,7 +158,11 @@ PLAN_LIMITS = {
         "max_job_duration_minutes": 180,
         "max_memory_gb": 16,
         "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.CPU_PRIORITY, 
-                          QueueType.GPU_INFERENCE, QueueType.LLM, QueueType.BATCH]
+                          QueueType.GPU_INFERENCE, QueueType.LLM, QueueType.BATCH],
+        "api_rate_limit": 100,
+        "llm_calls_per_month": 1000,
+        "max_api_calls_per_day": 10000,
+        "max_predictions_per_month": 100000
     },
     PlanType.ENTERPRISE.value: {
         "max_concurrent_jobs": 20,
@@ -159,7 +172,11 @@ PLAN_LIMITS = {
         "queue_priority": 100,
         "max_job_duration_minutes": -1,  # Unlimited
         "max_memory_gb": 64,
-        "queues_allowed": "all"  # All queues
+        "queues_allowed": "all",  # All queues
+        "api_rate_limit": 1000,
+        "llm_calls_per_month": -1,  # Unlimited
+        "max_api_calls_per_day": -1,  # Unlimited
+        "max_predictions_per_month": -1  # Unlimited
     }
 }
 
@@ -698,7 +715,7 @@ class LocalScheduler:
     def __init__(self, config: AutoMLConfig, billing_manager: Optional[BillingManager] = None):
         self.config = config
         self.billing_manager = billing_manager
-        self.executor = ThreadPoolExecutor(max_workers=config.worker.max_workers)
+        self.executor = ThreadPoolExecutor(max_workers=config.worker.max_workers)  # Utilisation correcte
         self.active_jobs: Dict[str, JobRequest] = {}
     
     def submit_job(self, job_request: JobRequest) -> str:
