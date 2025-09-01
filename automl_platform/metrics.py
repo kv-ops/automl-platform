@@ -1,15 +1,21 @@
-"""Metrics calculation and task detection for AutoML platform."""
+"""Enhanced metrics calculation with A/B testing comparison capabilities."""
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, Tuple, List
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, log_loss, confusion_matrix, classification_report,
+    roc_auc_score, roc_curve, precision_recall_curve, auc,
+    log_loss, confusion_matrix, classification_report,
     mean_squared_error, mean_absolute_error, r2_score,
     mean_absolute_percentage_error, explained_variance_score,
     median_absolute_error, max_error
 )
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
+from io import BytesIO
+import base64
 import logging
 
 logger = logging.getLogger(__name__)
@@ -195,6 +201,365 @@ def calculate_metrics(y_true: np.ndarray,
     return metrics
 
 
+def compare_models_metrics(
+    y_true: np.ndarray,
+    y_pred_a: np.ndarray,
+    y_pred_b: np.ndarray,
+    y_proba_a: Optional[np.ndarray] = None,
+    y_proba_b: Optional[np.ndarray] = None,
+    task: str = 'classification',
+    model_names: Tuple[str, str] = ('Model A', 'Model B')
+) -> Dict[str, Any]:
+    """
+    Compare metrics between two models with statistical testing.
+    
+    Args:
+        y_true: True labels
+        y_pred_a: Predictions from model A
+        y_pred_b: Predictions from model B
+        y_proba_a: Probabilities from model A (optional)
+        y_proba_b: Probabilities from model B (optional)
+        task: Task type
+        model_names: Names of the models
+        
+    Returns:
+        Dictionary with comparison results
+    """
+    comparison = {
+        'model_a': {'name': model_names[0]},
+        'model_b': {'name': model_names[1]},
+        'comparison': {},
+        'statistical_tests': {},
+        'visualizations': {}
+    }
+    
+    # Calculate metrics for both models
+    comparison['model_a']['metrics'] = calculate_metrics(y_true, y_pred_a, y_proba_a, task)
+    comparison['model_b']['metrics'] = calculate_metrics(y_true, y_pred_b, y_proba_b, task)
+    
+    # Calculate differences
+    for metric in comparison['model_a']['metrics']:
+        if metric in comparison['model_b']['metrics']:
+            val_a = comparison['model_a']['metrics'][metric]
+            val_b = comparison['model_b']['metrics'][metric]
+            
+            if isinstance(val_a, (int, float)) and isinstance(val_b, (int, float)):
+                diff = val_b - val_a
+                comparison['comparison'][f'{metric}_diff'] = diff
+                
+                # Percentage improvement
+                if val_a != 0:
+                    pct_improvement = (diff / abs(val_a)) * 100
+                    comparison['comparison'][f'{metric}_improvement_pct'] = pct_improvement
+    
+    # Statistical significance testing
+    if task == 'classification':
+        # McNemar's test for paired binary outcomes
+        comparison['statistical_tests'] = perform_mcnemar_test(y_true, y_pred_a, y_pred_b)
+        
+        # Generate ROC curves if probabilities available
+        if y_proba_a is not None and y_proba_b is not None:
+            comparison['visualizations']['roc_curves'] = plot_roc_curves_comparison(
+                y_true, y_proba_a, y_proba_b, model_names
+            )
+            comparison['visualizations']['pr_curves'] = plot_pr_curves_comparison(
+                y_true, y_proba_a, y_proba_b, model_names
+            )
+    else:
+        # Paired t-test for regression residuals
+        residuals_a = y_true - y_pred_a
+        residuals_b = y_true - y_pred_b
+        comparison['statistical_tests'] = perform_paired_t_test(residuals_a, residuals_b)
+        
+        # Residual plots
+        comparison['visualizations']['residual_plots'] = plot_residuals_comparison(
+            y_true, y_pred_a, y_pred_b, model_names
+        )
+    
+    # Confusion matrices for classification
+    if task == 'classification':
+        cm_a = confusion_matrix(y_true, y_pred_a)
+        cm_b = confusion_matrix(y_true, y_pred_b)
+        comparison['visualizations']['confusion_matrices'] = plot_confusion_matrices_comparison(
+            cm_a, cm_b, model_names
+        )
+    
+    return comparison
+
+
+def perform_mcnemar_test(y_true: np.ndarray, y_pred_a: np.ndarray, y_pred_b: np.ndarray) -> Dict[str, float]:
+    """
+    Perform McNemar's test for paired binary classification outcomes.
+    
+    Returns:
+        Dictionary with test statistics
+    """
+    # Create contingency table
+    correct_a = (y_true == y_pred_a)
+    correct_b = (y_true == y_pred_b)
+    
+    # Count discordant pairs
+    n_01 = np.sum(correct_a & ~correct_b)  # A correct, B wrong
+    n_10 = np.sum(~correct_a & correct_b)  # A wrong, B correct
+    
+    # McNemar's test statistic
+    if n_01 + n_10 > 0:
+        statistic = (abs(n_01 - n_10) - 1) ** 2 / (n_01 + n_10)
+        p_value = 1 - stats.chi2.cdf(statistic, df=1)
+    else:
+        statistic = 0
+        p_value = 1.0
+    
+    return {
+        'test': 'McNemar',
+        'statistic': float(statistic),
+        'p_value': float(p_value),
+        'n_01': int(n_01),
+        'n_10': int(n_10),
+        'significant': p_value < 0.05
+    }
+
+
+def perform_paired_t_test(residuals_a: np.ndarray, residuals_b: np.ndarray) -> Dict[str, float]:
+    """
+    Perform paired t-test on regression residuals.
+    
+    Returns:
+        Dictionary with test statistics
+    """
+    differences = residuals_a - residuals_b
+    
+    # Paired t-test
+    statistic, p_value = stats.ttest_rel(residuals_a, residuals_b)
+    
+    # Effect size (Cohen's d for paired samples)
+    mean_diff = np.mean(differences)
+    std_diff = np.std(differences)
+    effect_size = mean_diff / std_diff if std_diff > 0 else 0
+    
+    # 95% confidence interval
+    se = std_diff / np.sqrt(len(differences))
+    ci_lower = mean_diff - 1.96 * se
+    ci_upper = mean_diff + 1.96 * se
+    
+    return {
+        'test': 'Paired t-test',
+        'statistic': float(statistic),
+        'p_value': float(p_value),
+        'effect_size': float(effect_size),
+        'mean_difference': float(mean_diff),
+        'confidence_interval': (float(ci_lower), float(ci_upper)),
+        'significant': p_value < 0.05
+    }
+
+
+def plot_roc_curves_comparison(
+    y_true: np.ndarray,
+    y_proba_a: np.ndarray,
+    y_proba_b: np.ndarray,
+    model_names: Tuple[str, str]
+) -> str:
+    """
+    Plot ROC curves comparison.
+    
+    Returns:
+        Base64 encoded plot
+    """
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Handle binary classification
+    if len(np.unique(y_true)) == 2:
+        # Get positive class probabilities
+        if len(y_proba_a.shape) > 1:
+            y_proba_a_pos = y_proba_a[:, 1]
+        else:
+            y_proba_a_pos = y_proba_a
+            
+        if len(y_proba_b.shape) > 1:
+            y_proba_b_pos = y_proba_b[:, 1]
+        else:
+            y_proba_b_pos = y_proba_b
+        
+        # Calculate ROC curves
+        fpr_a, tpr_a, _ = roc_curve(y_true, y_proba_a_pos)
+        fpr_b, tpr_b, _ = roc_curve(y_true, y_proba_b_pos)
+        
+        auc_a = auc(fpr_a, tpr_a)
+        auc_b = auc(fpr_b, tpr_b)
+        
+        # Plot
+        ax.plot(fpr_a, tpr_a, 'b-', lw=2, label=f'{model_names[0]} (AUC = {auc_a:.3f})')
+        ax.plot(fpr_b, tpr_b, 'r-', lw=2, label=f'{model_names[1]} (AUC = {auc_b:.3f})')
+        ax.plot([0, 1], [0, 1], 'k--', lw=1, label='Random')
+        
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title('ROC Curves Comparison')
+        ax.legend(loc='lower right')
+        ax.grid(True, alpha=0.3)
+    
+    # Convert to base64
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+    plt.close()
+    
+    return plot_base64
+
+
+def plot_pr_curves_comparison(
+    y_true: np.ndarray,
+    y_proba_a: np.ndarray,
+    y_proba_b: np.ndarray,
+    model_names: Tuple[str, str]
+) -> str:
+    """
+    Plot Precision-Recall curves comparison.
+    
+    Returns:
+        Base64 encoded plot
+    """
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Handle binary classification
+    if len(np.unique(y_true)) == 2:
+        # Get positive class probabilities
+        if len(y_proba_a.shape) > 1:
+            y_proba_a_pos = y_proba_a[:, 1]
+        else:
+            y_proba_a_pos = y_proba_a
+            
+        if len(y_proba_b.shape) > 1:
+            y_proba_b_pos = y_proba_b[:, 1]
+        else:
+            y_proba_b_pos = y_proba_b
+        
+        # Calculate PR curves
+        precision_a, recall_a, _ = precision_recall_curve(y_true, y_proba_a_pos)
+        precision_b, recall_b, _ = precision_recall_curve(y_true, y_proba_b_pos)
+        
+        auc_a = auc(recall_a, precision_a)
+        auc_b = auc(recall_b, precision_b)
+        
+        # Plot
+        ax.plot(recall_a, precision_a, 'b-', lw=2, label=f'{model_names[0]} (AUC = {auc_a:.3f})')
+        ax.plot(recall_b, precision_b, 'r-', lw=2, label=f'{model_names[1]} (AUC = {auc_b:.3f})')
+        
+        ax.set_xlabel('Recall')
+        ax.set_ylabel('Precision')
+        ax.set_title('Precision-Recall Curves Comparison')
+        ax.legend(loc='lower left')
+        ax.grid(True, alpha=0.3)
+    
+    # Convert to base64
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+    plt.close()
+    
+    return plot_base64
+
+
+def plot_confusion_matrices_comparison(
+    cm_a: np.ndarray,
+    cm_b: np.ndarray,
+    model_names: Tuple[str, str]
+) -> str:
+    """
+    Plot confusion matrices comparison.
+    
+    Returns:
+        Base64 encoded plot
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Model A
+    sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=ax1, cbar_kws={'label': 'Count'})
+    ax1.set_title(f'{model_names[0]} - Confusion Matrix')
+    ax1.set_ylabel('True Label')
+    ax1.set_xlabel('Predicted Label')
+    
+    # Model B
+    sns.heatmap(cm_b, annot=True, fmt='d', cmap='Greens', ax=ax2, cbar_kws={'label': 'Count'})
+    ax2.set_title(f'{model_names[1]} - Confusion Matrix')
+    ax2.set_ylabel('True Label')
+    ax2.set_xlabel('Predicted Label')
+    
+    plt.tight_layout()
+    
+    # Convert to base64
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+    plt.close()
+    
+    return plot_base64
+
+
+def plot_residuals_comparison(
+    y_true: np.ndarray,
+    y_pred_a: np.ndarray,
+    y_pred_b: np.ndarray,
+    model_names: Tuple[str, str]
+) -> str:
+    """
+    Plot residuals comparison for regression.
+    
+    Returns:
+        Base64 encoded plot
+    """
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+    
+    residuals_a = y_true - y_pred_a
+    residuals_b = y_true - y_pred_b
+    
+    # Model A - Actual vs Predicted
+    ax1.scatter(y_pred_a, y_true, alpha=0.5, color='blue', s=20)
+    ax1.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'r--', lw=2)
+    ax1.set_xlabel('Predicted')
+    ax1.set_ylabel('Actual')
+    ax1.set_title(f'{model_names[0]} - Actual vs Predicted')
+    ax1.grid(True, alpha=0.3)
+    
+    # Model B - Actual vs Predicted
+    ax2.scatter(y_pred_b, y_true, alpha=0.5, color='green', s=20)
+    ax2.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'r--', lw=2)
+    ax2.set_xlabel('Predicted')
+    ax2.set_ylabel('Actual')
+    ax2.set_title(f'{model_names[1]} - Actual vs Predicted')
+    ax2.grid(True, alpha=0.3)
+    
+    # Model A - Residuals
+    ax3.scatter(y_pred_a, residuals_a, alpha=0.5, color='blue', s=20)
+    ax3.axhline(y=0, color='r', linestyle='--', lw=2)
+    ax3.set_xlabel('Predicted')
+    ax3.set_ylabel('Residuals')
+    ax3.set_title(f'{model_names[0]} - Residual Plot')
+    ax3.grid(True, alpha=0.3)
+    
+    # Model B - Residuals
+    ax4.scatter(y_pred_b, residuals_b, alpha=0.5, color='green', s=20)
+    ax4.axhline(y=0, color='r', linestyle='--', lw=2)
+    ax4.set_xlabel('Predicted')
+    ax4.set_ylabel('Residuals')
+    ax4.set_title(f'{model_names[1]} - Residual Plot')
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Convert to base64
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+    plt.close()
+    
+    return plot_base64
+
+
 def get_scorer(task: str, scoring: Optional[str] = None):
     """
     Get the appropriate scorer for the task.
@@ -252,3 +617,36 @@ def calculate_feature_importance_scores(feature_names: list,
     }
     
     return importance_dict
+
+
+def calculate_model_confidence(
+    y_proba: np.ndarray,
+    threshold: float = 0.7
+) -> Dict[str, Any]:
+    """
+    Calculate model confidence metrics.
+    
+    Args:
+        y_proba: Predicted probabilities
+        threshold: Confidence threshold
+        
+    Returns:
+        Dictionary with confidence metrics
+    """
+    if len(y_proba.shape) > 1:
+        # Multi-class: use max probability
+        max_proba = np.max(y_proba, axis=1)
+    else:
+        # Binary: use as is
+        max_proba = y_proba
+    
+    confidence_metrics = {
+        'mean_confidence': float(np.mean(max_proba)),
+        'std_confidence': float(np.std(max_proba)),
+        'min_confidence': float(np.min(max_proba)),
+        'max_confidence': float(np.max(max_proba)),
+        'high_confidence_ratio': float(np.mean(max_proba >= threshold)),
+        'low_confidence_ratio': float(np.mean(max_proba < threshold))
+    }
+    
+    return confidence_metrics
