@@ -30,7 +30,7 @@ Production-ready AutoML platform with enterprise MLOps capabilities including mo
 - **Model Registry**: MLflow-based versioning with promotion stages
 - **A/B Testing**: Built-in statistical significance testing
 - **Automated Retraining**: Schedule-based and drift-triggered
-- **Model Export**: ONNX (with quantization), PMML, TFLite, CoreML
+- **Model Export**: ONNX (with quantization), TFLite, CoreML
 - **Edge Deployment**: Optimized packages for IoT and mobile
 
 ### Enterprise Features
@@ -68,32 +68,29 @@ Production-ready AutoML platform with enterprise MLOps capabilities including mo
 git clone https://github.com/your-org/automl-platform.git
 cd automl-platform
 
-# Run the installation script
-./install_mlops.sh --full --airflow
-
-# Or manual installation
+# Installation rapide (recommandé)
 python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements-minimal.txt
+
+# Or use the installation script
+./install_mlops.sh
 ```
 
 ### Installation Options
 
 ```bash
-# Basic MLOps installation
-./install_mlops.sh
+# Basic MLOps installation (recommended)
+pip install -r requirements-minimal.txt
 
-# With GPU support
-./install_mlops.sh --gpu
+# Full installation (may have conflicts)
+pip install -r requirements.txt
 
-# With Airflow for orchestration
-./install_mlops.sh --airflow
+# GPU support
+pip install -r requirements-gpu.txt
 
-# With Prefect (alternative to Airflow)
-./install_mlops.sh --prefect
-
-# Complete installation
-./install_mlops.sh --full --airflow --gpu
+# With installation script
+./install_mlops.sh [--gpu] [--airflow|--prefect]
 ```
 
 ## Quick Start
@@ -192,24 +189,29 @@ Development → Staging → A/B Test → Production → Monitoring → Retrainin
 automl-platform/
 ├── app.py                          # Main FastAPI application
 ├── config.yaml                     # Configuration file
-├── requirements.txt                # Python dependencies
-├── install_mlops.sh               # Installation script
-├── DEPLOYMENT_GUIDE.md            # Deployment documentation
-├── automl_platform/               # Main package
-│   ├── orchestrator.py           # AutoML orchestrator (enhanced)
-│   ├── mlflow_registry.py        # MLflow integration
-│   ├── retraining_service.py     # Automated retraining
-│   ├── export_service.py         # Model export (ONNX/PMML)
-│   ├── data_prep.py              # Data preprocessing
-│   ├── model_selection.py        # Model selection & HPO
-│   ├── monitoring.py             # Drift detection
-│   ├── api/                      # API components
-│   │   ├── mlops_endpoints.py   # MLOps REST endpoints
-│   │   ├── billing.py           # Billing & subscriptions
-│   │   └── llm_endpoints.py     # LLM endpoints
-│   └── examples/                 # Examples
+├── requirements.txt                # Full dependencies (reference)
+├── requirements-minimal.txt       # Minimal dependencies (use this)
+├── requirements-gpu.txt           # GPU dependencies
+├── install_mlops.sh              # Installation script
+├── .gitignore                     # Git ignore file
+├── DEPLOYMENT_GUIDE.md           # Deployment documentation
+├── automl_platform/              # Main package
+│   ├── orchestrator.py          # AutoML orchestrator (enhanced)
+│   ├── mlflow_registry.py       # MLflow integration
+│   ├── retraining_service.py    # Automated retraining
+│   ├── export_service.py        # Model export (ONNX/PMML)
+│   ├── data_prep.py             # Data preprocessing
+│   ├── model_selection.py       # Model selection & HPO
+│   ├── monitoring.py            # Drift detection
+│   ├── scheduler.py             # Job scheduling with Celery
+│   ├── api/                     # API components
+│   │   ├── mlops_endpoints.py  # MLOps REST endpoints
+│   │   ├── billing.py          # Billing & subscriptions
+│   │   ├── billing-middleware.py # Billing middleware
+│   │   └── llm_endpoints.py    # LLM endpoints
+│   └── examples/                # Examples
 │       └── mlops_integration.py # Complete MLOps workflow
-└── tests/                        # Test suite
+└── tests/                       # Test suite
 ```
 
 ## API Documentation
@@ -239,7 +241,7 @@ Access interactive API docs at `http://localhost:8000/docs`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/v1/mlops/models/export` | Export model (ONNX/PMML) |
+| POST | `/api/v1/mlops/models/export` | Export model (ONNX) |
 | GET | `/api/v1/mlops/models/export/{name}/{version}/download` | Download exported |
 
 #### Automated Retraining
@@ -283,7 +285,7 @@ export:
 
 # Workflow orchestration
 orchestration:
-  backend: "airflow"  # or "prefect"
+  backend: "prefect"  # or "airflow"
   dag_directory: "~/airflow/dags"
 ```
 
@@ -327,7 +329,7 @@ billing:
 
 ```bash
 # Install dev dependencies
-pip install -r requirements-dev.txt
+pip install pytest black flake8 mypy
 
 # Run tests
 pytest tests/ -v --cov=automl_platform
