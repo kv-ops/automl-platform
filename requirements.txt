@@ -1,7 +1,8 @@
 # ==============================================================================
-# AutoML Platform Requirements - Production Ready & Conflict-Free
+# AutoML Platform Requirements - Production Ready with MLOps
 # Python >= 3.8 required
 # All dependencies tested for compatibility
+# Last updated: 2024
 # ==============================================================================
 
 # ---------- Core ML Dependencies ----------
@@ -21,13 +22,33 @@ xgboost>=2.0.0,<3.0.0
 lightgbm>=4.0.0,<5.0.0
 catboost>=1.2.0,<2.0.0
 
-# ---------- Neural Networks (Latest Compatible Versions) ----------
+# ---------- Neural Networks ----------
 torch>=2.1.0,<3.0.0
 torchvision>=0.16.0,<1.0.0
-# Alternative to pytorch-tabnet - more actively maintained
 torch-tb-profiler>=0.4.0
-# For TabNet alternative, use sklearn-based implementation
 tensorflow>=2.15.0,<3.0.0
+
+# ---------- MLOps & Model Registry ----------
+mlflow>=2.9.0,<3.0.0
+mlflow-skinny>=2.9.0  # Lighter alternative if full MLflow not needed
+
+# ---------- Model Export & Deployment ----------
+onnx>=1.15.0,<2.0.0
+onnxruntime>=1.16.0,<2.0.0
+skl2onnx>=1.16.0,<2.0.0
+onnxconverter-common>=1.14.0
+sklearn2pmml>=0.100.0,<1.0.0
+jpmml-sklearn>=1.7.0  # For PMML validation
+
+# ---------- Workflow Orchestration (Choose One) ----------
+# Option 1: Airflow (Comment out if using Prefect)
+apache-airflow>=2.8.0,<3.0.0
+apache-airflow-providers-celery>=3.5.0
+
+# Option 2: Prefect (Uncomment if preferred over Airflow)
+# prefect>=2.14.0,<3.0.0
+# prefect-aws>=0.4.0  # If using AWS
+# prefect-gcp>=0.5.0  # If using GCP
 
 # ---------- Time Series ----------
 prophet>=1.1.0
@@ -60,24 +81,33 @@ tiktoken>=0.5.1
 minio>=7.2.0
 boto3>=1.29.0
 redis>=5.0.0
+s3fs>=2023.12.0  # For S3 filesystem operations
 
 # ---------- Monitoring & Drift Detection ----------
 prometheus-client>=0.19.0
+evidently>=0.4.0  # For drift detection
+alibi-detect>=0.11.0  # Alternative drift detection
 
 # ---------- UI/Dashboard ----------
 streamlit>=1.29.0
 plotly>=5.18.0
+dash>=2.14.0  # Alternative to Streamlit
+gradio>=4.0.0  # For ML demos
 
 # ---------- Worker/Queue Management ----------
 celery>=5.3.0
-redis>=5.0.0
+kombu>=5.3.0  # Message broker abstraction
+flower>=2.0.0  # Celery monitoring
 
 # ---------- Model Explainability ----------
 shap>=0.43.0
+lime>=0.2.0  # Local interpretable model explanations
+eli5>=0.13.0  # Debug ML classifiers
 
 # ---------- Visualization ----------
 matplotlib>=3.7.0,<4.0.0
 seaborn>=0.12.0,<1.0.0
+altair>=5.0.0  # Declarative visualization
 
 # ---------- Data Formats & Connectors ----------
 pyarrow>=14.0.0
@@ -86,48 +116,111 @@ sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 pymongo>=4.5.0
 
-# ---------- Cloud Connectors (Optional) ----------
+# ---------- Cloud Connectors ----------
 # Snowflake
 snowflake-connector-python>=3.0.0
 
 # BigQuery
 google-cloud-bigquery>=3.11.0
+google-cloud-storage>=2.10.0
 
 # Databricks
 databricks-sql-connector>=2.9.0
 
-# ---------- Streaming (Optional) ----------
+# Azure
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
+
+# ---------- Streaming ----------
 kafka-python>=2.0.2
 pulsar-client>=3.3.0
+confluent-kafka>=2.3.0  # Alternative Kafka client
 
-# ---------- Infrastructure (Optional) ----------
+# ---------- Infrastructure ----------
 docker>=6.1.0
 kubernetes>=27.2.0
 
 # ---------- Web & HTTP ----------
 requests>=2.31.0
 aiohttp>=3.9.0
+httpx>=0.25.0  # Modern async HTTP client
 
-# ---------- Security ----------
+# ---------- Security & Authentication ----------
 cryptography>=41.0.0
 pyjwt>=2.8.0
+python-keycloak>=3.7.0  # For SSO with Keycloak
+authlib>=1.2.0  # OAuth and OpenID Connect
 
 # ---------- Utilities ----------
 tqdm>=4.66.0
 python-dotenv>=1.0.0
 click>=8.1.0
 tabulate>=0.9.0
+tenacity>=8.2.0  # Retry logic
+schedule>=1.2.0  # Job scheduling
 
-# ---------- Development & Testing (Optional) ----------
+# ---------- Data Quality & Validation ----------
+great-expectations>=0.18.0
+pandera>=0.17.0  # DataFrame validation
+pydantic>=2.5.0  # Data validation
+
+# ---------- Performance & Optimization ----------
+numba>=0.58.0
+ray>=2.8.0  # Distributed computing
+dask>=2023.12.0  # Parallel computing
+modin>=0.25.0  # Faster pandas operations
+
+# ---------- Testing ----------
 pytest>=7.4.0
+pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
+pytest-mock>=3.12.0
+hypothesis>=6.92.0  # Property-based testing
+
+# ---------- Code Quality ----------
 black>=23.11.0
 flake8>=6.1.0
+mypy>=1.7.0
+pylint>=3.0.0
+isort>=5.13.0
 
-# ---------- Performance ----------
-numba>=0.58.0
+# ---------- Documentation ----------
+sphinx>=7.2.0
+sphinx-rtd-theme>=2.0.0
+mkdocs>=1.5.0
+mkdocs-material>=9.5.0
 
-# ---------- Testing Dependencies ----------
-pytest>=7.4.0
-pytest-cov>=2.12.0
-pytest-asyncio>=0.21.0
+# ---------- Notebook Support ----------
+jupyter>=1.0.0
+jupyterlab>=4.0.0
+ipywidgets>=8.1.0
+nbconvert>=7.12.0
+
+# ---------- Edge Deployment (Optional) ----------
+onnxruntime-extensions>=0.10.0  # Custom operators for ONNX
+tf2onnx>=1.15.0  # TensorFlow to ONNX conversion
+coremltools>=7.1  # For iOS deployment
+tflite-runtime>=2.14.0  # TensorFlow Lite runtime
+
+# ---------- Experiment Tracking (Alternative to MLflow) ----------
+# wandb>=0.16.0  # Weights & Biases
+# neptune-client>=1.8.0  # Neptune.ai
+# comet-ml>=3.35.0  # Comet.ml
+
+# ---------- Feature Store (Optional) ----------
+# feast>=0.35.0  # Feature store for ML
+# tecton-client>=0.7.0  # Tecton feature platform
+
+# ---------- AutoML Alternatives (Optional) ----------
+# autogluon>=1.0.0  # AutoML from AWS
+# h2o>=3.44.0  # H2O AutoML
+# auto-sklearn>=0.15.0  # Auto-sklearn
+
+# ---------- Model Serving (Optional) ----------
+# bentoml>=1.1.0  # Model serving framework
+# seldon-core>=1.17.0  # ML deployment platform
+# kserve>=0.11.0  # Kubernetes model serving
+
+# ---------- Data Versioning (Optional) ----------
+# dvc>=3.30.0  # Data version control
+# lakeFS>=1.0.0  # Data lake version control
