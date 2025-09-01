@@ -37,16 +37,16 @@ onnx>=1.15.0,<2.0.0
 onnxruntime>=1.16.0,<2.0.0
 skl2onnx>=1.16.0,<2.0.0
 onnxconverter-common>=1.14.0
-sklearn2pmml>=0.100.0,<1.0.0
-jpmml-sklearn>=1.7.0  # For PMML validation
+sklearn2pmml>=0.95.0,<1.0.0
+# Note: jpmml-sklearn is a Java library, not needed for Python
 
 # ---------- Workflow Orchestration (Choose One) ----------
 # Option 1: Airflow (Comment out if using Prefect)
-apache-airflow>=2.8.0,<3.0.0
-apache-airflow-providers-celery>=3.5.0
+# apache-airflow>=2.8.0,<3.0.0
+# apache-airflow-providers-celery>=3.5.0
 
 # Option 2: Prefect (Uncomment if preferred over Airflow)
-# prefect>=2.14.0,<3.0.0
+prefect>=2.14.0,<3.0.0
 # prefect-aws>=0.4.0  # If using AWS
 # prefect-gcp>=0.5.0  # If using GCP
 
