@@ -1,4 +1,4 @@
-"""Enhanced configuration management for AutoML platform with Storage, Monitoring, Workers, and BILLING."""
+"""Enhanced configuration management for AutoML platform with Storage, Monitoring, Workers, Billing, and RGPD."""
 
 import yaml
 from pathlib import Path
@@ -105,6 +105,120 @@ class BillingConfig:
     # Trial settings
     trial_duration_days: int = 14
     trial_requires_card: bool = False
+
+
+@dataclass
+class RGPDConfig:
+    """RGPD/GDPR compliance configuration"""
+    enabled: bool = True
+    
+    # Data retention policies (in days)
+    retention_periods: Dict[str, int] = field(default_factory=lambda: {
+        "basic_data": 365 * 3,  # 3 years
+        "contact_data": 365 * 3,
+        "financial_data": 365 * 7,  # 7 years for financial records
+        "behavioral_data": 365,  # 1 year
+        "technical_data": 90,  # 3 months
+        "sensitive_data": 365,  # 1 year with explicit consent
+        "ml_predictions": 180,  # 6 months
+        "audit_logs": 365 * 2,  # 2 years
+        "consent_records": 365 * 5  # 5 years
+    })
+    
+    # Consent management
+    consent_required_for: List[str] = field(default_factory=lambda: [
+        "marketing",
+        "analytics",
+        "profiling",
+        "automated_decisions",
+        "third_party_sharing",
+        "data_processing"
+    ])
+    
+    consent_renewal_days: int = 365  # Renew consent annually
+    consent_reminder_days: int = 30  # Remind 30 days before expiry
+    
+    # Data subject rights
+    enable_data_access: bool = True  # Article 15
+    enable_rectification: bool = True  # Article 16
+    enable_erasure: bool = True  # Article 17
+    enable_restriction: bool = True  # Article 18
+    enable_portability: bool = True  # Article 20
+    enable_objection: bool = True  # Article 21
+    
+    # Processing
+    request_processing_days: int = 30  # Legal requirement
+    request_extension_days: int = 60  # Maximum extension
+    identity_verification_required: bool = True
+    
+    # Data protection
+    encryption_enabled: bool = True
+    encryption_algorithm: str = "AES-256"
+    pseudonymization_enabled: bool = True
+    anonymization_threshold_days: int = 365 * 2  # Anonymize after 2 years
+    
+    # Data breach
+    breach_notification_hours: int = 72  # Notify authorities within 72 hours
+    breach_user_notification: bool = True
+    
+    # Third-party data sharing
+    third_party_processors: List[Dict[str, str]] = field(default_factory=lambda: [
+        {"name": "AWS", "purpose": "infrastructure", "location": "EU"},
+        {"name": "Stripe", "purpose": "payments", "location": "EU"},
+        {"name": "SendGrid", "purpose": "email", "location": "EU"}
+    ])
+    
+    # Data mapping
+    data_categories: List[str] = field(default_factory=lambda: [
+        "identification",
+        "contact",
+        "financial",
+        "behavioral",
+        "technical",
+        "preferences",
+        "ml_data"
+    ])
+    
+    # Legal basis
+    legal_basis_for_processing: Dict[str, str] = field(default_factory=lambda: {
+        "registration": "contract",
+        "ml_training": "legitimate_interest",
+        "marketing": "consent",
+        "analytics": "legitimate_interest",
+        "security": "legal_obligation",
+        "payments": "contract"
+    })
+    
+    # Privacy by design
+    privacy_by_default: bool = True
+    data_minimization: bool = True
+    purpose_limitation: bool = True
+    
+    # Compliance reporting
+    enable_compliance_reports: bool = True
+    compliance_report_frequency: str = "monthly"  # "daily", "weekly", "monthly", "quarterly"
+    
+    # DPO (Data Protection Officer) contact
+    dpo_email: Optional[str] = os.getenv("DPO_EMAIL", "dpo@automl-platform.com")
+    dpo_name: Optional[str] = "Data Protection Officer"
+    
+    # Geographic restrictions
+    restricted_countries: List[str] = field(default_factory=list)  # Countries where service is not available
+    eu_users_only: bool = False  # Restrict to EU users only
+    
+    # Audit trail
+    audit_all_data_access: bool = True
+    audit_retention_days: int = 365 * 2
+    
+    # Cookie policy
+    cookie_consent_required: bool = True
+    essential_cookies_only: bool = False
+    cookie_retention_days: Dict[str, int] = field(default_factory=lambda: {
+        "session": 0,  # Session cookies
+        "persistent": 30,  # 30 days
+        "analytics": 365,  # 1 year
+        "marketing": 90  # 3 months
+    })
 
 
 @dataclass
@@ -307,7 +421,7 @@ class APIConfig:
     jwt_expiration_minutes: int = 60
     
     # SSO Support
-    enable_sso: bool = False
+    enable_sso: bool = True  # Changed to True for full SSO support
     sso_provider: str = "keycloak"  # "keycloak", "auth0", "okta"
     sso_client_id: Optional[str] = os.getenv("SSO_CLIENT_ID")
     sso_client_secret: Optional[str] = os.getenv("SSO_CLIENT_SECRET")
@@ -346,7 +460,8 @@ class AutoMLConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
-    billing: BillingConfig = field(default_factory=BillingConfig)  # NEW: Billing configuration
+    billing: BillingConfig = field(default_factory=BillingConfig)
+    rgpd: RGPDConfig = field(default_factory=RGPDConfig)  # NEW: RGPD configuration
     
     # General settings
     environment: str = "development"  # "development", "staging", "production"
@@ -461,6 +576,30 @@ class AutoMLConfig:
             return True
         return current_usage < quota
     
+    def check_rgpd_consent(self, user_id: str, consent_type: str) -> bool:
+        """Check if user has given RGPD consent"""
+        if not self.rgpd.enabled:
+            return True
+        
+        # This would check actual consent records
+        # Simplified for demonstration
+        return consent_type not in self.rgpd.consent_required_for
+    
+    def get_retention_period(self, data_category: str) -> int:
+        """Get retention period for data category"""
+        return self.rgpd.retention_periods.get(data_category, 365)
+    
+    def is_erasure_allowed(self, data_category: str) -> bool:
+        """Check if data can be erased"""
+        if not self.rgpd.enable_erasure:
+            return False
+        
+        # Some data must be retained for legal reasons
+        if data_category == "financial_data":
+            return False  # Must retain for tax purposes
+        
+        return True
+    
     @classmethod
     def from_yaml(cls, filepath: str) -> "AutoMLConfig":
         """Load configuration from YAML file with nested configs."""
@@ -487,6 +626,9 @@ class AutoMLConfig:
             if 'billing' in config_dict and isinstance(config_dict['billing'], dict):
                 config_dict['billing'] = BillingConfig(**config_dict['billing'])
             
+            if 'rgpd' in config_dict and isinstance(config_dict['rgpd'], dict):
+                config_dict['rgpd'] = RGPDConfig(**config_dict['rgpd'])  # NEW
+            
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
                 config_dict['algorithms'] = [config_dict['algorithms']]
@@ -498,7 +640,7 @@ class AutoMLConfig:
         config_dict = asdict(self)
         
         # Convert dataclasses to dicts for YAML serialization
-        for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing']:
+        for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 'rgpd']:
             if key in config_dict and hasattr(config_dict[key], '__dict__'):
                 config_dict[key] = asdict(config_dict[key])
         
@@ -540,6 +682,16 @@ class AutoMLConfig:
             if self.billing.enabled:
                 assert self.billing.plan_type in ["free", "trial", "pro", "enterprise"], f"Invalid plan type: {self.billing.plan_type}"
             
+            # Validate RGPD config
+            if self.rgpd.enabled:
+                assert self.rgpd.request_processing_days <= 30, "GDPR requires processing within 30 days"
+                assert self.rgpd.breach_notification_hours <= 72, "GDPR requires breach notification within 72 hours"
+                assert self.rgpd.consent_renewal_days > 0, "Consent renewal period must be positive"
+                
+                # Validate retention periods
+                for category, days in self.rgpd.retention_periods.items():
+                    assert days > 0, f"Retention period for {category} must be positive"
+            
             # Create necessary directories
             Path(self.output_dir).mkdir(parents=True, exist_ok=True)
             if self.storage.backend == "local":
@@ -567,7 +719,8 @@ class AutoMLConfig:
                 "hpo_n_iter": 10,
                 "max_models_to_train": 10,
                 "worker.max_workers": 2,
-                "billing.plan_type": "trial"
+                "billing.plan_type": "trial",
+                "rgpd.enabled": False  # Disabled in dev for easier testing
             },
             "staging": {
                 "debug": False,
@@ -575,7 +728,8 @@ class AutoMLConfig:
                 "hpo_n_iter": 30,
                 "max_models_to_train": 30,
                 "worker.max_workers": 4,
-                "billing.plan_type": "pro"
+                "billing.plan_type": "pro",
+                "rgpd.enabled": True
             },
             "production": {
                 "debug": False,
@@ -585,7 +739,9 @@ class AutoMLConfig:
                 "worker.max_workers": 8,
                 "monitoring.enabled": True,
                 "monitoring.alerting_enabled": True,
-                "billing.enable_metering": True
+                "billing.enable_metering": True,
+                "rgpd.enabled": True,
+                "rgpd.identity_verification_required": True
             }
         }
         
