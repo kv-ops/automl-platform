@@ -80,12 +80,18 @@ pip install --upgrade pip setuptools wheel
 
 # Install core requirements
 echo -e "\n${YELLOW}Installing core MLOps dependencies...${NC}"
-pip install --no-cache-dir \
-    mlflow>=2.9.0 \
-    onnx>=1.15.0 \
-    onnxruntime>=1.16.0 \
-    skl2onnx>=1.16.0 \
-    sklearn2pmml>=0.100.0
+
+if [ "$INSTALL_FULL" = true ]; then
+    echo -e "${YELLOW}Installing from requirements-minimal.txt...${NC}"
+    pip install --no-cache-dir -r requirements-minimal.txt
+else
+    # Install only essential MLOps packages
+    pip install --no-cache-dir \
+        mlflow>=2.9.0 \
+        onnx>=1.15.0 \
+        onnxruntime>=1.16.0 \
+        skl2onnx>=1.16.0
+fi
 
 echo -e "${GREEN}✓ Core MLOps dependencies installed${NC}"
 
@@ -108,9 +114,7 @@ if [ "$INSTALL_AIRFLOW" = true ]; then
     
 elif [ "$INSTALL_PREFECT" = true ]; then
     echo -e "\n${YELLOW}Installing Prefect...${NC}"
-    pip install --no-cache-dir \
-        prefect>=2.14.0 \
-        prefect-aws>=0.4.0
+    pip install --no-cache-dir prefect>=2.14.0
     
     echo -e "${GREEN}✓ Prefect installed${NC}"
     echo -e "${YELLOW}  Run 'prefect server start' to start Prefect${NC}"
@@ -119,23 +123,8 @@ fi
 # Install GPU dependencies if requested
 if [ "$INSTALL_GPU" = true ]; then
     echo -e "\n${YELLOW}Installing GPU dependencies...${NC}"
-    pip install --no-cache-dir \
-        torch==2.1.0+cu118 \
-        torchvision==0.16.0+cu118 \
-        --extra-index-url https://download.pytorch.org/whl/cu118
-    
-    pip install --no-cache-dir \
-        onnxruntime-gpu>=1.16.0 \
-        cupy-cuda11x>=12.3.0
-    
+    pip install --no-cache-dir -r requirements-gpu.txt
     echo -e "${GREEN}✓ GPU dependencies installed${NC}"
-fi
-
-# Install full requirements if requested
-if [ "$INSTALL_FULL" = true ]; then
-    echo -e "\n${YELLOW}Installing full requirements...${NC}"
-    pip install --no-cache-dir -r requirements.txt
-    echo -e "${GREEN}✓ All requirements installed${NC}"
 fi
 
 # Setup MLflow
@@ -187,7 +176,7 @@ cat > start_api.sh << 'EOF'
 #!/bin/bash
 echo "Starting AutoML API..."
 source venv/bin/activate
-uvicorn automl_platform.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
 EOF
 chmod +x start_api.sh
 
