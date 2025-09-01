@@ -1,313 +1,271 @@
 """
-MLflow Registry - Model Registry and Versioning with A/B Testing
-================================================================
+MLflow Model Registry Integration
+==================================
 Place in: automl_platform/mlflow_registry.py
 
-Complete MLflow integration for model registry, versioning, and A/B testing.
+Provides MLflow model registry with A/B testing support.
 """
 
-import os
-import json
+import mlflow
+import mlflow.sklearn
+from mlflow.tracking import MlflowClient
+from mlflow.models import ModelSignature, infer_signature
+from typing import Dict, Any, Optional, List
 import logging
-import pickle
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime
-from dataclasses import dataclass, field
+import os
 from enum import Enum
-import uuid
-import numpy as np
+from datetime import datetime
 import pandas as pd
-from pathlib import Path
+import numpy as np
 
-# MLflow imports
-try:
-    import mlflow
-    from mlflow.tracking import MlflowClient
-    from mlflow.models import infer_signature
-    import mlflow.sklearn
-    import mlflow.xgboost
-    import mlflow.lightgbm
-    import mlflow.pytorch
-    MLFLOW_AVAILABLE = True
-except ImportError:
-    MLFLOW_AVAILABLE = False
-    logging.warning("MLflow not installed. Install with: pip install mlflow")
-
-from scipy import stats
+# Import A/B testing service
+from .ab_testing import ABTestingService
 
 logger = logging.getLogger(__name__)
 
 
 class ModelStage(Enum):
-    """Model lifecycle stages"""
-    DEVELOPMENT = "Development"
+    """Model stages in MLflow"""
+    NONE = "None"
     STAGING = "Staging"
     PRODUCTION = "Production"
     ARCHIVED = "Archived"
-
-
-@dataclass
-class ModelVersion:
-    """Model version metadata"""
-    model_name: str
-    version: int
-    run_id: str
-    stage: ModelStage
-    metrics: Dict[str, float]
-    params: Dict[str, Any]
-    created_at: datetime
-    updated_at: datetime
-    created_by: str
-    description: str = ""
-    tags: Dict[str, str] = field(default_factory=dict)
-    production_metrics: Optional[Dict[str, float]] = None
-    drift_score: Optional[float] = None
-    traffic_percentage: float = 0.0
-    is_champion: bool = False
-    is_challenger: bool = False
+    DEVELOPMENT = "Development"
 
 
 class MLflowRegistry:
-    """MLflow-based model registry and versioning"""
+    """MLflow model registry management."""
     
-    def __init__(self, config, tracking_uri: Optional[str] = None):
+    def __init__(self, config):
+        """
+        Initialize MLflow registry.
+        
+        Args:
+            config: AutoML configuration
+        """
         self.config = config
         
-        if MLFLOW_AVAILABLE:
-            # Set tracking URI from config or environment
-            self.tracking_uri = (
-                tracking_uri or 
-                getattr(config, 'mlflow_tracking_uri', None) or 
-                os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-            )
-            mlflow.set_tracking_uri(self.tracking_uri)
-            
-            # Initialize client
-            self.client = MlflowClient()
-            
-            # Set experiment
-            tenant_id = getattr(config, 'tenant_id', 'default')
-            experiment_name = f"automl_{tenant_id}"
-            
-            try:
-                self.experiment_id = mlflow.create_experiment(experiment_name)
-            except:
-                experiment = mlflow.get_experiment_by_name(experiment_name)
-                self.experiment_id = experiment.experiment_id if experiment else None
-            
-            if experiment_name:
-                mlflow.set_experiment(experiment_name)
-                
-            logger.info(f"MLflow registry initialized with tracking URI: {self.tracking_uri}")
-        else:
-            logger.warning("MLflow not available, using local registry")
-            self.client = None
-            self.experiment_id = None
-            self.local_registry = {}  # Fallback storage
+        # Set tracking URI
+        tracking_uri = getattr(config, 'mlflow_tracking_uri', None) or os.getenv('MLFLOW_TRACKING_URI', 'sqlite:///mlflow.db')
+        mlflow.set_tracking_uri(tracking_uri)
+        
+        # Initialize client
+        self.client = MlflowClient()
+        
+        # Set experiment
+        experiment_name = getattr(config, 'mlflow_experiment_name', 'automl_experiments')
+        mlflow.set_experiment(experiment_name)
+        
+        logger.info(f"MLflow registry initialized with tracking URI: {tracking_uri}")
     
-    def register_model(self, 
-                      model: Any,
-                      model_name: str,
-                      metrics: Dict[str, float],
-                      params: Dict[str, Any],
-                      X_sample: Optional[pd.DataFrame] = None,
-                      y_sample: Optional[pd.Series] = None,
-                      description: str = "",
-                      tags: Dict[str, str] = None) -> ModelVersion:
-        """Register a model in MLflow"""
+    def register_model(self,
+                       model: Any,
+                       model_name: str,
+                       metrics: Dict[str, float] = None,
+                       params: Dict[str, Any] = None,
+                       X_sample: pd.DataFrame = None,
+                       y_sample: pd.Series = None,
+                       description: str = "",
+                       tags: Dict[str, str] = None) -> Any:
+        """
+        Register model in MLflow.
         
-        if not MLFLOW_AVAILABLE:
-            return self._register_local(model, model_name, metrics, params, description, tags)
-        
+        Args:
+            model: Trained model
+            model_name: Name for the model
+            metrics: Model metrics
+            params: Model parameters
+            X_sample: Sample input for signature
+            y_sample: Sample output for signature
+            description: Model description
+            tags: Additional tags
+            
+        Returns:
+            Model version object
+        """
         with mlflow.start_run() as run:
             # Log parameters
-            for key, value in params.items():
-                if value is not None:
-                    mlflow.log_param(key, str(value)[:250])  # MLflow param limit
+            if params:
+                for key, value in params.items():
+                    mlflow.log_param(key, value)
             
             # Log metrics
-            for key, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    mlflow.log_metric(key, value)
+            if metrics:
+                for key, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        mlflow.log_metric(key, value)
             
             # Log tags
             if tags:
                 for key, value in tags.items():
                     mlflow.set_tag(key, value)
             
-            # Add description as tag
-            if description:
-                mlflow.set_tag("description", description)
-            
-            # Infer signature if samples provided
+            # Infer signature if sample data provided
             signature = None
             if X_sample is not None and y_sample is not None:
                 try:
-                    signature = infer_signature(X_sample, y_sample)
+                    predictions = model.predict(X_sample)
+                    signature = infer_signature(X_sample, predictions)
                 except:
-                    pass
+                    logger.warning("Could not infer model signature")
             
-            # Log model based on type
-            model_type = type(model).__name__
-            model_module = str(type(model).__module__)
+            # Log model
+            mlflow.sklearn.log_model(
+                sk_model=model,
+                artifact_path="model",
+                signature=signature,
+                registered_model_name=model_name
+            )
             
-            try:
-                if "sklearn" in model_module:
-                    mlflow.sklearn.log_model(
-                        model, 
-                        "model",
-                        signature=signature,
-                        registered_model_name=model_name
-                    )
-                elif "xgboost" in model_module:
-                    mlflow.xgboost.log_model(
-                        model,
-                        "model",
-                        signature=signature,
-                        registered_model_name=model_name
-                    )
-                elif "lightgbm" in model_module:
-                    mlflow.lightgbm.log_model(
-                        model,
-                        "model",
-                        signature=signature,
-                        registered_model_name=model_name
-                    )
-                elif "torch" in model_module:
-                    mlflow.pytorch.log_model(
-                        model,
-                        "model",
-                        signature=signature,
-                        registered_model_name=model_name
-                    )
-                else:
-                    # Generic model logging
-                    mlflow.pyfunc.log_model(
-                        "model",
-                        python_model=model,
-                        signature=signature,
-                        registered_model_name=model_name
-                    )
-            except Exception as e:
-                logger.error(f"Failed to log model: {e}")
-                # Fallback to pickle
-                mlflow.log_artifact(self._pickle_model(model), "model")
-            
+            # Get run ID
             run_id = run.info.run_id
         
-        # Get version number
-        try:
-            versions = self.client.search_model_versions(f"name='{model_name}'")
-            version_number = len(versions) + 1
-        except:
-            version_number = 1
+        # Get latest version
+        latest_version = self.client.get_latest_versions(
+            model_name,
+            stages=["None"]
+        )[0] if self.client.get_latest_versions(model_name, stages=["None"]) else None
         
-        # Create ModelVersion object
-        model_version = ModelVersion(
-            model_name=model_name,
-            version=version_number,
-            run_id=run_id,
-            stage=ModelStage.DEVELOPMENT,
-            metrics=metrics,
-            params=params,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-            created_by=getattr(self.config, 'user_id', 'system'),
-            description=description,
-            tags=tags or {}
-        )
+        if latest_version:
+            # Update description
+            self.client.update_model_version(
+                name=model_name,
+                version=latest_version.version,
+                description=description
+            )
+            
+            logger.info(f"Model {model_name} version {latest_version.version} registered")
+            
+            # Store additional metadata
+            latest_version.run_id = run_id
+            latest_version.model_name = model_name
+            latest_version.stage = ModelStage.NONE
+            
+            return latest_version
         
-        logger.info(f"Registered model {model_name} version {version_number}")
-        
-        return model_version
+        return None
     
-    def promote_model(self, model_name: str, version: int, 
-                     target_stage: ModelStage) -> bool:
-        """Promote model to a different stage"""
+    def promote_model(self,
+                     model_name: str,
+                     version: int,
+                     stage: ModelStage) -> bool:
+        """
+        Promote model to different stage.
         
-        if not MLFLOW_AVAILABLE:
-            return self._promote_local(model_name, version, target_stage)
-        
+        Args:
+            model_name: Model name
+            version: Model version
+            stage: Target stage
+            
+        Returns:
+            Success status
+        """
         try:
             self.client.transition_model_version_stage(
                 name=model_name,
                 version=version,
-                stage=target_stage.value
+                stage=stage.value if isinstance(stage, ModelStage) else stage
             )
             
-            logger.info(f"Promoted {model_name} v{version} to {target_stage.value}")
+            logger.info(f"Model {model_name} version {version} promoted to {stage}")
             return True
             
         except Exception as e:
             logger.error(f"Failed to promote model: {e}")
             return False
     
-    def get_production_model(self, model_name: str) -> Optional[Any]:
-        """Get current production model"""
+    def get_model_history(self,
+                         model_name: str,
+                         limit: int = 10) -> List[Dict]:
+        """
+        Get model version history.
         
-        if not MLFLOW_AVAILABLE:
-            return self._get_local_model(model_name, ModelStage.PRODUCTION)
-        
+        Args:
+            model_name: Model name
+            limit: Maximum versions to return
+            
+        Returns:
+            List of model version info
+        """
         try:
-            # Get production version
-            versions = self.client.get_latest_versions(
-                model_name, 
-                stages=[ModelStage.PRODUCTION.value]
+            versions = self.client.search_model_versions(
+                f"name='{model_name}'",
+                max_results=limit,
+                order_by=["version_number DESC"]
             )
             
-            if not versions:
-                return None
+            history = []
+            for version in versions:
+                # Get run details
+                run = self.client.get_run(version.run_id)
+                
+                history.append({
+                    'version': version.version,
+                    'stage': version.current_stage,
+                    'created_at': version.creation_timestamp,
+                    'updated_at': version.last_updated_timestamp,
+                    'description': version.description,
+                    'run_id': version.run_id,
+                    'metrics': run.data.metrics,
+                    'params': run.data.params,
+                    'tags': run.data.tags
+                })
             
-            latest_version = versions[0]
-            
-            # Load model
-            model_uri = f"models:/{model_name}/{latest_version.version}"
-            model = mlflow.pyfunc.load_model(model_uri)
-            
-            return model
+            return history
             
         except Exception as e:
-            logger.error(f"Failed to load production model: {e}")
-            return None
+            logger.error(f"Failed to get model history: {e}")
+            return []
     
-    def compare_models(self, model_name: str, version1: int, version2: int) -> Dict:
-        """Compare two model versions"""
+    def compare_models(self,
+                      model_name: str,
+                      version1: int,
+                      version2: int) -> Dict:
+        """
+        Compare two model versions.
         
-        if not MLFLOW_AVAILABLE:
-            return self._compare_local(model_name, version1, version2)
-        
+        Args:
+            model_name: Model name
+            version1: First version
+            version2: Second version
+            
+        Returns:
+            Comparison results
+        """
         try:
-            # Get run IDs for versions
+            # Get model versions
             v1 = self.client.get_model_version(model_name, version1)
             v2 = self.client.get_model_version(model_name, version2)
             
-            # Get metrics for both runs
+            # Get runs
             run1 = self.client.get_run(v1.run_id)
             run2 = self.client.get_run(v2.run_id)
             
             comparison = {
-                "version1": {
-                    "version": version1,
-                    "metrics": run1.data.metrics,
-                    "params": run1.data.params,
-                    "stage": v1.current_stage
+                'version1': {
+                    'version': version1,
+                    'stage': v1.current_stage,
+                    'metrics': run1.data.metrics,
+                    'params': run1.data.params,
+                    'created_at': v1.creation_timestamp
                 },
-                "version2": {
-                    "version": version2,
-                    "metrics": run2.data.metrics,
-                    "params": run2.data.params,
-                    "stage": v2.current_stage
+                'version2': {
+                    'version': version2,
+                    'stage': v2.current_stage,
+                    'metrics': run2.data.metrics,
+                    'params': run2.data.params,
+                    'created_at': v2.creation_timestamp
                 },
-                "metric_diff": {}
+                'metrics_diff': {}
             }
             
             # Calculate metric differences
             for metric in run1.data.metrics:
                 if metric in run2.data.metrics:
                     diff = run2.data.metrics[metric] - run1.data.metrics[metric]
-                    comparison["metric_diff"][metric] = {
-                        "absolute": diff,
-                        "relative": (diff / run1.data.metrics[metric]) * 100 if run1.data.metrics[metric] != 0 else 0
+                    comparison['metrics_diff'][metric] = {
+                        'diff': diff,
+                        'pct_change': (diff / run1.data.metrics[metric] * 100) if run1.data.metrics[metric] != 0 else 0
                     }
             
             return comparison
@@ -316,31 +274,41 @@ class MLflowRegistry:
             logger.error(f"Failed to compare models: {e}")
             return {}
     
-    def rollback_model(self, model_name: str, target_version: int) -> bool:
-        """Rollback to a previous model version"""
+    def rollback_model(self,
+                      model_name: str,
+                      target_version: int) -> bool:
+        """
+        Rollback to previous model version.
         
-        if not MLFLOW_AVAILABLE:
-            return False
-        
+        Args:
+            model_name: Model name
+            target_version: Version to rollback to
+            
+        Returns:
+            Success status
+        """
         try:
-            # Demote current production model
+            # Get current production version
             prod_versions = self.client.get_latest_versions(
                 model_name,
-                stages=[ModelStage.PRODUCTION.value]
+                stages=["Production"]
             )
             
-            for version in prod_versions:
+            if prod_versions:
+                current_prod = prod_versions[0]
+                
+                # Archive current production
                 self.client.transition_model_version_stage(
                     name=model_name,
-                    version=version.version,
-                    stage=ModelStage.ARCHIVED.value
+                    version=current_prod.version,
+                    stage="Archived"
                 )
             
             # Promote target version to production
             self.client.transition_model_version_stage(
                 name=model_name,
                 version=target_version,
-                stage=ModelStage.PRODUCTION.value
+                stage="Production"
             )
             
             logger.info(f"Rolled back {model_name} to version {target_version}")
@@ -350,398 +318,102 @@ class MLflowRegistry:
             logger.error(f"Failed to rollback model: {e}")
             return False
     
-    def get_model_history(self, model_name: str, limit: int = 10) -> List[Dict]:
-        """Get model version history"""
+    def load_model(self,
+                  model_name: str,
+                  version: Optional[int] = None,
+                  stage: Optional[str] = None) -> Any:
+        """
+        Load model from registry.
         
-        if not MLFLOW_AVAILABLE:
-            return []
-        
+        Args:
+            model_name: Model name
+            version: Specific version (optional)
+            stage: Stage to load from (optional)
+            
+        Returns:
+            Loaded model
+        """
         try:
-            versions = self.client.search_model_versions(
-                f"name='{model_name}'",
-                order_by=["version DESC"],
-                max_results=limit
-            )
+            if version:
+                model_uri = f"models:/{model_name}/{version}"
+            elif stage:
+                model_uri = f"models:/{model_name}/{stage}"
+            else:
+                model_uri = f"models:/{model_name}/Production"
             
-            history = []
-            for v in versions:
-                run = self.client.get_run(v.run_id)
-                history.append({
-                    "version": v.version,
-                    "stage": v.current_stage,
-                    "created_at": v.creation_timestamp,
-                    "updated_at": v.last_updated_timestamp,
-                    "metrics": run.data.metrics,
-                    "params": run.data.params,
-                    "tags": run.data.tags
-                })
+            model = mlflow.sklearn.load_model(model_uri)
+            logger.info(f"Loaded model from {model_uri}")
             
-            return history
+            return model
             
         except Exception as e:
-            logger.error(f"Failed to get model history: {e}")
-            return []
+            logger.error(f"Failed to load model: {e}")
+            return None
     
-    def _pickle_model(self, model: Any) -> str:
-        """Pickle model to temporary file"""
-        import tempfile
+    def delete_model_version(self,
+                           model_name: str,
+                           version: int) -> bool:
+        """
+        Delete model version.
         
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pkl')
-        with open(temp_file.name, 'wb') as f:
-            pickle.dump(model, f)
-        
-        return temp_file.name
-    
-    def _register_local(self, model: Any, model_name: str, 
-                       metrics: Dict, params: Dict,
-                       description: str, tags: Dict) -> ModelVersion:
-        """Fallback local registration when MLflow not available"""
-        
-        # Create local directory structure
-        output_dir = getattr(self.config, 'output_dir', './automl_output')
-        base_path = Path(output_dir) / "model_registry" / model_name
-        base_path.mkdir(parents=True, exist_ok=True)
-        
-        # Get version number
-        existing_versions = list(base_path.glob("v*"))
-        version = len(existing_versions) + 1
-        
-        # Save model
-        version_path = base_path / f"v{version}"
-        version_path.mkdir(exist_ok=True)
-        
-        model_path = version_path / "model.pkl"
-        with open(model_path, 'wb') as f:
-            pickle.dump(model, f)
-        
-        # Save metadata
-        metadata = {
-            "model_name": model_name,
-            "version": version,
-            "metrics": metrics,
-            "params": params,
-            "description": description,
-            "tags": tags,
-            "created_at": datetime.utcnow().isoformat(),
-            "created_by": getattr(self.config, 'user_id', 'system'),
-            "stage": ModelStage.DEVELOPMENT.value
-        }
-        
-        metadata_path = version_path / "metadata.json"
-        with open(metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=2, default=str)
-        
-        # Store in local registry
-        if model_name not in self.local_registry:
-            self.local_registry[model_name] = []
-        
-        model_version = ModelVersion(
-            model_name=model_name,
-            version=version,
-            run_id=str(uuid.uuid4()),
-            stage=ModelStage.DEVELOPMENT,
-            metrics=metrics,
-            params=params,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-            created_by=getattr(self.config, 'user_id', 'system'),
-            description=description,
-            tags=tags or {}
-        )
-        
-        self.local_registry[model_name].append(model_version)
-        
-        return model_version
-    
-    def _promote_local(self, model_name: str, version: int, 
-                      target_stage: ModelStage) -> bool:
-        """Promote model in local registry"""
-        
-        if model_name in self.local_registry:
-            for model_version in self.local_registry[model_name]:
-                if model_version.version == version:
-                    model_version.stage = target_stage
-                    model_version.updated_at = datetime.utcnow()
-                    return True
-        
-        return False
-    
-    def _get_local_model(self, model_name: str, stage: ModelStage) -> Optional[Any]:
-        """Get model from local registry"""
-        
-        output_dir = getattr(self.config, 'output_dir', './automl_output')
-        base_path = Path(output_dir) / "model_registry" / model_name
-        
-        if model_name in self.local_registry:
-            # Find model with target stage
-            for model_version in self.local_registry[model_name]:
-                if model_version.stage == stage:
-                    model_path = base_path / f"v{model_version.version}" / "model.pkl"
-                    if model_path.exists():
-                        with open(model_path, 'rb') as f:
-                            return pickle.load(f)
-        
-        return None
-    
-    def _compare_local(self, model_name: str, version1: int, version2: int) -> Dict:
-        """Compare models in local registry"""
-        
-        comparison = {"version1": {}, "version2": {}, "metric_diff": {}}
-        
-        if model_name in self.local_registry:
-            for model_version in self.local_registry[model_name]:
-                if model_version.version == version1:
-                    comparison["version1"] = {
-                        "version": version1,
-                        "metrics": model_version.metrics,
-                        "params": model_version.params,
-                        "stage": model_version.stage.value
-                    }
-                elif model_version.version == version2:
-                    comparison["version2"] = {
-                        "version": version2,
-                        "metrics": model_version.metrics,
-                        "params": model_version.params,
-                        "stage": model_version.stage.value
-                    }
+        Args:
+            model_name: Model name
+            version: Version to delete
             
-            # Calculate differences
-            if comparison["version1"] and comparison["version2"]:
-                for metric in comparison["version1"]["metrics"]:
-                    if metric in comparison["version2"]["metrics"]:
-                        v1_val = comparison["version1"]["metrics"][metric]
-                        v2_val = comparison["version2"]["metrics"][metric]
-                        diff = v2_val - v1_val
-                        comparison["metric_diff"][metric] = {
-                            "absolute": diff,
-                            "relative": (diff / v1_val) * 100 if v1_val != 0 else 0
+        Returns:
+            Success status
+        """
+        try:
+            self.client.delete_model_version(
+                name=model_name,
+                version=version
+            )
+            
+            logger.info(f"Deleted {model_name} version {version}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete model version: {e}")
+            return False
+    
+    def search_models(self,
+                     filter_string: str = "",
+                     max_results: int = 100) -> List[Dict]:
+        """
+        Search for models.
+        
+        Args:
+            filter_string: MLflow filter string
+            max_results: Maximum results
+            
+        Returns:
+            List of models
+        """
+        try:
+            models = self.client.search_registered_models(
+                filter_string=filter_string,
+                max_results=max_results
+            )
+            
+            results = []
+            for model in models:
+                results.append({
+                    'name': model.name,
+                    'creation_timestamp': model.creation_timestamp,
+                    'last_updated_timestamp': model.last_updated_timestamp,
+                    'description': model.description,
+                    'latest_versions': [
+                        {
+                            'version': v.version,
+                            'stage': v.current_stage,
+                            'description': v.description
                         }
-        
-        return comparison
-
-
-class ABTestingService:
-    """A/B testing for model comparison in production"""
-    
-    def __init__(self, registry: MLflowRegistry):
-        self.registry = registry
-        self.active_tests: Dict[str, Dict] = {}
-    
-    def create_ab_test(self, 
-                       model_name: str,
-                       champion_version: int,
-                       challenger_version: int,
-                       traffic_split: float = 0.1,
-                       min_samples: int = 100) -> str:
-        """Create A/B test between two model versions"""
-        
-        test_id = str(uuid.uuid4())
-        
-        self.active_tests[test_id] = {
-            "model_name": model_name,
-            "champion_version": champion_version,
-            "challenger_version": challenger_version,
-            "traffic_split": traffic_split,
-            "min_samples": min_samples,
-            "start_time": datetime.utcnow(),
-            "metrics": {
-                "champion": {"predictions": 0, "successes": 0, "errors": []},
-                "challenger": {"predictions": 0, "successes": 0, "errors": []}
-            }
-        }
-        
-        logger.info(f"Created A/B test {test_id} for {model_name}")
-        logger.info(f"Champion v{champion_version} vs Challenger v{challenger_version}")
-        logger.info(f"Traffic split: {traffic_split*100:.0f}% to challenger")
-        
-        return test_id
-    
-    def route_prediction(self, test_id: str) -> Tuple[str, int]:
-        """Route prediction request to champion or challenger"""
-        
-        if test_id not in self.active_tests:
-            raise ValueError(f"Test {test_id} not found")
-        
-        test = self.active_tests[test_id]
-        
-        # Random routing based on traffic split
-        if np.random.random() < test.traffic_split:
-            return "challenger", test["challenger_version"]
-        else:
-            return "champion", test["champion_version"]
-    
-    def record_result(self, test_id: str, model_type: str, 
-                     success: bool, error_msg: str = None):
-        """Record prediction result for A/B test"""
-        
-        if test_id in self.active_tests:
-            metrics = self.active_tests[test_id]["metrics"][model_type]
-            metrics["predictions"] += 1
-            
-            if success:
-                metrics["successes"] += 1
-            elif error_msg:
-                metrics["errors"].append({
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "error": error_msg
+                        for v in model.latest_versions
+                    ]
                 })
-    
-    def get_test_results(self, test_id: str) -> Dict:
-        """Get current A/B test results with statistical analysis"""
-        
-        if test_id not in self.active_tests:
-            return {}
-        
-        test = self.active_tests[test_id]
-        duration_hours = (datetime.utcnow() - test["start_time"]).total_seconds() / 3600
-        
-        # Calculate success rates
-        champion_metrics = test["metrics"]["champion"]
-        challenger_metrics = test["metrics"]["challenger"]
-        
-        champion_rate = (champion_metrics["successes"] / 
-                        max(1, champion_metrics["predictions"]))
-        challenger_rate = (challenger_metrics["successes"] / 
-                          max(1, challenger_metrics["predictions"]))
-        
-        results = {
-            "test_id": test_id,
-            "model_name": test["model_name"],
-            "duration_hours": round(duration_hours, 2),
-            "champion": {
-                "version": test["champion_version"],
-                "predictions": champion_metrics["predictions"],
-                "success_rate": round(champion_rate, 4),
-                "error_count": len(champion_metrics["errors"])
-            },
-            "challenger": {
-                "version": test["challenger_version"],
-                "predictions": challenger_metrics["predictions"],
-                "success_rate": round(challenger_rate, 4),
-                "error_count": len(challenger_metrics["errors"])
-            },
-            "improvement": round((challenger_rate - champion_rate) * 100, 2)
-        }
-        
-        # Statistical significance test if enough samples
-        min_samples = test.get("min_samples", 30)
-        if (champion_metrics["predictions"] >= min_samples and 
-            challenger_metrics["predictions"] >= min_samples):
             
-            # Perform chi-square test
-            champion_success = champion_metrics["successes"]
-            champion_fail = champion_metrics["predictions"] - champion_success
-            challenger_success = challenger_metrics["successes"]
-            challenger_fail = challenger_metrics["predictions"] - challenger_success
+            return results
             
-            contingency_table = [
-                [champion_success, champion_fail],
-                [challenger_success, challenger_fail]
-            ]
-            
-            chi2, p_value, dof, expected = stats.chi2_contingency(contingency_table)
-            
-            results["statistical_significance"] = {
-                "chi2_statistic": round(chi2, 4),
-                "p_value": round(p_value, 4),
-                "significant_at_95": p_value < 0.05,
-                "significant_at_99": p_value < 0.01
-            }
-            
-            # Confidence interval for difference
-            from statsmodels.stats.proportion import confint_proportions_2indep
-            
-            low, high = confint_proportions_2indep(
-                challenger_success, challenger_metrics["predictions"],
-                champion_success, champion_metrics["predictions"],
-                method='wald'
-            )
-            
-            results["confidence_interval_95"] = {
-                "lower": round(low * 100, 2),
-                "upper": round(high * 100, 2)
-            }
-        else:
-            results["note"] = f"Need at least {min_samples} samples per variant for statistical significance"
-        
-        return results
-    
-    def conclude_test(self, test_id: str, promote_winner: bool = False) -> Dict:
-        """Conclude A/B test and optionally promote winner"""
-        
-        results = self.get_test_results(test_id)
-        
-        if not results:
-            return {"error": "Test not found"}
-        
-        # Determine winner
-        champion_rate = results["champion"]["success_rate"]
-        challenger_rate = results["challenger"]["success_rate"]
-        
-        winner = "challenger" if challenger_rate > champion_rate else "champion"
-        results["winner"] = winner
-        results["concluded_at"] = datetime.utcnow().isoformat()
-        
-        # Check if result is statistically significant
-        is_significant = False
-        if "statistical_significance" in results:
-            is_significant = results["statistical_significance"]["significant_at_95"]
-        
-        results["recommendation"] = {
-            "winner": winner,
-            "is_significant": is_significant,
-            "action": "promote" if is_significant and winner == "challenger" else "keep_current"
-        }
-        
-        # Promote winner if requested and significant
-        if promote_winner and winner == "challenger" and is_significant:
-            success = self.registry.promote_model(
-                results["model_name"],
-                results["challenger"]["version"],
-                ModelStage.PRODUCTION
-            )
-            
-            if success:
-                # Demote champion
-                self.registry.promote_model(
-                    results["model_name"],
-                    results["champion"]["version"],
-                    ModelStage.STAGING
-                )
-                
-                results["promoted"] = True
-                logger.info(f"Promoted challenger v{results['challenger']['version']} to production")
-            else:
-                results["promoted"] = False
-                results["promotion_error"] = "Failed to promote model"
-        else:
-            results["promoted"] = False
-            if not is_significant:
-                results["promotion_reason"] = "Results not statistically significant"
-        
-        # Archive test
-        test_data = self.active_tests[test_id]
-        test_data["results"] = results
-        
-        # Remove from active tests
-        del self.active_tests[test_id]
-        
-        return results
-    
-    def get_active_tests(self) -> List[Dict]:
-        """Get list of active A/B tests"""
-        
-        active = []
-        for test_id, test_data in self.active_tests.items():
-            active.append({
-                "test_id": test_id,
-                "model_name": test_data["model_name"],
-                "champion_version": test_data["champion_version"],
-                "challenger_version": test_data["challenger_version"],
-                "traffic_split": test_data["traffic_split"],
-                "start_time": test_data["start_time"].isoformat(),
-                "champion_predictions": test_data["metrics"]["champion"]["predictions"],
-                "challenger_predictions": test_data["metrics"]["challenger"]["predictions"]
-            })
-        
-        return active
+        except Exception as e:
+            logger.error(f"Failed to search models: {e}")
+            return []
