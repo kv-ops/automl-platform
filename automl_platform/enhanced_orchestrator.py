@@ -42,6 +42,9 @@ from .llm import AutoMLLLMAssistant
 from .data_quality_agent import IntelligentDataQualityAgent
 from .prompts import PromptTemplates
 
+# Create logger BEFORE using it in try/except blocks
+logger = logging.getLogger(__name__)
+
 # Optimization imports
 try:
     from .distributed_training import DistributedTrainer
@@ -51,8 +54,6 @@ try:
 except ImportError as e:
     logger.warning(f"Optimization components not available: {e}")
     OPTIMIZATIONS_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
 
 
 class EnhancedAutoMLOrchestrator:
@@ -739,7 +740,15 @@ class EnhancedAutoMLOrchestrator:
         """Determine scoring metric based on task."""
         if self.config.scoring == 'auto':
             if self.task == 'classification':
-                return 'roc_auc' if len(np.unique(self.y_train)) == 2 else 'f1_weighted'
+                # For classification, we need to check the y values properly
+                try:
+                    # Use a small sample to check unique values if y is not set
+                    unique_count = 2  # Default to binary
+                    if hasattr(self, 'y_train'):
+                        unique_count = len(np.unique(self.y_train))
+                    return 'roc_auc' if unique_count == 2 else 'f1_weighted'
+                except:
+                    return 'f1_weighted'
             else:
                 return 'neg_mean_squared_error'
         return self.config.scoring
