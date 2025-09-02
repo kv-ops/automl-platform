@@ -222,6 +222,162 @@ class RGPDConfig:
 
 
 @dataclass
+class ConnectorConfig:
+    """Configuration for data connectors."""
+    enabled: bool = True
+    default_connector: str = "postgresql"
+    
+    connectors: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
+        "snowflake": {
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "username": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "database": os.getenv("SNOWFLAKE_DATABASE"),
+            "schema": "public"
+        },
+        "bigquery": {
+            "project_id": os.getenv("GCP_PROJECT_ID"),
+            "dataset_id": os.getenv("BQ_DATASET_ID"),
+            "credentials_path": os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        },
+        "databricks": {
+            "host": os.getenv("DATABRICKS_HOST"),
+            "token": os.getenv("DATABRICKS_TOKEN"),
+            "catalog": "hive_metastore",
+            "schema": "default"
+        },
+        "postgresql": {
+            "host": os.getenv("PG_HOST", "localhost"),
+            "port": int(os.getenv("PG_PORT", "5432")),
+            "database": os.getenv("PG_DATABASE", "automl"),
+            "username": os.getenv("PG_USER", "postgres"),
+            "password": os.getenv("PG_PASSWORD")
+        },
+        "mongodb": {
+            "host": os.getenv("MONGO_HOST", "localhost"),
+            "port": int(os.getenv("MONGO_PORT", "27017")),
+            "database": os.getenv("MONGO_DATABASE", "automl"),
+            "username": os.getenv("MONGO_USER"),
+            "password": os.getenv("MONGO_PASSWORD")
+        },
+        "redshift": {
+            "host": os.getenv("REDSHIFT_HOST"),
+            "port": int(os.getenv("REDSHIFT_PORT", "5439")),
+            "database": os.getenv("REDSHIFT_DATABASE"),
+            "username": os.getenv("REDSHIFT_USER"),
+            "password": os.getenv("REDSHIFT_PASSWORD")
+        }
+    })
+    
+    # Connection pooling
+    enable_pooling: bool = True
+    pool_size: int = 5
+    max_overflow: int = 10
+    
+    # Query optimization
+    enable_query_cache: bool = True
+    cache_ttl: int = 3600
+    max_cache_size_mb: int = 100
+    
+    # Security
+    encrypt_credentials: bool = True
+    use_ssl: bool = True
+    
+    # Performance
+    batch_size: int = 10000
+    timeout: int = 300
+    max_retries: int = 3
+
+
+@dataclass 
+class StreamingConfig:
+    """Configuration for streaming pipelines."""
+    enabled: bool = True
+    platform: str = "kafka"  # kafka, pulsar, redis, flink
+    
+    # Broker configuration
+    brokers: List[str] = field(default_factory=lambda: [
+        os.getenv("KAFKA_BROKER", "localhost:9092")
+    ])
+    
+    # Topics
+    input_topic: str = "ml_input"
+    output_topic: str = "ml_predictions"
+    error_topic: str = "ml_errors"
+    
+    # Consumer settings
+    consumer_group: str = "automl_consumer"
+    batch_size: int = 100
+    max_poll_records: int = 500
+    
+    # Window aggregation
+    window_size: int = 60  # seconds
+    slide_interval: int = 10  # seconds
+    
+    # Processing
+    enable_exactly_once: bool = False
+    checkpoint_interval: int = 30  # seconds
+    max_latency_ms: int = 1000
+    
+    # Authentication
+    security_protocol: str = "PLAINTEXT"  # PLAINTEXT, SSL, SASL_SSL
+    sasl_mechanism: Optional[str] = None
+    sasl_username: Optional[str] = os.getenv("KAFKA_USER")
+    sasl_password: Optional[str] = os.getenv("KAFKA_PASSWORD")
+    
+    # Monitoring
+    enable_metrics: bool = True
+    metrics_port: int = 9092
+
+
+@dataclass
+class FeatureStoreConfig:
+    """Configuration for feature store."""
+    enabled: bool = True
+    backend: str = "local"  # local, s3, minio, redis
+    
+    # Storage
+    base_path: str = "./feature_store"
+    
+    # Object storage (S3/MinIO)
+    endpoint: Optional[str] = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    access_key: Optional[str] = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+    secret_key: Optional[str] = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    bucket: str = "feature-store"
+    secure: bool = False
+    
+    # Redis (for online serving)
+    redis_enabled: bool = True
+    redis_config: Dict[str, Any] = field(default_factory=lambda: {
+        "host": os.getenv("REDIS_HOST", "localhost"),
+        "port": int(os.getenv("REDIS_PORT", "6379")),
+        "db": 0
+    })
+    
+    # Caching
+    cache_enabled: bool = True
+    cache_ttl: int = 3600
+    max_cache_size_mb: int = 500
+    
+    # Versioning
+    enable_versioning: bool = True
+    max_versions: int = 10
+    
+    # Statistics
+    compute_statistics: bool = True
+    statistics_sample_size: int = 10000
+    
+    # Materialization
+    enable_materialization: bool = True
+    materialization_interval: int = 3600  # seconds
+    
+    # Multi-tenancy
+    enable_multi_tenant: bool = True
+    tenant_isolation: str = "logical"  # logical, physical
+
+
+@dataclass
 class StorageConfig:
     """Storage configuration for model versioning and datasets."""
     backend: str = "local"  # "local", "minio", "s3"
@@ -461,7 +617,10 @@ class AutoMLConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
     billing: BillingConfig = field(default_factory=BillingConfig)
-    rgpd: RGPDConfig = field(default_factory=RGPDConfig)  # NEW: RGPD configuration
+    rgpd: RGPDConfig = field(default_factory=RGPDConfig)
+    connectors: ConnectorConfig = field(default_factory=ConnectorConfig)  # NEW
+    streaming: StreamingConfig = field(default_factory=StreamingConfig)  # NEW
+    feature_store: FeatureStoreConfig = field(default_factory=FeatureStoreConfig)  # NEW
     
     # General settings
     environment: str = "development"  # "development", "staging", "production"
@@ -627,7 +786,16 @@ class AutoMLConfig:
                 config_dict['billing'] = BillingConfig(**config_dict['billing'])
             
             if 'rgpd' in config_dict and isinstance(config_dict['rgpd'], dict):
-                config_dict['rgpd'] = RGPDConfig(**config_dict['rgpd'])  # NEW
+                config_dict['rgpd'] = RGPDConfig(**config_dict['rgpd'])
+            
+            if 'connectors' in config_dict and isinstance(config_dict['connectors'], dict):
+                config_dict['connectors'] = ConnectorConfig(**config_dict['connectors'])  # NEW
+            
+            if 'streaming' in config_dict and isinstance(config_dict['streaming'], dict):
+                config_dict['streaming'] = StreamingConfig(**config_dict['streaming'])  # NEW
+            
+            if 'feature_store' in config_dict and isinstance(config_dict['feature_store'], dict):
+                config_dict['feature_store'] = FeatureStoreConfig(**config_dict['feature_store'])  # NEW
             
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
@@ -640,7 +808,8 @@ class AutoMLConfig:
         config_dict = asdict(self)
         
         # Convert dataclasses to dicts for YAML serialization
-        for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 'rgpd']:
+        for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 'rgpd',
+                   'connectors', 'streaming', 'feature_store']:  # Added new configs
             if key in config_dict and hasattr(config_dict[key], '__dict__'):
                 config_dict[key] = asdict(config_dict[key])
         
