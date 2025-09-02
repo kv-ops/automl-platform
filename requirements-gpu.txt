@@ -1,30 +1,83 @@
-# GPU-specific requirements
+# ==============================================================================
+# GPU-specific requirements for AutoML Platform
 # Place in: requirements-gpu.txt
+# For systems with NVIDIA GPUs and CUDA support
+# ==============================================================================
 
-# PyTorch with CUDA support
+# ---------- PyTorch with CUDA support ----------
+--extra-index-url https://download.pytorch.org/whl/cu118
 torch==2.1.0+cu118
 torchvision==0.16.0+cu118
 torchaudio==2.1.0+cu118
---extra-index-url https://download.pytorch.org/whl/cu118
 
-# TabNet for neural networks on tabular data
+# ---------- Neural Networks for Tabular Data ----------
 pytorch-tabnet==4.1.0
+pytorch-lightning>=2.1.0  # Training framework
 
-# CUDA-accelerated libraries
+# ---------- CUDA-accelerated libraries ----------
 cupy-cuda11x==12.3.0
 pycuda==2022.2.2
+numba[cuda]>=0.58.0  # CUDA JIT compilation
 
-# GPU monitoring
+# ---------- GPU Monitoring & Management ----------
 gputil==1.4.0
 nvidia-ml-py3==7.352.0
+pynvml>=11.5.0  # NVIDIA Management Library
+gpustat>=1.1.1  # GPU status monitoring
 
-# RAPIDS for GPU-accelerated data processing (optional, requires specific CUDA setup)
-# cudf==23.10.0
-# cuml==23.10.0
-# cugraph==23.10.0
+# ---------- Distributed Training on GPU ----------
+horovod==0.28.1  # Distributed deep learning
+fairscale>=0.4.13  # PyTorch distributed training
+deepspeed>=0.12.0  # Optimized distributed training
 
-# TensorRT for optimized inference (optional)
+# ---------- RAPIDS for GPU Data Processing ----------
+# Uncomment if you have RAPIDS environment set up
+# cudf==23.10.0  # GPU DataFrames
+# cuml==23.10.0  # GPU Machine Learning
+# cugraph==23.10.0  # GPU Graph Analytics
+# cusignal==23.10.0  # GPU Signal Processing
+# cuxfilter==23.10.0  # GPU Visualization
+
+# ---------- Optimized Inference ----------
+# TensorRT for optimized inference
 # tensorrt==8.6.1
+# torch-tensorrt==1.4.0
 
 # ONNX Runtime with GPU support
 onnxruntime-gpu==1.16.3
+
+# ---------- Mixed Precision Training ----------
+apex @ git+https://github.com/NVIDIA/apex  # NVIDIA Apex for mixed precision
+
+# ---------- GPU Memory Optimization ----------
+pytorch-memlab>=0.3.0  # Memory profiler for PyTorch
+torch-tb-profiler>=0.4.0  # TensorBoard profiler
+
+# ---------- AutoML with GPU Support ----------
+autogluon[torch]>=1.0.0  # AutoML with GPU
+nni>=3.0  # Neural architecture search
+
+# ---------- Additional GPU Libraries ----------
+jax[cuda11_pip]>=0.4.20  # JAX with CUDA support
+--find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# ---------- Triton Inference Server Client ----------
+tritonclient[all]>=2.40.0  # NVIDIA Triton client
+
+# ==============================================================================
+# Installation Instructions:
+#
+# 1. Ensure CUDA 11.8 is installed:
+#    nvidia-smi  # Check CUDA version
+#
+# 2. Install GPU requirements:
+#    pip install -r requirements-gpu.txt
+#
+# 3. For RAPIDS (requires specific setup):
+#    conda install -c rapidsai -c conda-forge -c nvidia rapids=23.10 python=3.10 cudatoolkit=11.8
+#
+# 4. Verify GPU availability:
+#    python -c "import torch; print(torch.cuda.is_available())"
+#
+# Note: Some packages may require specific CUDA versions. Adjust accordingly.
+# ==============================================================================
