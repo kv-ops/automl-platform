@@ -1,5 +1,5 @@
 # ==============================================================================
-# AutoML Platform Requirements - Production Ready with MLOps
+# AutoML Platform Requirements - Production Ready with MLOps and Optimizations
 # Python >= 3.8 required
 # All dependencies tested for compatibility
 # Last updated: 2024
@@ -27,6 +27,7 @@ torch>=2.1.0,<3.0.0
 torchvision>=0.16.0,<1.0.0
 torch-tb-profiler>=0.4.0
 tensorflow>=2.15.0,<3.0.0
+pytorch-tabnet>=4.1.0  # TabNet implementation
 
 # ---------- MLOps & Model Registry ----------
 mlflow>=2.9.0,<3.0.0
@@ -37,18 +38,45 @@ onnx>=1.15.0,<2.0.0
 onnxruntime>=1.16.0,<2.0.0
 skl2onnx>=1.16.0,<2.0.0
 onnxconverter-common>=1.14.0
-sklearn2pmml>=0.95.0,<1.0.0
-# Note: jpmml-sklearn is a Java library, not needed for Python
+sklearn2pmml>=0.100.0,<1.0.0
+jpmml-sklearn>=1.7.0  # For PMML validation
 
 # ---------- Workflow Orchestration (Choose One) ----------
 # Option 1: Airflow (Comment out if using Prefect)
-# apache-airflow>=2.8.0,<3.0.0
-# apache-airflow-providers-celery>=3.5.0
+apache-airflow>=2.8.0,<3.0.0
+apache-airflow-providers-celery>=3.5.0
 
 # Option 2: Prefect (Uncomment if preferred over Airflow)
-prefect>=2.14.0,<3.0.0
+# prefect>=2.14.0,<3.0.0
 # prefect-aws>=0.4.0  # If using AWS
 # prefect-gcp>=0.5.0  # If using GCP
+
+# ---------- Distributed Computing & Optimization ----------
+ray[default]>=2.8.0,<3.0.0  # Distributed training
+ray[train]>=2.8.0,<3.0.0  # Ray Train for ML
+ray[tune]>=2.8.0,<3.0.0  # Hyperparameter tuning
+dask[complete]>=2023.12.0  # Alternative to Ray
+dask-ml>=2023.3.0  # Dask ML extensions
+distributed>=2023.12.0  # Dask distributed
+
+# ---------- Incremental Learning ----------
+river>=0.19.0  # Online/incremental learning
+scikit-multiflow>=0.5.3  # Streaming ML
+streamz>=0.6.4  # Real-time stream processing
+
+# ---------- Caching & Performance ----------
+redis>=5.0.0
+hiredis>=2.2.0  # C parser for Redis (faster)
+pymemcache>=4.0.0  # Memcached client
+lz4>=4.3.0  # Fast compression for cache
+msgpack>=1.0.7  # Efficient serialization
+diskcache>=5.6.0  # Disk-based cache
+
+# ---------- Memory Optimization ----------
+memory-profiler>=0.61.0  # Memory profiling
+pympler>=1.0.1  # Memory analysis
+objgraph>=3.6.0  # Object reference graphs
+guppy3>=3.1.4  # Heap analysis
 
 # ---------- Time Series ----------
 prophet>=1.1.0
@@ -56,6 +84,7 @@ statsmodels>=0.13.0,<1.0.0
 
 # ---------- Imbalanced Learning ----------
 imbalanced-learn>=0.10.0,<1.0.0
+focal-loss>=0.0.7  # Focal loss for imbalanced classification
 
 # ---------- API Framework ----------
 fastapi>=0.104.0,<1.0.0
@@ -77,16 +106,18 @@ chromadb>=0.4.18
 faiss-cpu>=1.7.4
 tiktoken>=0.5.1
 
-# ---------- Storage & Caching ----------
+# ---------- Storage & Object Store ----------
 minio>=7.2.0
 boto3>=1.29.0
-redis>=5.0.0
 s3fs>=2023.12.0  # For S3 filesystem operations
+pyarrow>=14.0.0  # For Parquet support
+fsspec>=2023.12.0  # Filesystem abstraction
 
 # ---------- Monitoring & Drift Detection ----------
 prometheus-client>=0.19.0
 evidently>=0.4.0  # For drift detection
 alibi-detect>=0.11.0  # Alternative drift detection
+grafana-api>=1.0.3  # Grafana integration
 
 # ---------- UI/Dashboard ----------
 streamlit>=1.29.0
@@ -98,6 +129,7 @@ gradio>=4.0.0  # For ML demos
 celery>=5.3.0
 kombu>=5.3.0  # Message broker abstraction
 flower>=2.0.0  # Celery monitoring
+dramatiq>=1.15.0  # Alternative to Celery
 
 # ---------- Model Explainability ----------
 shap>=0.43.0
@@ -110,7 +142,6 @@ seaborn>=0.12.0,<1.0.0
 altair>=5.0.0  # Declarative visualization
 
 # ---------- Data Formats & Connectors ----------
-pyarrow>=14.0.0
 openpyxl>=3.1.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
@@ -135,6 +166,7 @@ azure-identity>=1.15.0
 kafka-python>=2.0.2
 pulsar-client>=3.3.0
 confluent-kafka>=2.3.0  # Alternative Kafka client
+apache-flink>=1.18.0  # Stream processing
 
 # ---------- Infrastructure ----------
 docker>=6.1.0
@@ -150,6 +182,14 @@ cryptography>=41.0.0
 pyjwt>=2.8.0
 python-keycloak>=3.7.0  # For SSO with Keycloak
 authlib>=1.2.0  # OAuth and OpenID Connect
+python-ldap>=3.4.3  # LDAP authentication
+auth0-python>=4.4.0  # Auth0 integration
+okta>=2.9.0  # Okta SSO
+
+# ---------- RGPD/GDPR Compliance ----------
+privacy-preserver>=0.2.0  # Data anonymization
+faker>=20.0.0  # Generate fake data for anonymization
+python-gdpr>=0.2.0  # GDPR utilities
 
 # ---------- Utilities ----------
 tqdm>=4.66.0
@@ -158,6 +198,8 @@ click>=8.1.0
 tabulate>=0.9.0
 tenacity>=8.2.0  # Retry logic
 schedule>=1.2.0  # Job scheduling
+psutil>=5.9.6  # System monitoring
+GPUtil>=1.4.0  # GPU monitoring
 
 # ---------- Data Quality & Validation ----------
 great-expectations>=0.18.0
@@ -166,9 +208,9 @@ pydantic>=2.5.0  # Data validation
 
 # ---------- Performance & Optimization ----------
 numba>=0.58.0
-ray>=2.8.0  # Distributed computing
-dask>=2023.12.0  # Parallel computing
 modin>=0.25.0  # Faster pandas operations
+vaex>=4.17.0  # Out-of-core DataFrames
+swifter>=1.4.0  # Parallel pandas apply
 
 # ---------- Testing ----------
 pytest>=7.4.0
@@ -176,6 +218,7 @@ pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.12.0
 hypothesis>=6.92.0  # Property-based testing
+pytest-benchmark>=4.0.0  # Performance testing
 
 # ---------- Code Quality ----------
 black>=23.11.0
@@ -183,6 +226,7 @@ flake8>=6.1.0
 mypy>=1.7.0
 pylint>=3.0.0
 isort>=5.13.0
+pre-commit>=3.5.0  # Git pre-commit hooks
 
 # ---------- Documentation ----------
 sphinx>=7.2.0
@@ -195,6 +239,7 @@ jupyter>=1.0.0
 jupyterlab>=4.0.0
 ipywidgets>=8.1.0
 nbconvert>=7.12.0
+papermill>=2.5.0  # Parameterized notebooks
 
 # ---------- Edge Deployment (Optional) ----------
 onnxruntime-extensions>=0.10.0  # Custom operators for ONNX
@@ -215,12 +260,42 @@ tflite-runtime>=2.14.0  # TensorFlow Lite runtime
 # autogluon>=1.0.0  # AutoML from AWS
 # h2o>=3.44.0  # H2O AutoML
 # auto-sklearn>=0.15.0  # Auto-sklearn
+# flaml>=2.1.0  # Fast and lightweight AutoML
 
 # ---------- Model Serving (Optional) ----------
 # bentoml>=1.1.0  # Model serving framework
 # seldon-core>=1.17.0  # ML deployment platform
 # kserve>=0.11.0  # Kubernetes model serving
+# triton-client>=2.40.0  # NVIDIA Triton client
 
 # ---------- Data Versioning (Optional) ----------
 # dvc>=3.30.0  # Data version control
 # lakeFS>=1.0.0  # Data lake version control
+
+# ---------- GPU Acceleration (Optional) ----------
+# cupy>=12.3.0  # NumPy-like library for GPU
+# rapids>=23.12  # RAPIDS suite for GPU acceleration
+# cuml>=23.12  # GPU-accelerated ML algorithms
+
+# ---------- Quantum Computing (Optional - Future) ----------
+# qiskit>=0.45.0  # Quantum computing
+# pennylane>=0.33.0  # Quantum ML
+
+# ==============================================================================
+# Installation Notes:
+# 
+# For basic installation:
+# pip install -r requirements.txt
+#
+# For development installation with all optional packages:
+# pip install -r requirements.txt --all-extras
+#
+# For production with specific cloud provider (e.g., AWS):
+# pip install -r requirements.txt boto3 s3fs
+#
+# For GPU support:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# For optimizations only (Point 8):
+# pip install ray[default,train,tune] dask[complete] river redis lz4
+# ==============================================================================
