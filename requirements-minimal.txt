@@ -1,4 +1,10 @@
-# Core ML
+# ==============================================================================
+# Minimal requirements for AutoML Platform
+# Place in: requirements-minimal.txt
+# For lightweight deployments and testing
+# ==============================================================================
+
+# ---------- Core ML Dependencies ----------
 pandas>=2.0.0
 numpy>=1.24.0
 scikit-learn>=1.3.0
@@ -6,31 +12,99 @@ scipy>=1.11.0
 joblib>=1.3.0
 pyyaml>=6.0.1
 
-# AutoML
+# ---------- AutoML Essentials ----------
 optuna>=3.4.0
 xgboost>=2.0.0
 lightgbm>=4.0.0
 catboost>=1.2.0
 
-# MLOps
+# ---------- MLOps Basics ----------
 mlflow>=2.9.0
 onnx>=1.15.0
 onnxruntime>=1.16.0
 skl2onnx>=1.16.0
 
-# API
+# ---------- API Framework ----------
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.4.0
 python-multipart>=0.0.6
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
 
-# Storage & Workers
+# ---------- Storage & Caching ----------
 minio>=7.2.0
+boto3>=1.29.0  # AWS S3 support
 redis>=5.0.0
-celery>=5.3.0
-prometheus-client>=0.19.0
+psutil>=5.9.6  # System monitoring
 
-# Visualization
+# ---------- Worker Management ----------
+celery>=5.3.0
+kombu>=5.3.0
+flower>=2.0.0  # Celery monitoring
+
+# ---------- Monitoring ----------
+prometheus-client>=0.19.0
+evidently>=0.4.0  # Basic drift detection
+
+# ---------- Visualization ----------
 matplotlib>=3.7.0
 plotly>=5.18.0
 streamlit>=1.29.0
+
+# ---------- Data Processing ----------
+pyarrow>=14.0.0  # Parquet support
+openpyxl>=3.1.0  # Excel support
+sqlalchemy>=2.0.0  # Database ORM
+psycopg2-binary>=2.9.0  # PostgreSQL
+
+# ---------- Basic Security ----------
+cryptography>=41.0.0
+pyjwt>=2.8.0
+
+# ---------- Utilities ----------
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+click>=8.1.0
+tenacity>=8.2.0  # Retry logic
+
+# ---------- Testing (Optional but Recommended) ----------
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# ---------- Basic Optimizations ----------
+numba>=0.58.0  # JIT compilation
+lz4>=4.3.0  # Fast compression
+
+# ---------- LLM Integration (Minimal) ----------
+openai>=1.3.0  # OpenAI API
+
+# ==============================================================================
+# Installation Instructions:
+#
+# For minimal installation:
+# pip install -r requirements-minimal.txt
+#
+# This provides:
+# - Core AutoML functionality
+# - Basic MLOps (model registry, export)
+# - Simple API with authentication
+# - Local/cloud storage
+# - Basic monitoring and drift detection
+# - Simple UI with Streamlit
+# - Worker management with Celery
+#
+# Missing from full version:
+# - Advanced ML algorithms (neural networks, time series)
+# - Distributed computing (Ray, Dask)
+# - Advanced monitoring (Datadog, New Relic)
+# - SSO providers (Keycloak, Auth0, Okta)
+# - Billing systems
+# - Feature stores
+# - Incremental learning
+# - Advanced connectors (Snowflake, BigQuery, etc.)
+#
+# Upgrade to full version when needed:
+# pip install -r requirements.txt
+# ==============================================================================
