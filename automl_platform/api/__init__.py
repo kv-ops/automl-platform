@@ -6,6 +6,7 @@ This module contains API-specific components for the AutoML platform including:
 - Billing and subscription management
 - Data connectors for external data sources
 - Streaming processing capabilities
+- Feature store for ML features management
 - LLM endpoints for AI-powered features
 - Authentication, SSO, and RGPD compliance endpoints
 
@@ -21,6 +22,7 @@ try:
     from .infrastructure import TenantManager, SecurityManager, DeploymentManager
     from .connectors import ConnectorFactory, ConnectionConfig
     from .streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
+    from .feature_store import FeatureStore, FeatureSet, FeatureDefinition
     from .llm_endpoints import router as llm_router
     from .auth_endpoints import create_auth_router, sso_router, rgpd_router
 except ImportError as e:
@@ -54,6 +56,11 @@ __all__ = [
     "StreamConfig",
     "MLStreamProcessor",
     
+    # Feature Store
+    "FeatureStore",
+    "FeatureSet",
+    "FeatureDefinition",
+    
     # LLM
     "llm_router",
     
@@ -73,6 +80,7 @@ API_INFO = {
         "infrastructure": "Multi-tenant architecture and security",
         "connectors": "External data source integrations",
         "streaming": "Real-time data processing",
+        "feature_store": "Feature management and versioning",
         "llm_endpoints": "AI-powered features and assistance",
         "auth_endpoints": "SSO authentication and RGPD compliance"
     },
@@ -83,7 +91,8 @@ API_INFO = {
             "cryptography>=41.0.0",
             "jwt>=1.3.1",
             "redis>=4.0.0",
-            "pydantic>=2.0.0"
+            "pydantic>=2.0.0",
+            "pyarrow>=14.0.0"
         ],
         "optional": {
             "billing": ["stripe", "paypal"],
@@ -95,7 +104,8 @@ API_INFO = {
                 "psycopg2-binary",
                 "pymongo"
             ],
-            "streaming": ["kafka-python", "pulsar-client", "redis"],
+            "streaming": ["kafka-python", "pulsar-client", "redis", "apache-flink"],
+            "feature_store": ["minio", "boto3", "redis", "pyarrow"],
             "llm": ["openai", "anthropic", "chromadb", "langchain"],
             "auth": ["python-keycloak", "authlib", "python-jose"]
         }
@@ -166,7 +176,8 @@ def check_dependencies():
     streaming_to_check = [
         ("kafka", "kafka"),
         ("pulsar", "pulsar"),
-        ("redis", "redis")
+        ("redis", "redis"),
+        ("pyflink", "flink")
     ]
     
     for module_name, dep_name in streaming_to_check:
@@ -177,6 +188,24 @@ def check_dependencies():
             pass
     
     available_deps["streaming"] = streaming_deps
+    
+    # Check feature store dependencies
+    feature_store_deps = []
+    fs_to_check = [
+        ("minio", "minio"),
+        ("boto3", "s3"),
+        ("redis", "redis"),
+        ("pyarrow", "pyarrow")
+    ]
+    
+    for module_name, dep_name in fs_to_check:
+        try:
+            __import__(module_name)
+            feature_store_deps.append(dep_name)
+        except ImportError:
+            pass
+    
+    available_deps["feature_store"] = feature_store_deps
     
     # Check LLM dependencies
     llm_deps = []
@@ -278,14 +307,37 @@ def create_api_app():
     except ImportError:
         pass
     
+    try:
+        # Connector endpoints
+        from .connector_routes import connector_router
+        app.include_router(connector_router, prefix="/api/connectors", tags=["Data Connectors"])
+    except ImportError:
+        pass
+    
+    try:
+        # Feature store endpoints
+        from .feature_store_routes import feature_store_router
+        app.include_router(feature_store_router, prefix="/api/features", tags=["Feature Store"])
+    except ImportError:
+        pass
+    
+    try:
+        # Streaming endpoints
+        from .streaming_routes import streaming_router
+        app.include_router(streaming_router, prefix="/api/streaming", tags=["Streaming"])
+    except ImportError:
+        pass
+    
     # Health check endpoint
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
+        from datetime import datetime
         return {
             "status": "healthy",
             "version": __version__,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
+            "dependencies": check_dependencies()
         }
     
     # Root endpoint
@@ -296,7 +348,8 @@ def create_api_app():
             "name": "AutoML Platform API",
             "version": __version__,
             "docs": "/docs",
-            "health": "/health"
+            "health": "/health",
+            "components": list(API_INFO["components"].keys())
         }
     
     return app
@@ -329,6 +382,11 @@ def _initialize_api():
         import pydantic
     except ImportError:
         missing_critical.append("pydantic")
+    
+    try:
+        import pyarrow
+    except ImportError:
+        missing_critical.append("pyarrow")
         
     if missing_critical:
         logger.error(
