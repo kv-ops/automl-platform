@@ -1,5 +1,5 @@
 """
-AutoML Platform - Production-ready machine learning automation
+AutoML Platform - Production-ready machine learning automation with optimizations
 
 A comprehensive platform for automated machine learning with advanced features including:
 - Automated model selection and hyperparameter optimization
@@ -12,20 +12,37 @@ A comprehensive platform for automated machine learning with advanced features i
 - SSO authentication (Keycloak, Auth0, Okta)
 - RGPD/GDPR compliance with full data subject rights
 - Immutable audit trail with hash chain
+- Distributed training with Ray/Dask
+- Incremental learning for large datasets
+- Intelligent pipeline caching
 
-Version: 2.0.0
+Version: 2.1.0
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "AutoML Platform Team"
 __email__ = "support@automl-platform.com"
 
 # Core imports for easy access
 from .config import AutoMLConfig, load_config
 from .orchestrator import AutoMLOrchestrator
+from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
 from .data_prep import DataPreprocessor, validate_data
 from .metrics import calculate_metrics, detect_task
 from .model_selection import get_available_models
+
+# Optimization imports
+try:
+    from .distributed_training import DistributedTrainer
+    from .incremental_learning import IncrementalLearner
+    from .pipeline_cache import PipelineCache, CacheConfig
+    OPTIMIZATIONS_AVAILABLE = True
+except ImportError:
+    OPTIMIZATIONS_AVAILABLE = False
+    DistributedTrainer = None
+    IncrementalLearner = None
+    PipelineCache = None
+    CacheConfig = None
 
 # Authentication and Security imports
 from .auth import (
@@ -51,11 +68,19 @@ __all__ = [
     "AutoMLConfig",
     "load_config", 
     "AutoMLOrchestrator",
+    "EnhancedAutoMLOrchestrator",
     "DataPreprocessor",
     "validate_data",
     "calculate_metrics",
     "detect_task",
     "get_available_models",
+    
+    # Optimizations
+    "DistributedTrainer",
+    "IncrementalLearner",
+    "PipelineCache",
+    "CacheConfig",
+    "OPTIMIZATIONS_AVAILABLE",
     
     # Authentication & Security
     "init_auth_system",
@@ -89,10 +114,10 @@ __all__ = [
 PACKAGE_INFO = {
     "name": "automl_platform",
     "version": __version__,
-    "description": "Production-ready AutoML platform with advanced features",
+    "description": "Production-ready AutoML platform with advanced features and optimizations",
     "requires_python": ">=3.8",
     "license": "MIT",
-    "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr"],
+    "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr", "distributed", "cache"],
     "classifiers": [
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -108,7 +133,8 @@ PACKAGE_INFO = {
         "enterprise": ["multi_tenant", "billing", "monitoring"],
         "security": ["sso", "rbac", "audit_trail", "encryption"],
         "compliance": ["rgpd", "gdpr", "data_retention", "consent_management"],
-        "advanced": ["llm_integration", "streaming", "drift_detection"]
+        "advanced": ["llm_integration", "streaming", "drift_detection"],
+        "optimizations": ["distributed_training", "incremental_learning", "pipeline_cache", "memory_optimization"]
     }
 }
 
@@ -120,13 +146,23 @@ def get_package_info():
     """Get package metadata information."""
     return PACKAGE_INFO.copy()
 
-def initialize_platform(config_path: str = None, environment: str = "production"):
+def check_optimizations():
+    """Check which optimization features are available."""
+    return {
+        "distributed_training": DistributedTrainer is not None,
+        "incremental_learning": IncrementalLearner is not None,
+        "pipeline_cache": PipelineCache is not None,
+        "all_available": OPTIMIZATIONS_AVAILABLE
+    }
+
+def initialize_platform(config_path: str = None, environment: str = "production", enable_optimizations: bool = True):
     """
-    Initialize the AutoML platform with all services.
+    Initialize the AutoML platform with all services including optimizations.
     
     Args:
         config_path: Path to configuration file
         environment: Environment name (development, staging, production)
+        enable_optimizations: Whether to enable optimization features
     
     Returns:
         Dictionary with initialized services
@@ -154,19 +190,45 @@ def initialize_platform(config_path: str = None, environment: str = "production"
             audit_service=services["audit"]
         )
     
+    # Initialize optimization services if available and enabled
+    if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
+        # Initialize pipeline cache
+        if hasattr(config, 'cache') and config.cache.enabled:
+            cache_config = CacheConfig(
+                backend=config.cache.backend,
+                redis_host=config.cache.redis_host,
+                ttl_seconds=config.cache.ttl
+            )
+            services["cache"] = PipelineCache(cache_config)
+        
+        # Initialize distributed trainer
+        if hasattr(config, 'distributed') and config.distributed.enabled:
+            services["distributed"] = DistributedTrainer(
+                backend=config.distributed.backend,
+                n_workers=config.distributed.n_workers
+            )
+        
+        # Initialize incremental learner
+        if hasattr(config, 'incremental') and config.incremental.enabled:
+            services["incremental"] = IncrementalLearner(
+                max_memory_mb=config.incremental.max_memory_mb
+            )
+    
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"AutoML Platform initialized in {environment} mode")
+    logger.info(f"Optimizations available: {check_optimizations()}")
     
     return services
 
-def create_app(config_path: str = None, environment: str = "production"):
+def create_app(config_path: str = None, environment: str = "production", enable_optimizations: bool = True):
     """
-    Create FastAPI application with all services configured.
+    Create FastAPI application with all services configured including optimizations.
     
     Args:
         config_path: Path to configuration file
         environment: Environment name
+        enable_optimizations: Whether to enable optimization features
     
     Returns:
         FastAPI application instance
@@ -180,7 +242,7 @@ def create_app(config_path: str = None, environment: str = "production"):
     # Create FastAPI app
     app = FastAPI(
         title="AutoML Platform",
-        description="Enterprise AutoML Platform with SSO, RGPD compliance, and multi-tenant support",
+        description="Enterprise AutoML Platform with SSO, RGPD compliance, multi-tenant support, and optimizations",
         version=__version__,
         docs_url="/docs" if config.api.enable_docs else None,
         redoc_url="/redoc" if config.api.enable_docs else None
@@ -219,11 +281,120 @@ def create_app(config_path: str = None, environment: str = "production"):
                 "auth": config.api.enable_auth,
                 "sso": config.api.enable_sso,
                 "rgpd": config.rgpd.enabled,
-                "monitoring": config.monitoring.enabled
+                "monitoring": config.monitoring.enabled,
+                "optimizations": check_optimizations()
             }
         }
     
+    # System status endpoint
+    @app.get("/api/system/status")
+    async def system_status():
+        """Get detailed system status including optimization components."""
+        from datetime import datetime
+        import psutil
+        
+        status = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "version": __version__,
+            "environment": environment,
+            "resources": {
+                "cpu_percent": psutil.cpu_percent(),
+                "memory_percent": psutil.virtual_memory().percent,
+                "disk_usage": psutil.disk_usage('/').percent
+            },
+            "optimizations": check_optimizations()
+        }
+        
+        # Add cache stats if available
+        if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'cache') and config.cache.enabled:
+            try:
+                cache_config = CacheConfig(backend=config.cache.backend)
+                cache = PipelineCache(cache_config)
+                status["cache_stats"] = cache.get_stats()
+            except:
+                pass
+        
+        return status
+    
+    # Optimization endpoints
+    if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
+        from fastapi import APIRouter, HTTPException
+        
+        opt_router = APIRouter(prefix="/api/optimizations", tags=["optimizations"])
+        
+        @opt_router.get("/status")
+        async def optimization_status():
+            """Get status of optimization components."""
+            return {
+                "available": check_optimizations(),
+                "config": {
+                    "cache_enabled": hasattr(config, 'cache') and config.cache.enabled,
+                    "distributed_enabled": hasattr(config, 'distributed') and config.distributed.enabled,
+                    "incremental_enabled": hasattr(config, 'incremental') and config.incremental.enabled
+                }
+            }
+        
+        @opt_router.post("/cache/clear")
+        async def clear_cache():
+            """Clear pipeline cache."""
+            if not (hasattr(config, 'cache') and config.cache.enabled):
+                raise HTTPException(status_code=400, detail="Cache not enabled")
+            
+            try:
+                cache_config = CacheConfig(backend=config.cache.backend)
+                cache = PipelineCache(cache_config)
+                success = cache.clear_all()
+                return {"success": success, "message": "Cache cleared"}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @opt_router.get("/cache/stats")
+        async def cache_stats():
+            """Get cache statistics."""
+            if not (hasattr(config, 'cache') and config.cache.enabled):
+                raise HTTPException(status_code=400, detail="Cache not enabled")
+            
+            try:
+                cache_config = CacheConfig(backend=config.cache.backend)
+                cache = PipelineCache(cache_config)
+                return cache.get_stats()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        app.include_router(opt_router)
+    
     return app
+
+def create_orchestrator(config_path: str = None, 
+                       environment: str = "production",
+                       enhanced: bool = True,
+                       enable_optimizations: bool = True) -> AutoMLOrchestrator:
+    """
+    Create an AutoML orchestrator with optional enhancements and optimizations.
+    
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name
+        enhanced: Whether to use EnhancedAutoMLOrchestrator
+        enable_optimizations: Whether to enable optimization features
+    
+    Returns:
+        Orchestrator instance
+    """
+    config = load_config(config_path, environment)
+    
+    # Enable optimization features in config if requested
+    if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
+        config.distributed_training = True
+        config.incremental_learning = True
+        config.enable_cache = True
+        config.cache_backend = "redis"
+        config.distributed_backend = "ray"
+    
+    if enhanced:
+        return EnhancedAutoMLOrchestrator(config)
+    else:
+        return AutoMLOrchestrator(config)
 
 # Check Python version compatibility
 import sys
@@ -232,3 +403,12 @@ if sys.version_info < (3, 8):
         f"AutoML Platform requires Python 3.8 or later. "
         f"Current version: {sys.version_info.major}.{sys.version_info.minor}"
     )
+
+# Log initialization
+import logging
+logger = logging.getLogger(__name__)
+logger.info(f"AutoML Platform v{__version__} initialized")
+if OPTIMIZATIONS_AVAILABLE:
+    logger.info("Optimization components available: distributed training, incremental learning, pipeline cache")
+else:
+    logger.info("Running without optimization components. Install ray, dask, river for full functionality")
