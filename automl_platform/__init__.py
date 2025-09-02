@@ -26,7 +26,7 @@ Version: 2.1.0
 
 __version__ = "2.1.0"
 __author__ = "AutoML Platform Team"
-__email__ = "support@automl-platform.com
+__email__ = "support@automl-platform.com"
 
 
 # Core imports for easy access
