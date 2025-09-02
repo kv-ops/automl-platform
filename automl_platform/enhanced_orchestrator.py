@@ -1,6 +1,9 @@
 """
-Enhanced AutoML Orchestrator with Storage, Monitoring, and LLM Integration
-Following DataRobot, Akkio, and H2O.ai best practices
+Enhanced AutoML Orchestrator with Storage, Monitoring, LLM Integration and Optimizations
+========================================================================================
+Place in: automl_platform/enhanced_orchestrator.py (REPLACE EXISTING FILE)
+
+Includes distributed training, incremental learning, and pipeline caching.
 """
 
 import pandas as pd
@@ -39,17 +42,27 @@ from .llm import AutoMLLLMAssistant
 from .data_quality_agent import IntelligentDataQualityAgent
 from .prompts import PromptTemplates
 
+# Optimization imports
+try:
+    from .distributed_training import DistributedTrainer
+    from .incremental_learning import IncrementalLearner
+    from .pipeline_cache import PipelineCache, CacheConfig
+    OPTIMIZATIONS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Optimization components not available: {e}")
+    OPTIMIZATIONS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
 class EnhancedAutoMLOrchestrator:
     """
-    Enhanced AutoML orchestrator with production features and LLM integration.
-    Combines approaches from DataRobot, Akkio, and H2O.ai.
+    Enhanced AutoML orchestrator with production features, LLM integration, and optimizations.
+    Combines approaches from DataRobot, Akkio, H2O.ai, with distributed training and caching.
     """
     
     def __init__(self, config: AutoMLConfig = None):
-        """Initialize enhanced orchestrator with all components."""
+        """Initialize enhanced orchestrator with all components including optimizations."""
         self.config = config or load_config()
         
         # Initialize storage if enabled
@@ -91,6 +104,40 @@ class EnhancedAutoMLOrchestrator:
             self.llm_assistant = None
             self.quality_agent = None
         
+        # Initialize optimization components
+        self.distributed_trainer = None
+        self.incremental_learner = None
+        self.pipeline_cache = None
+        
+        if OPTIMIZATIONS_AVAILABLE:
+            # Setup distributed training if enabled
+            if hasattr(self.config, 'distributed_training') and self.config.distributed_training:
+                self.distributed_trainer = DistributedTrainer(
+                    backend=getattr(self.config, 'distributed_backend', 'ray'),
+                    n_workers=getattr(self.config, 'n_workers', 4)
+                )
+                logger.info(f"Distributed training enabled with {self.config.distributed_backend}")
+            
+            # Setup incremental learning if enabled
+            if hasattr(self.config, 'incremental_learning') and self.config.incremental_learning:
+                self.incremental_learner = IncrementalLearner(
+                    max_memory_mb=getattr(self.config, 'max_memory_mb', 1000)
+                )
+                logger.info("Incremental learning enabled")
+            
+            # Setup pipeline cache if enabled
+            if hasattr(self.config, 'enable_cache') and self.config.enable_cache:
+                cache_config = CacheConfig(
+                    backend=getattr(self.config, 'cache_backend', 'redis'),
+                    redis_host=getattr(self.config, 'redis_host', 'localhost'),
+                    ttl_seconds=getattr(self.config, 'cache_ttl', 3600),
+                    compression=getattr(self.config, 'cache_compression', True),
+                    invalidate_on_drift=getattr(self.config, 'cache_invalidate_on_drift', True),
+                    invalidate_on_performance_drop=getattr(self.config, 'cache_invalidate_on_perf_drop', True)
+                )
+                self.pipeline_cache = PipelineCache(cache_config)
+                logger.info(f"Pipeline cache enabled with {cache_config.backend} backend")
+        
         # Core components
         self.preprocessor = DataPreprocessor(self.config.to_dict())
         self.leaderboard = []
@@ -114,6 +161,11 @@ class EnhancedAutoMLOrchestrator:
         self.feature_suggestions = []
         self.cleaning_report = None
         
+        # Optimization tracking
+        self.cache_hits = 0
+        self.distributed_jobs = 0
+        self.incremental_batches = 0
+        
         logger.info(f"Enhanced orchestrator initialized with {self.config.environment} environment")
     
     def _get_alert_config(self) -> Dict:
@@ -127,27 +179,14 @@ class EnhancedAutoMLOrchestrator:
         }
     
     async def analyze_with_llm(self, df: pd.DataFrame, target_column: str = None):
-        """
-        Akkio-style conversational data analysis using LLM.
-        
-        Args:
-            df: DataFrame to analyze
-            target_column: Target column for supervised learning
-        
-        Returns:
-            Dict with analysis results and recommendations
-        """
+        """Akkio-style conversational data analysis using LLM."""
         if not self.quality_agent:
             logger.warning("LLM not configured, skipping intelligent analysis")
             return {}
         
-        # DataRobot-style quality assessment
         assessment = self.quality_agent.assess(df, target_column)
-        
-        # Generate quality report
         quality_report = self.quality_agent.get_quality_report(assessment)
         
-        # Store results
         self.llm_insights['quality_assessment'] = assessment
         self.llm_insights['quality_report'] = quality_report
         
@@ -162,67 +201,39 @@ class EnhancedAutoMLOrchestrator:
         }
     
     async def suggest_features_with_llm(self, df: pd.DataFrame, target: str) -> List[Dict]:
-        """
-        Get LLM-powered feature engineering suggestions.
-        Similar to DataRobot's Feature Discovery.
-        
-        Args:
-            df: Input dataframe
-            target: Target column name
-        
-        Returns:
-            List of feature suggestions with code
-        """
+        """Get LLM-powered feature engineering suggestions."""
         if not self.llm_assistant:
             logger.warning("LLM not configured, skipping feature suggestions")
             return []
         
-        # Get feature suggestions
         suggestions = await self.llm_assistant.suggest_features(
             df, target, self.task or "auto"
         )
         
-        # Store suggestions
         self.feature_suggestions = suggestions
         
-        # Log top suggestions
         for i, suggestion in enumerate(suggestions[:3], 1):
             logger.info(f"Feature Suggestion {i}: {suggestion['name']} (importance: {suggestion['importance']})")
         
         return suggestions
     
     async def clean_data_with_llm(self, df: pd.DataFrame, instructions: str = None) -> pd.DataFrame:
-        """
-        Akkio-style conversational data cleaning.
-        
-        Args:
-            df: DataFrame to clean
-            instructions: Natural language cleaning instructions
-        
-        Returns:
-            Cleaned DataFrame
-        """
+        """Akkio-style conversational data cleaning."""
         if not self.quality_agent:
             logger.warning("LLM not configured, using standard cleaning")
             return df
         
         if instructions:
-            # User-provided instructions
             cleaned_df, response = await self.quality_agent.clean(instructions, df)
             logger.info(f"LLM Cleaning Response: {response[:200]}...")
         else:
-            # Auto-clean based on assessment
             assessment = self.quality_agent.assess(df)
-            
-            # Apply recommended cleaning for critical issues
             cleaned_df = df.copy()
             for alert in assessment.alerts:
                 if alert.get('severity') == 'critical':
-                    # Generate and apply cleaning code
                     cleaning_prompt = f"Fix this issue: {alert['message']}"
                     cleaned_df, _ = await self.quality_agent.clean(cleaning_prompt, cleaned_df)
         
-        # Store cleaning report
         self.cleaning_report = {
             'original_shape': df.shape,
             'cleaned_shape': cleaned_df.shape,
@@ -238,9 +249,12 @@ class EnhancedAutoMLOrchestrator:
             experiment_name: Optional[str] = None,
             reference_data: Optional[pd.DataFrame] = None,
             use_llm_features: bool = None,
-            use_llm_cleaning: bool = None) -> 'EnhancedAutoMLOrchestrator':
+            use_llm_cleaning: bool = None,
+            use_cache: bool = None,
+            use_distributed: bool = None,
+            use_incremental: bool = None) -> 'EnhancedAutoMLOrchestrator':
         """
-        Run enhanced AutoML pipeline with LLM integration.
+        Run enhanced AutoML pipeline with LLM integration and optimizations.
         
         Args:
             X: Training features
@@ -250,6 +264,9 @@ class EnhancedAutoMLOrchestrator:
             reference_data: Reference data for drift detection
             use_llm_features: Whether to use LLM for feature engineering
             use_llm_cleaning: Whether to use LLM for data cleaning
+            use_cache: Whether to use pipeline cache
+            use_distributed: Whether to use distributed training
+            use_incremental: Whether to use incremental learning
         
         Returns:
             Self for chaining
@@ -264,18 +281,36 @@ class EnhancedAutoMLOrchestrator:
             use_llm_features = self.config.llm.enable_feature_suggestions if self.config.llm.enabled else False
         if use_llm_cleaning is None:
             use_llm_cleaning = self.config.llm.enable_data_cleaning if self.config.llm.enabled else False
+        if use_cache is None:
+            use_cache = getattr(self.config, 'enable_cache', False) and self.pipeline_cache is not None
+        if use_distributed is None:
+            use_distributed = getattr(self.config, 'distributed_training', False) and self.distributed_trainer is not None
+        if use_incremental is None:
+            use_incremental = getattr(self.config, 'incremental_learning', False) and self.incremental_learner is not None
         
-        # LLM-powered data quality analysis (async)
+        # Check cache first
+        cache_key = None
+        if use_cache and self.pipeline_cache:
+            config_str = json.dumps(self.config.to_dict(), sort_keys=True)
+            cache_key = f"enhanced_{hash(config_str)}_{X.shape}_{task}"
+            
+            cached_pipeline = self.pipeline_cache.get_pipeline(cache_key, X)
+            if cached_pipeline:
+                logger.info("Using cached pipeline")
+                self.best_pipeline = cached_pipeline
+                self.task = task or detect_task(y)
+                self.cache_hits += 1
+                return self
+        
+        # LLM-powered data quality analysis
         if self.quality_agent:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # If loop is already running (e.g., in Jupyter), create task
                 asyncio.create_task(self.analyze_with_llm(X, y.name))
             else:
-                # Otherwise run synchronously
                 loop.run_until_complete(self.analyze_with_llm(X, y.name))
         
-        # Data quality check (standard + LLM if available)
+        # Data quality check
         if self.quality_monitor:
             quality_report = self.quality_monitor.check_data_quality(X)
             logger.info(f"Data quality score: {quality_report['quality_score']:.1f}")
@@ -283,7 +318,6 @@ class EnhancedAutoMLOrchestrator:
             if quality_report['quality_score'] < self.config.monitoring.min_quality_score:
                 logger.warning(f"Low data quality detected: {quality_report['issues']}")
                 
-                # LLM-powered cleaning if enabled
                 if use_llm_cleaning and self.quality_agent:
                     logger.info("Applying LLM-powered data cleaning...")
                     loop = asyncio.get_event_loop()
@@ -292,13 +326,12 @@ class EnhancedAutoMLOrchestrator:
                     else:
                         X = loop.run_until_complete(self.clean_data_with_llm(X))
                 
-                # Trigger alert
                 if self.alert_manager:
                     self.alert_manager.check_alerts({
                         'quality_score': quality_report['quality_score']
                     })
         
-        # Calculate dataset hash for versioning
+        # Calculate dataset hash
         data_str = pd.concat([X, y], axis=1).to_csv(index=False)
         self.dataset_hash = hashlib.sha256(data_str.encode()).hexdigest()[:16]
         
@@ -336,7 +369,6 @@ class EnhancedAutoMLOrchestrator:
             else:
                 suggestions = loop.run_until_complete(self.suggest_features_with_llm(X, y.name))
             
-            # Apply top suggestions automatically
             if suggestions and self.config.llm.enable_feature_suggestions:
                 X = self._apply_feature_suggestions(X, suggestions[:5])
         
@@ -344,8 +376,13 @@ class EnhancedAutoMLOrchestrator:
         if self.config.enable_auto_feature_engineering and self.feature_store:
             X = self._engineer_features_with_cache(X, y)
         
+        # Use incremental learning for large datasets
+        if use_incremental and len(X) > 10000:
+            logger.info("Using incremental learning for large dataset")
+            self._train_incremental(X, y)
+        
         # Get available models
-        models = self._get_models_to_train()
+        models = self._get_models_to_train(include_incremental=use_incremental)
         logger.info(f"Testing {len(models)} models")
         
         # Setup reference data for drift detection
@@ -356,8 +393,10 @@ class EnhancedAutoMLOrchestrator:
         cv = get_cv_splitter(self.task, self.config.cv_folds, self.config.random_state)
         scoring = self._determine_scoring()
         
-        # Train models with parallel processing if enabled
-        if self.config.worker.enabled and len(models) > 1:
+        # Train models with distributed processing if enabled
+        if use_distributed and self.distributed_trainer and len(models) > 1:
+            self._train_models_distributed(models, X, y, cv, scoring, reference_data)
+        elif self.config.worker.enabled and len(models) > 1:
             self._train_models_parallel(models, X, y, cv, scoring, reference_data)
         else:
             self._train_models_sequential(models, X, y, cv, scoring, reference_data)
@@ -370,7 +409,18 @@ class EnhancedAutoMLOrchestrator:
             self._select_best_model(X, y, reference_data)
             self._save_experiment_results()
             
-            # Generate LLM explanation of best model
+            # Cache the best pipeline
+            if use_cache and self.pipeline_cache and cache_key:
+                self.pipeline_cache.set_pipeline(
+                    cache_key,
+                    self.best_pipeline,
+                    X,
+                    metrics=self.leaderboard[0]['metrics'],
+                    ttl=getattr(self.config, 'cache_ttl', 3600)
+                )
+                logger.info("Best pipeline cached")
+            
+            # Generate LLM explanation
             if self.llm_assistant:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
@@ -383,6 +433,7 @@ class EnhancedAutoMLOrchestrator:
         
         logger.info(f"Training completed in {training_time:.2f} seconds")
         logger.info(f"Total models trained: {self.total_models_trained}")
+        logger.info(f"Cache hits: {self.cache_hits}, Distributed jobs: {self.distributed_jobs}, Incremental batches: {self.incremental_batches}")
         
         # Generate monitoring report
         if self.monitoring_service:
@@ -396,15 +447,192 @@ class EnhancedAutoMLOrchestrator:
             else:
                 loop.run_until_complete(self._generate_llm_report())
         
+        # Clean up distributed resources
+        if self.distributed_trainer:
+            self.distributed_trainer.shutdown()
+        
         return self
     
+    def _train_incremental(self, X: pd.DataFrame, y: pd.Series):
+        """Train models using incremental learning."""
+        if not self.incremental_learner:
+            return
+        
+        batch_size = 1000
+        for i in range(0, len(X), batch_size):
+            batch_X = X.iloc[i:i+batch_size]
+            batch_y = y.iloc[i:i+batch_size]
+            
+            models = self.incremental_learner.train_incremental(batch_X, batch_y, self.task)
+            self.incremental_batches += 1
+        
+        # Get best incremental model
+        best_model = self.incremental_learner.get_best_model()
+        if best_model:
+            pipeline = Pipeline([
+                ('preprocessor', self.preprocessor),
+                ('model', best_model)
+            ])
+            
+            # Evaluate
+            cv = get_cv_splitter(self.task, self.config.cv_folds, self.config.random_state)
+            scoring = self._determine_scoring()
+            scores = cross_val_score(pipeline, X, y, cv=cv, scoring=scoring, n_jobs=-1)
+            
+            # Calculate metrics
+            pipeline.fit(X, y)
+            y_pred = pipeline.predict(X)
+            metrics = calculate_metrics(y, y_pred, None, self.task)
+            
+            result = {
+                'model': f"Incremental_{type(best_model).__name__}",
+                'cv_score': scores.mean(),
+                'cv_std': scores.std(),
+                'metrics': metrics,
+                'params': {},
+                'training_time': 0,
+                'pipeline': pipeline,
+                'incremental': True,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            self.leaderboard.append(result)
+            logger.info(f"Incremental model: CV Score = {scores.mean():.4f}")
+    
+    def _train_models_distributed(self, models: Dict, X: pd.DataFrame, y: pd.Series,
+                                 cv: Any, scoring: str, reference_data: pd.DataFrame = None):
+        """Train models using distributed computing."""
+        if not self.distributed_trainer:
+            return self._train_models_sequential(models, X, y, cv, scoring, reference_data)
+        
+        logger.info(f"Starting distributed training with {len(models)} models")
+        
+        # Prepare parameter grids
+        param_grids = {}
+        for model_name in models.keys():
+            grid = get_param_grid(model_name)
+            if grid:
+                param_grids[model_name] = {f'model__{k}': v for k, v in grid.items()}
+        
+        # Train distributed
+        results = self.distributed_trainer.train_distributed(X, y, models, param_grids)
+        
+        # Add results to leaderboard
+        for result in results:
+            result['distributed'] = True
+            result['timestamp'] = datetime.now().isoformat()
+            self.leaderboard.append(result)
+            self.distributed_jobs += 1
+            logger.info(f"Distributed {result['model']}: CV Score = {result['cv_score']:.4f}")
+    
+    def _get_models_to_train(self, include_incremental: bool = False) -> Dict[str, Any]:
+        """Get models to train based on configuration."""
+        if self.config.algorithms == ['all']:
+            models = get_available_models(
+                self.task,
+                include_incremental=include_incremental
+            )
+        else:
+            all_models = get_available_models(
+                self.task,
+                include_incremental=include_incremental
+            )
+            models = {k: v for k, v in all_models.items() 
+                     if k in self.config.algorithms}
+        
+        # Filter excluded models
+        for excluded in self.config.exclude_algorithms:
+            models.pop(excluded, None)
+        
+        # Add advanced models if enabled
+        if self.config.include_neural_networks:
+            models.update(self._get_neural_models())
+        
+        if self.config.include_time_series and self.task == 'timeseries':
+            models.update(self._get_timeseries_models())
+        
+        # Limit number of models if specified
+        if self.config.max_models_to_train and len(models) > self.config.max_models_to_train:
+            priority_models = ['XGBClassifier', 'XGBRegressor', 'LGBMClassifier', 
+                             'LGBMRegressor', 'RandomForestClassifier', 'RandomForestRegressor']
+            
+            selected_models = {}
+            for name in priority_models:
+                if name in models:
+                    selected_models[name] = models[name]
+            
+            for name, model in models.items():
+                if len(selected_models) >= self.config.max_models_to_train:
+                    break
+                if name not in selected_models:
+                    selected_models[name] = model
+            
+            models = selected_models
+        
+        return models
+    
+    def predict(self, X: pd.DataFrame, track: bool = True, use_incremental: bool = False) -> np.ndarray:
+        """Make predictions with optional monitoring and incremental processing."""
+        if self.best_pipeline is None:
+            raise ValueError("No model trained yet")
+        
+        # Use incremental prediction for large datasets
+        if use_incremental and self.incremental_learner and len(X) > 10000:
+            return self.incremental_learner.predict_incremental(self.best_pipeline, X)
+        
+        start_time = time.time()
+        predictions = self.best_pipeline.predict(X)
+        prediction_time = time.time() - start_time
+        
+        # Track predictions if monitoring is enabled
+        if track and hasattr(self, 'best_model_monitor'):
+            self.best_model_monitor.log_prediction(
+                X, predictions, None, prediction_time
+            )
+            
+            # Check for drift
+            drift_results = self.best_model_monitor.check_drift(X)
+            if drift_results['drift_detected']:
+                logger.warning(f"Data drift detected: {drift_results['drifted_features']}")
+                
+                # Invalidate cache if drift detected
+                if self.pipeline_cache:
+                    self.pipeline_cache.invalidate(self.experiment_id, reason="drift_detected")
+        
+        return predictions
+    
+    def get_cache_stats(self) -> Dict:
+        """Get pipeline cache statistics."""
+        if self.pipeline_cache:
+            stats = self.pipeline_cache.get_stats()
+            stats['cache_hits_session'] = self.cache_hits
+            return stats
+        return {'cache_enabled': False}
+    
+    def clear_cache(self) -> bool:
+        """Clear pipeline cache."""
+        if self.pipeline_cache:
+            return self.pipeline_cache.clear_all()
+        return False
+    
+    def get_optimization_stats(self) -> Dict:
+        """Get optimization statistics."""
+        return {
+            'cache_hits': self.cache_hits,
+            'distributed_jobs': self.distributed_jobs,
+            'incremental_batches': self.incremental_batches,
+            'distributed_enabled': self.distributed_trainer is not None,
+            'incremental_enabled': self.incremental_learner is not None,
+            'cache_enabled': self.pipeline_cache is not None
+        }
+    
+    # Keep all other existing methods unchanged
     def _apply_feature_suggestions(self, X: pd.DataFrame, suggestions: List[Dict]) -> pd.DataFrame:
         """Apply LLM-suggested features to dataframe."""
         X_enhanced = X.copy()
         
         for suggestion in suggestions:
             try:
-                # Execute feature engineering code
                 local_vars = {"df": X_enhanced, "pd": pd, "np": np}
                 exec(suggestion['code'], {}, local_vars)
                 X_enhanced = local_vars.get("df", X_enhanced)
@@ -441,7 +669,8 @@ class EnhancedAutoMLOrchestrator:
             'metrics': self.leaderboard[0]['metrics'] if self.leaderboard else {},
             'top_features': list(self.feature_importance.keys())[:10] if self.feature_importance else [],
             'training_time': self.end_time - self.start_time if self.end_time else None,
-            'models_trained': self.total_models_trained
+            'models_trained': self.total_models_trained,
+            'optimization_stats': self.get_optimization_stats()
         }
         
         report = await self.llm_assistant.generate_report(
@@ -449,7 +678,6 @@ class EnhancedAutoMLOrchestrator:
             format="markdown"
         )
         
-        # Save report
         if self.config.output_dir:
             report_path = Path(self.config.output_dir) / self.experiment_id / "llm_report.md"
             report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -458,86 +686,12 @@ class EnhancedAutoMLOrchestrator:
         
         self.llm_insights['report'] = report
     
-    async def chat_with_assistant(self, message: str, context: Dict[str, Any] = None) -> str:
-        """
-        Chat with LLM assistant about the experiment.
-        Akkio-style conversational interface.
-        
-        Args:
-            message: User message
-            context: Additional context
-        
-        Returns:
-            Assistant response
-        """
-        if not self.llm_assistant:
-            return "LLM assistant not configured. Please enable LLM in configuration."
-        
-        # Add experiment context
-        if context is None:
-            context = {}
-        
-        context.update({
-            'experiment_id': self.experiment_id,
-            'task': self.task,
-            'models_trained': self.total_models_trained,
-            'best_model': self.leaderboard[0] if self.leaderboard else None,
-            'feature_suggestions': self.feature_suggestions[:3] if self.feature_suggestions else [],
-            'quality_score': self.llm_insights.get('quality_assessment', {}).get('quality_score')
-        })
-        
-        response = await self.llm_assistant.chat(message, context)
-        
-        return response
-    
-    def _get_models_to_train(self) -> Dict[str, Any]:
-        """Get models to train based on configuration."""
-        if self.config.algorithms == ['all']:
-            models = get_available_models(self.task)
-        else:
-            all_models = get_available_models(self.task)
-            models = {k: v for k, v in all_models.items() 
-                     if k in self.config.algorithms}
-        
-        # Filter excluded models
-        for excluded in self.config.exclude_algorithms:
-            models.pop(excluded, None)
-        
-        # Add advanced models if enabled
-        if self.config.include_neural_networks:
-            models.update(self._get_neural_models())
-        
-        if self.config.include_time_series and self.task == 'timeseries':
-            models.update(self._get_timeseries_models())
-        
-        # Limit number of models if specified
-        if self.config.max_models_to_train and len(models) > self.config.max_models_to_train:
-            # Prioritize certain models
-            priority_models = ['XGBClassifier', 'XGBRegressor', 'LGBMClassifier', 
-                             'LGBMRegressor', 'RandomForestClassifier', 'RandomForestRegressor']
-            
-            selected_models = {}
-            for name in priority_models:
-                if name in models:
-                    selected_models[name] = models[name]
-            
-            # Add remaining models up to limit
-            for name, model in models.items():
-                if len(selected_models) >= self.config.max_models_to_train:
-                    break
-                if name not in selected_models:
-                    selected_models[name] = model
-            
-            models = selected_models
-        
-        return models
-    
+    # All other methods remain unchanged from the original file
     def _get_neural_models(self) -> Dict[str, Any]:
         """Get neural network models if available."""
         models = {}
         
         try:
-            # TabNet
             if self.task == 'classification':
                 from pytorch_tabnet.tab_model import TabNetClassifier
                 models['TabNetClassifier'] = TabNetClassifier(
@@ -585,10 +739,7 @@ class EnhancedAutoMLOrchestrator:
         """Determine scoring metric based on task."""
         if self.config.scoring == 'auto':
             if self.task == 'classification':
-                if len(np.unique(self.y_train)) == 2:
-                    return 'roc_auc'
-                else:
-                    return 'f1_weighted'
+                return 'roc_auc' if len(np.unique(self.y_train)) == 2 else 'f1_weighted'
             else:
                 return 'neg_mean_squared_error'
         return self.config.scoring
@@ -598,17 +749,14 @@ class EnhancedAutoMLOrchestrator:
         feature_hash = hashlib.sha256(X.to_csv().encode()).hexdigest()[:16]
         feature_set_name = f"features_{self.experiment_id}_{feature_hash}"
         
-        # Try to load from cache
         try:
             logger.info("Checking feature store cache...")
             return self.feature_store.load_features(feature_set_name)
         except:
             logger.info("Generating new features...")
             
-            # Generate features (simplified example)
             X_engineered = X.copy()
             
-            # Polynomial features for numerical columns
             if self.config.create_polynomial:
                 from sklearn.preprocessing import PolynomialFeatures
                 numeric_cols = X.select_dtypes(include=[np.number]).columns
@@ -622,7 +770,6 @@ class EnhancedAutoMLOrchestrator:
                     )
                     X_engineered = pd.concat([X_engineered, poly_df], axis=1)
             
-            # Save to cache
             if self.feature_store:
                 self.feature_store.save_features(
                     X_engineered,
@@ -668,27 +815,22 @@ class EnhancedAutoMLOrchestrator:
         start_time = time.time()
         
         try:
-            # Create pipeline
             pipeline = Pipeline([
                 ('preprocessor', DataPreprocessor(self.config.to_dict())),
                 ('model', base_model)
             ])
             
-            # Handle imbalance
             if self.task == 'classification' and self.config.handle_imbalance:
                 if hasattr(base_model, 'class_weight'):
                     base_model.set_params(class_weight='balanced')
             
-            # Hyperparameter optimization
             params = self._optimize_hyperparameters(
                 model_name, base_model, X, y, cv, scoring, pipeline
             )
             
-            # Cross-validate
             scores = cross_val_score(pipeline, X, y, cv=cv, 
                                     scoring=scoring, n_jobs=-1)
             
-            # Fit final model
             pipeline.fit(X, y)
             y_pred = pipeline.predict(X)
             
@@ -697,13 +839,10 @@ class EnhancedAutoMLOrchestrator:
             else:
                 y_proba = None
             
-            # Calculate metrics
             metrics = calculate_metrics(y, y_pred, y_proba, self.task)
             
-            # Training time
             training_time = time.time() - start_time
             
-            # Create result
             result = {
                 'model': model_name,
                 'cv_score': scores.mean(),
@@ -715,7 +854,6 @@ class EnhancedAutoMLOrchestrator:
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Save model to storage
             if self.storage_manager:
                 model_id = f"{self.experiment_id}_{model_name}"
                 version = self._get_next_version(model_id)
@@ -734,20 +872,19 @@ class EnhancedAutoMLOrchestrator:
                     'description': f"Model trained in experiment {self.experiment_id}",
                     'author': self.config.user_id or 'automl',
                     'tenant_id': self.config.tenant_id,
-                    'llm_insights': self.llm_insights.get('model_explanation', '')
+                    'llm_insights': self.llm_insights.get('model_explanation', ''),
+                    'optimization_stats': self.get_optimization_stats()
                 }
                 
                 model_path = self.storage_manager.save_model(pipeline, metadata, version)
                 result['model_path'] = model_path
                 
-                # Register model
                 self.model_registry[model_id] = {
                     'version': version,
                     'path': model_path,
                     'metrics': metrics
                 }
             
-            # Setup monitoring
             if self.monitoring_service and reference_data is not None:
                 monitor = self.monitoring_service.register_model(
                     model_id=f"{self.experiment_id}_{model_name}",
@@ -755,10 +892,8 @@ class EnhancedAutoMLOrchestrator:
                     reference_data=reference_data
                 )
                 
-                # Log initial predictions for monitoring
                 monitor.log_prediction(X, y_pred, y, training_time)
             
-            # Add to leaderboard
             self.leaderboard.append(result)
             self.total_models_trained += 1
             
@@ -775,26 +910,22 @@ class EnhancedAutoMLOrchestrator:
         """Optimize hyperparameters for a model."""
         params = {}
         
-        # Try Optuna for important models
         if self.config.hpo_method == 'optuna' and model_name in [
             'RandomForestClassifier', 'RandomForestRegressor',
             'XGBClassifier', 'XGBRegressor',
             'LGBMClassifier', 'LGBMRegressor',
             'GradientBoostingClassifier', 'GradientBoostingRegressor'
         ]:
-            # Prepare data for Optuna
             from sklearn.model_selection import train_test_split
             X_train, X_val, y_train, y_val = train_test_split(
                 X, y, test_size=0.2, random_state=self.config.random_state,
                 stratify=y if self.task == 'classification' else None
             )
             
-            # Fit preprocessor
             temp_preprocessor = DataPreprocessor(self.config.to_dict())
             X_train_preprocessed = temp_preprocessor.fit_transform(X_train, y_train)
             X_val_preprocessed = temp_preprocessor.transform(X_val)
             
-            # Combine for Optuna
             X_preprocessed = np.vstack([X_train_preprocessed, X_val_preprocessed])
             y_combined = pd.concat([y_train, y_val])
             
@@ -807,7 +938,6 @@ class EnhancedAutoMLOrchestrator:
                 base_model.set_params(**params)
                 pipeline.set_params(model=base_model)
         
-        # Fallback to grid search
         elif self.config.hpo_method in ['grid', 'random']:
             param_grid = get_param_grid(model_name)
             if param_grid:
@@ -840,13 +970,11 @@ class EnhancedAutoMLOrchestrator:
         """Select and configure best model."""
         self.best_pipeline = self.leaderboard[0]['pipeline']
         
-        # Calculate feature importance
         try:
             self._calculate_feature_importance(X, y)
         except Exception as e:
             logger.warning(f"Could not calculate feature importance: {e}")
         
-        # Setup production monitoring for best model
         if self.monitoring_service and reference_data is not None:
             best_model_id = f"{self.experiment_id}_best"
             monitor = self.monitoring_service.register_model(
@@ -855,7 +983,6 @@ class EnhancedAutoMLOrchestrator:
                 reference_data=reference_data
             )
             
-            # Store monitor reference
             self.best_model_monitor = monitor
     
     def _save_experiment_results(self):
@@ -880,14 +1007,14 @@ class EnhancedAutoMLOrchestrator:
                     'metrics': r['metrics'],
                     'training_time': r['training_time']
                 }
-                for r in self.leaderboard[:10]  # Top 10 models
+                for r in self.leaderboard[:10]
             ],
             'llm_insights': self.llm_insights,
             'feature_suggestions': self.feature_suggestions[:5] if self.feature_suggestions else [],
-            'cleaning_report': self.cleaning_report
+            'cleaning_report': self.cleaning_report,
+            'optimization_stats': self.get_optimization_stats()
         }
         
-        # Save as JSON artifact
         experiment_path = Path(self.config.output_dir) / self.experiment_id
         experiment_path.mkdir(parents=True, exist_ok=True)
         
@@ -903,7 +1030,6 @@ class EnhancedAutoMLOrchestrator:
         
         report = self.monitoring_service.create_global_dashboard()
         
-        # Add LLM insights if available
         if self.llm_insights:
             report['llm_analysis'] = {
                 'quality_score': self.llm_insights.get('quality_assessment', {}).get('quality_score'),
@@ -911,20 +1037,19 @@ class EnhancedAutoMLOrchestrator:
                 'model_explanation_available': 'model_explanation' in self.llm_insights
             }
         
-        # Save report
+        report['optimization_stats'] = self.get_optimization_stats()
+        
         report_path = Path(self.config.monitoring.report_output_dir) / self.experiment_id
         report_path.mkdir(parents=True, exist_ok=True)
         
         with open(report_path / 'monitoring_report.json', 'w') as f:
             json.dump(report, f, indent=2, default=str)
         
-        # Check for alerts
         if self.alert_manager:
             active_alerts = self.alert_manager.get_active_alerts()
             if active_alerts:
                 logger.warning(f"Active alerts: {active_alerts}")
                 
-                # Send notifications if configured
                 for alert in active_alerts:
                     self._send_alert_notification(alert)
     
@@ -936,6 +1061,7 @@ class EnhancedAutoMLOrchestrator:
         
         if 'email' in self.config.monitoring.alert_channels and self.config.monitoring.email_smtp_host:
             from .monitoring import MonitoringIntegration
+            import os
             smtp_config = {
                 'host': self.config.monitoring.email_smtp_host,
                 'port': self.config.monitoring.email_smtp_port,
@@ -946,28 +1072,6 @@ class EnhancedAutoMLOrchestrator:
             MonitoringIntegration.send_to_email(
                 alert, smtp_config, self.config.monitoring.email_recipients
             )
-    
-    def predict(self, X: pd.DataFrame, track: bool = True) -> np.ndarray:
-        """Make predictions with optional monitoring."""
-        if self.best_pipeline is None:
-            raise ValueError("No model trained yet")
-        
-        start_time = time.time()
-        predictions = self.best_pipeline.predict(X)
-        prediction_time = time.time() - start_time
-        
-        # Track predictions if monitoring is enabled
-        if track and hasattr(self, 'best_model_monitor'):
-            self.best_model_monitor.log_prediction(
-                X, predictions, None, prediction_time
-            )
-            
-            # Check for drift
-            drift_results = self.best_model_monitor.check_drift(X)
-            if drift_results['drift_detected']:
-                logger.warning(f"Data drift detected: {drift_results['drifted_features']}")
-        
-        return predictions
     
     def predict_proba(self, X: pd.DataFrame, track: bool = True) -> np.ndarray:
         """Get probability predictions with optional monitoring."""
@@ -980,7 +1084,6 @@ class EnhancedAutoMLOrchestrator:
         predictions = self.best_pipeline.predict_proba(X)
         prediction_time = time.time() - start_time
         
-        # Track predictions if monitoring is enabled
         if track and hasattr(self, 'best_model_monitor'):
             self.best_model_monitor.log_prediction(
                 X, predictions[:, 1] if predictions.shape[1] == 2 else predictions,
@@ -1002,10 +1105,11 @@ class EnhancedAutoMLOrchestrator:
                 'cv_std': result['cv_std'],
                 'training_time': result['training_time'],
                 'timestamp': result.get('timestamp', ''),
-                'model_path': result.get('model_path', '')
+                'model_path': result.get('model_path', ''),
+                'distributed': result.get('distributed', False),
+                'incremental': result.get('incremental', False)
             }
             
-            # Add metrics
             for metric_name, metric_value in result['metrics'].items():
                 row[metric_name] = metric_value
             
@@ -1024,10 +1128,8 @@ class EnhancedAutoMLOrchestrator:
         filepath = Path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
         
-        # Save pipeline
         joblib.dump(self.best_pipeline, filepath)
         
-        # Save enhanced metadata including LLM insights
         metadata = {
             'experiment_id': self.experiment_id,
             'task': self.task,
@@ -1041,7 +1143,8 @@ class EnhancedAutoMLOrchestrator:
             'config': self.config.to_dict(),
             'llm_insights': self.llm_insights,
             'feature_suggestions': self.feature_suggestions,
-            'cleaning_report': self.cleaning_report
+            'cleaning_report': self.cleaning_report,
+            'optimization_stats': self.get_optimization_stats()
         }
         
         metadata_path = filepath.with_suffix('.meta.json')
@@ -1055,10 +1158,8 @@ class EnhancedAutoMLOrchestrator:
         """Load pipeline with enhanced metadata."""
         filepath = Path(filepath)
         
-        # Load pipeline
         self.best_pipeline = joblib.load(filepath)
         
-        # Load metadata
         metadata_path = filepath.with_suffix('.meta.json')
         if metadata_path.exists():
             with open(metadata_path, 'r') as f:
@@ -1071,6 +1172,12 @@ class EnhancedAutoMLOrchestrator:
                 self.llm_insights = metadata.get('llm_insights', {})
                 self.feature_suggestions = metadata.get('feature_suggestions', [])
                 self.cleaning_report = metadata.get('cleaning_report')
+                
+                # Load optimization stats
+                opt_stats = metadata.get('optimization_stats', {})
+                self.cache_hits = opt_stats.get('cache_hits', 0)
+                self.distributed_jobs = opt_stats.get('distributed_jobs', 0)
+                self.incremental_batches = opt_stats.get('incremental_batches', 0)
         
         logger.info(f"Pipeline loaded from {filepath}")
     
@@ -1101,7 +1208,6 @@ class EnhancedAutoMLOrchestrator:
     def get_model_info(self, model_id: str = None) -> Dict:
         """Get detailed information about a model."""
         if model_id is None:
-            # Return info about best model
             if not self.leaderboard:
                 return {}
             
@@ -1111,10 +1217,10 @@ class EnhancedAutoMLOrchestrator:
                 'parameters': self.leaderboard[0].get('params', {}),
                 'feature_importance': self.feature_importance,
                 'training_time': self.leaderboard[0]['training_time'],
-                'llm_explanation': self.llm_insights.get('model_explanation', '')
+                'llm_explanation': self.llm_insights.get('model_explanation', ''),
+                'optimization_stats': self.get_optimization_stats()
             }
         else:
-            # Return info about specific model from registry
             return self.model_registry.get(model_id, {})
     
     def get_monitoring_metrics(self) -> Dict:
@@ -1124,9 +1230,10 @@ class EnhancedAutoMLOrchestrator:
         
         metrics = self.monitoring_service.create_global_dashboard()
         
-        # Add LLM metrics if available
         if self.llm_assistant:
             metrics['llm_usage'] = self.llm_assistant.get_usage_stats()
+        
+        metrics['optimization'] = self.get_optimization_stats()
         
         return metrics
     
@@ -1141,35 +1248,58 @@ class EnhancedAutoMLOrchestrator:
         }
     
     def retrain(self, X: pd.DataFrame, y: pd.Series,
-               model_name: str = None) -> 'EnhancedAutoMLOrchestrator':
-        """Retrain model with new data."""
+               model_name: str = None,
+               use_incremental: bool = True) -> 'EnhancedAutoMLOrchestrator':
+        """Retrain model with new data using optimizations."""
         logger.info(f"Retraining model with new data (shape: {X.shape})")
         
-        # If specific model requested, train only that
         if model_name:
             self.config.algorithms = [model_name]
         elif self.leaderboard:
-            # Retrain only the best model
             self.config.algorithms = [self.leaderboard[0]['model']]
         
-        # Reduce HPO iterations for retraining
         original_hpo_iter = self.config.hpo_n_iter
         self.config.hpo_n_iter = min(10, original_hpo_iter)
         
-        # Run training
-        self.fit(X, y, task=self.task, 
-                experiment_name=f"{self.experiment_id}_retrain")
+        # Use incremental learning for retraining if available
+        incremental = use_incremental and self.incremental_learner is not None
         
-        # Restore original config
+        self.fit(X, y, task=self.task, 
+                experiment_name=f"{self.experiment_id}_retrain",
+                use_incremental=incremental)
+        
         self.config.hpo_n_iter = original_hpo_iter
         
         return self
+    
+    async def chat_with_assistant(self, message: str, context: Dict[str, Any] = None) -> str:
+        """Chat with LLM assistant about the experiment."""
+        if not self.llm_assistant:
+            return "LLM assistant not configured. Please enable LLM in configuration."
+        
+        if context is None:
+            context = {}
+        
+        context.update({
+            'experiment_id': self.experiment_id,
+            'task': self.task,
+            'models_trained': self.total_models_trained,
+            'best_model': self.leaderboard[0] if self.leaderboard else None,
+            'feature_suggestions': self.feature_suggestions[:3] if self.feature_suggestions else [],
+            'quality_score': self.llm_insights.get('quality_assessment', {}).get('quality_score'),
+            'optimization_stats': self.get_optimization_stats()
+        })
+        
+        response = await self.llm_assistant.chat(message, context)
+        
+        return response
 
 
 # Convenience function
 def create_automl_pipeline(config_path: str = None,
                           environment: str = None,
-                          enable_llm: bool = None) -> EnhancedAutoMLOrchestrator:
+                          enable_llm: bool = None,
+                          enable_optimizations: bool = True) -> EnhancedAutoMLOrchestrator:
     """
     Create an enhanced AutoML pipeline with configuration.
     
@@ -1177,81 +1307,19 @@ def create_automl_pipeline(config_path: str = None,
         config_path: Path to configuration file
         environment: Environment name (development/production)
         enable_llm: Whether to enable LLM features
+        enable_optimizations: Whether to enable optimization features
     
     Returns:
         Configured orchestrator instance
     """
     config = load_config(config_path, environment)
     
-    # Override LLM setting if specified
     if enable_llm is not None:
         config.llm.enabled = enable_llm
     
+    if enable_optimizations:
+        config.distributed_training = True
+        config.incremental_learning = True
+        config.enable_cache = True
+    
     return EnhancedAutoMLOrchestrator(config)
-
-
-# Example usage
-if __name__ == "__main__":
-    import os
-    
-    # Create sample data
-    from sklearn.datasets import make_classification
-    X, y = make_classification(n_samples=1000, n_features=20, n_informative=15,
-                              n_redundant=5, n_classes=2, random_state=42)
-    X = pd.DataFrame(X, columns=[f"feature_{i}" for i in range(20)])
-    y = pd.Series(y, name="target")
-    
-    # Create orchestrator with production config
-    config = AutoMLConfig()
-    config.environment = "production"
-    config.apply_environment_config()
-    
-    # Enable key features
-    config.storage.backend = "local"  # or "minio" for production
-    config.monitoring.enabled = True
-    config.worker.enabled = False  # Set to True for parallel training
-    config.llm.enabled = True  # Enable LLM features
-    config.llm.api_key = os.getenv("OPENAI_API_KEY")  # Set your API key
-    
-    # Create orchestrator
-    orchestrator = EnhancedAutoMLOrchestrator(config)
-    
-    # Train models with LLM enhancements
-    orchestrator.fit(
-        X, y, 
-        experiment_name="demo_experiment_with_llm",
-        use_llm_features=True,
-        use_llm_cleaning=True
-    )
-    
-    # Get leaderboard
-    leaderboard = orchestrator.get_leaderboard()
-    print("\nLeaderboard:")
-    print(leaderboard.head())
-    
-    # Get LLM insights
-    insights = orchestrator.get_llm_insights()
-    print("\nLLM Insights Available:")
-    for key in insights.keys():
-        if insights[key]:
-            print(f"  - {key}: ✓")
-    
-    # Chat with assistant about results
-    loop = asyncio.get_event_loop()
-    response = loop.run_until_complete(
-        orchestrator.chat_with_assistant("Why did the best model perform well?")
-    )
-    print(f"\nAssistant Response: {response[:200]}...")
-    
-    # Make predictions
-    X_test = X.iloc[:10]
-    predictions = orchestrator.predict(X_test)
-    print(f"\nPredictions: {predictions}")
-    
-    # Get monitoring metrics
-    metrics = orchestrator.get_monitoring_metrics()
-    print(f"\nMonitoring metrics available: {list(metrics.keys())}")
-    
-    # Save best model
-    model_path = orchestrator.save_pipeline()
-    print(f"\nModel saved to: {model_path}")
