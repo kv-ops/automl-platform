@@ -1,6 +1,7 @@
 """
 Enhanced Data Preparation Module
-Includes data quality checks, drift detection, and advanced preprocessing
+Includes data quality checks, drift detection, advanced preprocessing,
+and integration with connectors and feature store
 """
 
 import pandas as pd
@@ -28,6 +29,7 @@ class EnhancedDataPreprocessor:
     """
     Advanced data preprocessing with quality checks and drift detection.
     No data leakage guaranteed through proper pipeline usage.
+    Integrated with data connectors and feature store.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -62,6 +64,96 @@ class EnhancedDataPreprocessor:
         self.rare_threshold = config.get('rare_category_threshold', 0.01)
         self.enable_quality_checks = config.get('enable_quality_checks', True)
         self.enable_drift_detection = config.get('enable_drift_detection', False)
+        
+        # Connector integration
+        self.connector = None
+        if config.get('connector_config'):
+            self._init_connector(config['connector_config'])
+        
+        # Feature store integration
+        self.feature_store = None
+        if config.get('feature_store_config'):
+            self._init_feature_store(config['feature_store_config'])
+    
+    def _init_connector(self, connector_config: Dict[str, Any]):
+        """Initialize data connector."""
+        try:
+            from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
+            
+            conn_config = ConnectionConfig(
+                connection_type=connector_config.get('type', 'postgresql'),
+                **connector_config.get('params', {})
+            )
+            
+            self.connector = ConnectorFactory.create_connector(conn_config)
+            logger.info(f"Initialized connector: {conn_config.connection_type}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connector: {e}")
+            self.connector = None
+    
+    def _init_feature_store(self, feature_store_config: Dict[str, Any]):
+        """Initialize feature store."""
+        try:
+            from automl_platform.feature_store import FeatureStore
+            
+            self.feature_store = FeatureStore(feature_store_config)
+            logger.info("Initialized feature store")
+        except Exception as e:
+            logger.warning(f"Failed to initialize feature store: {e}")
+            self.feature_store = None
+    
+    def load_data_from_connector(self, query: str = None, table_name: str = None) -> pd.DataFrame:
+        """Load data using configured connector."""
+        if not self.connector:
+            raise ValueError("No connector configured")
+        
+        try:
+            if query:
+                df = self.connector.query(query)
+            elif table_name:
+                df = self.connector.read_table(table_name)
+            else:
+                raise ValueError("Either query or table_name must be provided")
+            
+            logger.info(f"Loaded {len(df)} rows from connector")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Failed to load data from connector: {e}")
+            raise
+    
+    def save_to_feature_store(self, df: pd.DataFrame, feature_set_name: str) -> bool:
+        """Save processed features to feature store."""
+        if not self.feature_store:
+            logger.warning("No feature store configured")
+            return False
+        
+        try:
+            # Register feature set if needed
+            from automl_platform.feature_store import FeatureSet, FeatureDefinition
+            
+            features = []
+            for col in df.columns:
+                features.append(FeatureDefinition(
+                    name=col,
+                    dtype=str(df[col].dtype),
+                    description=f"Feature {col}"
+                ))
+            
+            feature_set = FeatureSet(
+                name=feature_set_name,
+                features=features,
+                entity_key="entity_id" if "entity_id" in df.columns else df.columns[0]
+            )
+            
+            self.feature_store.register_feature_set(feature_set)
+            
+            # Write features
+            return self.feature_store.write_features(feature_set_name, df)
+            
+        except Exception as e:
+            logger.error(f"Failed to save to feature store: {e}")
+            return False
         
     def detect_feature_types(self, df: pd.DataFrame) -> Dict[str, List[str]]:
         """
