@@ -94,7 +94,7 @@ class EnhancedDataPreprocessor:
     def _init_feature_store(self, feature_store_config: Dict[str, Any]):
         """Initialize feature store."""
         try:
-            from automl_platform.feature_store import FeatureStore
+            from automl_platform.api.feature_store import FeatureStore
             
             self.feature_store = FeatureStore(feature_store_config)
             logger.info("Initialized feature store")
