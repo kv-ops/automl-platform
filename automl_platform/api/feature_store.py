@@ -1,7 +1,7 @@
 """
 Feature Store for AutoML Platform
 Persistent storage with versioning, caching, and time-travel capabilities
-Place in: automl_platform/feature_store.py
+Place in: automl_platform/api/feature_store.py
 """
 
 import pandas as pd
