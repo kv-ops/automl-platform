@@ -1,275 +1,437 @@
 """
-AutoML Platform API Module
+AutoML Platform - Production-ready machine learning automation with optimizations
 
-This module contains API-specific components for the AutoML platform including:
-- Infrastructure management and multi-tenant isolation
-- Billing and subscription management
-- Data connectors for external data sources
-- Streaming processing capabilities
-- Feature store for ML features management
-- LLM endpoints for AI-powered features
-- Authentication, SSO, and RGPD compliance endpoints
+A comprehensive platform for automated machine learning with advanced features including:
+- Automated model selection and hyperparameter optimization
+- Feature engineering and data preprocessing
+- Model monitoring and drift detection
+- Multi-tenant architecture with billing
+- LLM integration for intelligent assistance
+- Real-time streaming capabilities
+- Enterprise-grade security and deployment
+- SSO authentication (Keycloak, Auth0, Okta)
+- RGPD/GDPR compliance with full data subject rights
+- Immutable audit trail with hash chain
+- Distributed training with Ray/Dask
+- Incremental learning for large datasets
+- Intelligent pipeline caching
+- Batch inference processing
+- WebSocket real-time updates
+- Multi-source data connectors
+- Feature store management
+- Model versioning and promotion
 
-These modules are designed to be used with the main AutoML platform to provide
-enterprise-grade features and integrations.
 """
 
-__version__ = "2.0.0"
 
-# API-specific imports for convenience
+# Core imports for easy access
+from .config import AutoMLConfig, load_config
+from .orchestrator import AutoMLOrchestrator
+from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
+from .data_prep import DataPreprocessor, validate_data
+from .metrics import calculate_metrics, detect_task
+from .model_selection import get_available_models
+
+# Optimization imports
 try:
-    from .billing import BillingManager, UsageTracker, PlanType, BillingPeriod
-    from .infrastructure import TenantManager, SecurityManager, DeploymentManager
-    from .connectors import ConnectorFactory, ConnectionConfig
-    from .streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
-    from .feature_store import FeatureStore, FeatureSet, FeatureDefinition
-    from .llm_endpoints import router as llm_router
-    from .auth_endpoints import create_auth_router, sso_router, rgpd_router
-except ImportError as e:
-    # Handle missing dependencies gracefully
-    import warnings
-    warnings.warn(
-        f"Some API modules could not be imported: {e}. "
-        "Please ensure all dependencies are installed.",
-        ImportWarning
-    )
+    from .distributed_training import DistributedTrainer
+    from .incremental_learning import IncrementalLearner
+    from .pipeline_cache import PipelineCache, CacheConfig
+    OPTIMIZATIONS_AVAILABLE = True
+except ImportError:
+    OPTIMIZATIONS_AVAILABLE = False
+    DistributedTrainer = None
+    IncrementalLearner = None
+    PipelineCache = None
+    CacheConfig = None
 
-# Available components when importing from api
-__all__ = [
+# Authentication and Security imports
+from .auth import (
+    init_auth_system,
+    auth_router,
+    get_current_user,
+    require_permission,
+    require_plan
+)
+from .sso_service import SSOService, SSOProvider
+from .audit_service import AuditService, AuditEventType, AuditSeverity
+from .rgpd_compliance_service import (
+    RGPDComplianceService,
+    GDPRRequestType,
+    ConsentType,
+    get_rgpd_service
+)
+from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
+
+# API Module imports
+try:
+    # Batch processing
+    from .api.batch_inference import (
+        BatchInferenceEngine,
+        BatchJobConfig,
+        BatchJobResult,
+        BatchStatus,
+        BatchPriority,
+        BatchScheduler
+    )
+    BATCH_AVAILABLE = True
+except ImportError:
+    BATCH_AVAILABLE = False
+    BatchInferenceEngine = None
+
+try:
     # Billing
-    "BillingManager",
-    "UsageTracker", 
-    "PlanType",
-    "BillingPeriod",
-    
+    from .api.billing import BillingManager, PlanType, UsageTracker
+    from .api.billing_routes import billing_router
+    BILLING_AVAILABLE = True
+except ImportError:
+    BILLING_AVAILABLE = False
+    billing_router = None
+
+try:
+    # Data connectors
+    from .api.connectors import ConnectorFactory, ConnectionConfig
+    CONNECTORS_AVAILABLE = True
+except ImportError:
+    CONNECTORS_AVAILABLE = False
+    ConnectorFactory = None
+
+try:
+    # Feature store
+    from .api.feature_store import FeatureStore, FeatureSet, FeatureDefinition
+    FEATURE_STORE_AVAILABLE = True
+except ImportError:
+    FEATURE_STORE_AVAILABLE = False
+    FeatureStore = None
+
+try:
     # Infrastructure
-    "TenantManager",
-    "SecurityManager",
-    "DeploymentManager",
+    from .api.infrastructure import (
+        TenantManager,
+        SecurityManager,
+        ResourceMonitor,
+        DeploymentManager
+    )
+    INFRASTRUCTURE_AVAILABLE = True
+except ImportError:
+    INFRASTRUCTURE_AVAILABLE = False
+    TenantManager = None
+
+try:
+    # LLM endpoints
+    from .api.llm_endpoints import router as llm_router
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    llm_router = None
+
+try:
+    # MLOps endpoints
+    from .api.mlops_endpoints import router as mlops_router
+    MLOPS_AVAILABLE = True
+except ImportError:
+    MLOPS_AVAILABLE = False
+    mlops_router = None
+
+try:
+    # Model versioning
+    from .api.model_versioning import (
+        ModelVersionManager,
+        ModelVersion,
+        VersionStatus,
+        PromotionStrategy
+    )
+    VERSIONING_AVAILABLE = True
+except ImportError:
+    VERSIONING_AVAILABLE = False
+    ModelVersionManager = None
+
+try:
+    # Streaming
+    from .api.streaming import (
+        StreamConfig,
+        StreamingOrchestrator,
+        MLStreamProcessor
+    )
+    STREAMING_AVAILABLE = True
+except ImportError:
+    STREAMING_AVAILABLE = False
+    StreamingOrchestrator = None
+
+try:
+    # WebSocket
+    from .api.websocket import (
+        connection_manager,
+        websocket_endpoint,
+        initialize_websocket_service,
+        shutdown_websocket_service
+    )
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
+    connection_manager = None
+
+# Make commonly used classes available at package level
+__all__ = [
+    # Core AutoML
+    "AutoMLConfig",
+    "load_config", 
+    "AutoMLOrchestrator",
+    "EnhancedAutoMLOrchestrator",
+    "DataPreprocessor",
+    "validate_data",
+    "calculate_metrics",
+    "detect_task",
+    "get_available_models",
     
-    # Connectors
+    # Optimizations
+    "DistributedTrainer",
+    "IncrementalLearner",
+    "PipelineCache",
+    "CacheConfig",
+    "OPTIMIZATIONS_AVAILABLE",
+    
+    # Authentication & Security
+    "init_auth_system",
+    "auth_router",
+    "get_current_user",
+    "require_permission",
+    "require_plan",
+    
+    # SSO
+    "SSOService",
+    "SSOProvider",
+    
+    # Audit
+    "AuditService",
+    "AuditEventType",
+    "AuditSeverity",
+    
+    # RGPD/GDPR
+    "RGPDComplianceService",
+    "GDPRRequestType",
+    "ConsentType",
+    "get_rgpd_service",
+    
+    # Middleware
+    "UnifiedAuthMiddleware",
+    "RGPDMiddleware",
+    "setup_auth_middleware",
+    
+    # API Components
+    "BatchInferenceEngine",
+    "BatchJobConfig",
+    "BillingManager",
+    "billing_router",
     "ConnectorFactory",
     "ConnectionConfig",
-    
-    # Streaming
-    "StreamingOrchestrator",
-    "StreamConfig",
-    "MLStreamProcessor",
-    
-    # Feature Store
     "FeatureStore",
-    "FeatureSet",
-    "FeatureDefinition",
-    
-    # LLM
+    "TenantManager",
     "llm_router",
-    
-    # Authentication & RGPD
-    "create_auth_router",
-    "sso_router",
-    "rgpd_router",
+    "mlops_router",
+    "ModelVersionManager",
+    "StreamingOrchestrator",
+    "connection_manager",
+    "websocket_endpoint"
 ]
 
-# API module information
-API_INFO = {
-    "name": "automl_platform.api",
+# Package metadata
+PACKAGE_INFO = {
+    "name": "automl_platform",
     "version": __version__,
-    "description": "API components for enterprise AutoML features",
-    "components": {
-        "billing": "Subscription and usage management",
-        "infrastructure": "Multi-tenant architecture and security",
-        "connectors": "External data source integrations",
-        "streaming": "Real-time data processing",
-        "feature_store": "Feature management and versioning",
-        "llm_endpoints": "AI-powered features and assistance",
-        "auth_endpoints": "SSO authentication and RGPD compliance"
-    },
-    "dependencies": {
-        "required": [
-            "fastapi>=0.104.0",
-            "sqlalchemy>=2.0.0",
-            "cryptography>=41.0.0",
-            "jwt>=1.3.1",
-            "redis>=4.0.0",
-            "pydantic>=2.0.0",
-            "pyarrow>=14.0.0"
-        ],
-        "optional": {
-            "billing": ["stripe", "paypal"],
-            "infrastructure": ["docker", "kubernetes"], 
-            "connectors": [
-                "snowflake-connector-python",
-                "google-cloud-bigquery",
-                "databricks-sql-connector",
-                "psycopg2-binary",
-                "pymongo"
-            ],
-            "streaming": ["kafka-python", "pulsar-client", "redis", "apache-flink"],
-            "feature_store": ["minio", "boto3", "redis", "pyarrow"],
-            "llm": ["openai", "anthropic", "chromadb", "langchain"],
-            "auth": ["python-keycloak", "authlib", "python-jose"]
-        }
+    "description": "Production-ready AutoML platform with advanced features and optimizations",
+    "requires_python": ">=3.8",
+    "license": "MIT",
+    "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr", 
+                  "distributed", "cache", "batch", "streaming", "websocket", "mlops"],
+    "classifiers": [
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+    ],
+    "features": {
+        "core": ["automl", "feature_engineering", "model_selection"],
+        "enterprise": ["multi_tenant", "billing", "monitoring"],
+        "security": ["sso", "rbac", "audit_trail", "encryption"],
+        "compliance": ["rgpd", "gdpr", "data_retention", "consent_management"],
+        "advanced": ["llm_integration", "streaming", "drift_detection"],
+        "optimizations": ["distributed_training", "incremental_learning", "pipeline_cache", "memory_optimization"],
+        "api": ["batch_inference", "websocket", "connectors", "feature_store", "model_versioning"]
     }
 }
 
-def get_api_info():
-    """Get API module information and dependencies."""
-    return API_INFO.copy()
+def get_version():
+    """Get the current version of the AutoML platform."""
+    return __version__
 
-def check_dependencies():
-    """Check which optional dependencies are available."""
-    available_deps = {}
-    
-    # Check billing dependencies
-    billing_deps = []
-    try:
-        import stripe
-        billing_deps.append("stripe")
-    except ImportError:
-        pass
-    
-    try:
-        import paypalrestsdk
-        billing_deps.append("paypal")
-    except ImportError:
-        pass
-    
-    available_deps["billing"] = billing_deps
-    
-    # Check infrastructure dependencies  
-    infra_deps = []
-    try:
-        import docker
-        infra_deps.append("docker")
-    except ImportError:
-        pass
-        
-    try:
-        import kubernetes
-        infra_deps.append("kubernetes")
-    except ImportError:
-        pass
-    
-    available_deps["infrastructure"] = infra_deps
-    
-    # Check connector dependencies
-    connector_deps = []
-    deps_to_check = [
-        ("snowflake.connector", "snowflake"),
-        ("google.cloud.bigquery", "bigquery"),
-        ("databricks.sql", "databricks"),
-        ("psycopg2", "postgresql"),
-        ("pymongo", "mongodb")
-    ]
-    
-    for module_name, dep_name in deps_to_check:
-        try:
-            __import__(module_name)
-            connector_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["connectors"] = connector_deps
-    
-    # Check streaming dependencies
-    streaming_deps = []
-    streaming_to_check = [
-        ("kafka", "kafka"),
-        ("pulsar", "pulsar"),
-        ("redis", "redis"),
-        ("pyflink", "flink")
-    ]
-    
-    for module_name, dep_name in streaming_to_check:
-        try:
-            __import__(module_name)
-            streaming_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["streaming"] = streaming_deps
-    
-    # Check feature store dependencies
-    feature_store_deps = []
-    fs_to_check = [
-        ("minio", "minio"),
-        ("boto3", "s3"),
-        ("redis", "redis"),
-        ("pyarrow", "pyarrow")
-    ]
-    
-    for module_name, dep_name in fs_to_check:
-        try:
-            __import__(module_name)
-            feature_store_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["feature_store"] = feature_store_deps
-    
-    # Check LLM dependencies
-    llm_deps = []
-    llm_to_check = [
-        ("openai", "openai"),
-        ("anthropic", "anthropic"), 
-        ("chromadb", "chromadb"),
-        ("langchain", "langchain")
-    ]
-    
-    for module_name, dep_name in llm_to_check:
-        try:
-            __import__(module_name)
-            llm_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["llm"] = llm_deps
-    
-    # Check auth dependencies
-    auth_deps = []
-    auth_to_check = [
-        ("keycloak", "python-keycloak"),
-        ("authlib", "authlib"),
-        ("jose", "python-jose"),
-        ("passlib", "passlib")
-    ]
-    
-    for module_name, dep_name in auth_to_check:
-        try:
-            __import__(module_name)
-            auth_deps.append(dep_name)
-        except ImportError:
-            pass
-    
-    available_deps["auth"] = auth_deps
-    
-    return available_deps
+def get_package_info():
+    """Get package metadata information."""
+    return PACKAGE_INFO.copy()
 
-def create_api_app():
+def check_optimizations():
+    """Check which optimization features are available."""
+    return {
+        "distributed_training": DistributedTrainer is not None,
+        "incremental_learning": IncrementalLearner is not None,
+        "pipeline_cache": PipelineCache is not None,
+        "all_available": OPTIMIZATIONS_AVAILABLE
+    }
+
+def check_api_features():
+    """Check which API features are available."""
+    return {
+        "batch_processing": BATCH_AVAILABLE,
+        "billing": BILLING_AVAILABLE,
+        "connectors": CONNECTORS_AVAILABLE,
+        "feature_store": FEATURE_STORE_AVAILABLE,
+        "infrastructure": INFRASTRUCTURE_AVAILABLE,
+        "llm": LLM_AVAILABLE,
+        "mlops": MLOPS_AVAILABLE,
+        "versioning": VERSIONING_AVAILABLE,
+        "streaming": STREAMING_AVAILABLE,
+        "websocket": WEBSOCKET_AVAILABLE
+    }
+
+def initialize_platform(config_path: str = None, environment: str = "production", 
+                       enable_optimizations: bool = True, enable_api_features: bool = True):
     """
-    Create and configure the FastAPI application with all routers and middleware.
+    Initialize the AutoML platform with all services including optimizations and API features.
+    
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name (development, staging, production)
+        enable_optimizations: Whether to enable optimization features
+        enable_api_features: Whether to enable API features
     
     Returns:
-        FastAPI app instance
+        Dictionary with initialized services
+    """
+    # Load configuration
+    config = load_config(config_path, environment)
+    
+    # Initialize services
+    services = {}
+    
+    # Initialize authentication system
+    if config.api.enable_auth:
+        services["auth"] = init_auth_system()
+    
+    # Initialize SSO if enabled
+    if config.api.enable_sso:
+        services["sso"] = SSOService()
+    
+    # Initialize audit service
+    services["audit"] = AuditService()
+    
+    # Initialize RGPD service if enabled
+    if config.rgpd.enabled:
+        services["rgpd"] = RGPDComplianceService(
+            audit_service=services["audit"]
+        )
+    
+    # Initialize optimization services if available and enabled
+    if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
+        # Initialize pipeline cache
+        if hasattr(config, 'cache') and config.cache.enabled:
+            cache_config = CacheConfig(
+                backend=config.cache.backend,
+                redis_host=config.cache.redis_host,
+                ttl_seconds=config.cache.ttl
+            )
+            services["cache"] = PipelineCache(cache_config)
+        
+        # Initialize distributed trainer
+        if hasattr(config, 'distributed') and config.distributed.enabled:
+            services["distributed"] = DistributedTrainer(
+                backend=config.distributed.backend,
+                n_workers=config.distributed.n_workers
+            )
+        
+        # Initialize incremental learner
+        if hasattr(config, 'incremental') and config.incremental.enabled:
+            services["incremental"] = IncrementalLearner(
+                max_memory_mb=config.incremental.max_memory_mb
+            )
+    
+    # Initialize API features if enabled
+    if enable_api_features:
+        # Initialize batch processing
+        if BATCH_AVAILABLE and hasattr(config, 'batch') and config.batch.enabled:
+            services["batch"] = BatchInferenceEngine(config)
+            services["batch_scheduler"] = BatchScheduler(services["batch"])
+        
+        # Initialize billing
+        if BILLING_AVAILABLE and hasattr(config, 'billing') and config.billing.enabled:
+            services["billing"] = BillingManager(
+                tenant_manager=services.get("tenant_manager"),
+                db_url=config.billing.db_url
+            )
+        
+        # Initialize feature store
+        if FEATURE_STORE_AVAILABLE and hasattr(config, 'feature_store') and config.feature_store.enabled:
+            services["feature_store"] = FeatureStore(config.feature_store.to_dict())
+        
+        # Initialize infrastructure
+        if INFRASTRUCTURE_AVAILABLE:
+            services["tenant_manager"] = TenantManager()
+            services["security_manager"] = SecurityManager()
+            services["resource_monitor"] = ResourceMonitor(services["tenant_manager"])
+            services["deployment_manager"] = DeploymentManager(services["tenant_manager"])
+        
+        # Initialize model versioning
+        if VERSIONING_AVAILABLE:
+            services["version_manager"] = ModelVersionManager(config)
+        
+        # Initialize streaming
+        if STREAMING_AVAILABLE and hasattr(config, 'streaming') and config.streaming.enabled:
+            stream_config = StreamConfig(
+                platform=config.streaming.platform,
+                brokers=config.streaming.brokers,
+                topic=config.streaming.topic
+            )
+            services["streaming"] = StreamingOrchestrator(stream_config)
+    
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"AutoML Platform initialized in {environment} mode")
+    logger.info(f"Optimizations available: {check_optimizations()}")
+    logger.info(f"API features available: {check_api_features()}")
+    
+    return services
+
+def create_app(config_path: str = None, environment: str = "production", 
+              enable_optimizations: bool = True, enable_api_features: bool = True):
+    """
+    Create FastAPI application with all services configured including optimizations and API features.
+    
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name
+        enable_optimizations: Whether to enable optimization features
+        enable_api_features: Whether to enable API features
+    
+    Returns:
+        FastAPI application instance
     """
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     
-    # Import middleware and config
-    from ..auth_middleware import setup_auth_middleware
-    from ..config import load_config
-    
-    # Create app
-    app = FastAPI(
-        title="AutoML Platform API",
-        description="Enterprise AutoML Platform with SSO, RGPD compliance, and multi-tenant support",
-        version=__version__,
-        docs_url="/docs",
-        redoc_url="/redoc"
-    )
-    
     # Load configuration
-    config = load_config()
+    config = load_config(config_path, environment)
+    
+    # Create FastAPI app
+    app = FastAPI(
+        title="AutoML Platform",
+        description="Enterprise AutoML Platform with SSO, RGPD compliance, multi-tenant support, optimizations, and complete API",
+        version=__version__,
+        docs_url="/docs" if config.api.enable_docs else None,
+        redoc_url="/redoc" if config.api.enable_docs else None
+    )
     
     # Add CORS middleware if enabled
     if config.api.enable_cors:
@@ -281,54 +443,37 @@ def create_api_app():
             allow_headers=["*"],
         )
     
-    # Setup authentication middleware
+    # Setup authentication and RGPD middleware
     setup_auth_middleware(app, config)
     
     # Register routers
-    try:
-        # Auth & RGPD endpoints
-        from .auth_endpoints import create_auth_router
-        auth_router = create_auth_router()
-        app.include_router(auth_router, prefix="/api/auth", tags=["Authentication & RGPD"])
-    except ImportError:
-        pass
+    from .api import create_auth_router
     
-    try:
-        # LLM endpoints
-        from .llm_endpoints import router as llm_router
-        app.include_router(llm_router, prefix="/api/llm", tags=["LLM"])
-    except ImportError:
-        pass
+    # Auth & RGPD routes
+    auth_router = create_auth_router()
+    app.include_router(auth_router, prefix="/api")
     
-    try:
-        # Billing endpoints
-        from .billing_routes import billing_router
-        app.include_router(billing_router, prefix="/api/billing", tags=["Billing"])
-    except ImportError:
-        pass
+    # Include API routers if available and enabled
+    if enable_api_features:
+        # Billing routes
+        if BILLING_AVAILABLE and billing_router:
+            app.include_router(billing_router)
+        
+        # LLM routes
+        if LLM_AVAILABLE and llm_router:
+            app.include_router(llm_router)
+        
+        # MLOps routes
+        if MLOPS_AVAILABLE and mlops_router:
+            app.include_router(mlops_router)
     
-    try:
-        # Connector endpoints
-        from .connector_routes import connector_router
-        app.include_router(connector_router, prefix="/api/connectors", tags=["Data Connectors"])
-    except ImportError:
-        pass
+    # WebSocket endpoint
+    if WEBSOCKET_AVAILABLE and websocket_endpoint:
+        @app.websocket("/ws")
+        async def websocket_route(websocket, token: str):
+            await websocket_endpoint(websocket, token)
     
-    try:
-        # Feature store endpoints
-        from .feature_store_routes import feature_store_router
-        app.include_router(feature_store_router, prefix="/api/features", tags=["Feature Store"])
-    except ImportError:
-        pass
-    
-    try:
-        # Streaming endpoints
-        from .streaming_routes import streaming_router
-        app.include_router(streaming_router, prefix="/api/streaming", tags=["Streaming"])
-    except ImportError:
-        pass
-    
-    # Health check endpoint
+    # Health check
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
@@ -337,67 +482,191 @@ def create_api_app():
             "status": "healthy",
             "version": __version__,
             "timestamp": datetime.utcnow().isoformat(),
-            "dependencies": check_dependencies()
+            "services": {
+                "auth": config.api.enable_auth,
+                "sso": config.api.enable_sso,
+                "rgpd": config.rgpd.enabled,
+                "monitoring": config.monitoring.enabled,
+                "optimizations": check_optimizations(),
+                "api_features": check_api_features()
+            }
         }
     
-    # Root endpoint
-    @app.get("/")
-    async def root():
-        """Root endpoint with API information."""
-        return {
-            "name": "AutoML Platform API",
+    # System status endpoint
+    @app.get("/api/system/status")
+    async def system_status():
+        """Get detailed system status including optimization and API components."""
+        from datetime import datetime
+        import psutil
+        
+        status = {
+            "timestamp": datetime.utcnow().isoformat(),
             "version": __version__,
-            "docs": "/docs",
-            "health": "/health",
-            "components": list(API_INFO["components"].keys())
+            "environment": environment,
+            "resources": {
+                "cpu_percent": psutil.cpu_percent(),
+                "memory_percent": psutil.virtual_memory().percent,
+                "disk_usage": psutil.disk_usage('/').percent
+            },
+            "optimizations": check_optimizations(),
+            "api_features": check_api_features()
         }
+        
+        # Add cache stats if available
+        if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'cache') and config.cache.enabled:
+            try:
+                cache_config = CacheConfig(backend=config.cache.backend)
+                cache = PipelineCache(cache_config)
+                status["cache_stats"] = cache.get_stats()
+            except:
+                pass
+        
+        return status
+    
+    # Optimization endpoints
+    if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
+        from fastapi import APIRouter, HTTPException
+        
+        opt_router = APIRouter(prefix="/api/optimizations", tags=["optimizations"])
+        
+        @opt_router.get("/status")
+        async def optimization_status():
+            """Get status of optimization components."""
+            return {
+                "available": check_optimizations(),
+                "config": {
+                    "cache_enabled": hasattr(config, 'cache') and config.cache.enabled,
+                    "distributed_enabled": hasattr(config, 'distributed') and config.distributed.enabled,
+                    "incremental_enabled": hasattr(config, 'incremental') and config.incremental.enabled
+                }
+            }
+        
+        @opt_router.post("/cache/clear")
+        async def clear_cache():
+            """Clear pipeline cache."""
+            if not (hasattr(config, 'cache') and config.cache.enabled):
+                raise HTTPException(status_code=400, detail="Cache not enabled")
+            
+            try:
+                cache_config = CacheConfig(backend=config.cache.backend)
+                cache = PipelineCache(cache_config)
+                success = cache.clear_all()
+                return {"success": success, "message": "Cache cleared"}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @opt_router.get("/cache/stats")
+        async def cache_stats():
+            """Get cache statistics."""
+            if not (hasattr(config, 'cache') and config.cache.enabled):
+                raise HTTPException(status_code=400, detail="Cache not enabled")
+            
+            try:
+                cache_config = CacheConfig(backend=config.cache.backend)
+                cache = PipelineCache(cache_config)
+                return cache.get_stats()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        app.include_router(opt_router)
+    
+    # Startup event
+    @app.on_event("startup")
+    async def startup_event():
+        """Initialize services on startup."""
+        logger.info("Starting AutoML Platform API...")
+        
+        # Initialize WebSocket service if available
+        if WEBSOCKET_AVAILABLE and hasattr(config, 'websocket') and config.websocket.enabled:
+            redis_url = config.websocket.redis_url if hasattr(config.websocket, 'redis_url') else None
+            await initialize_websocket_service(redis_url)
+        
+        logger.info("AutoML Platform API started successfully")
+    
+    # Shutdown event
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """Cleanup on shutdown."""
+        logger.info("Shutting down AutoML Platform API...")
+        
+        # Shutdown WebSocket service if available
+        if WEBSOCKET_AVAILABLE:
+            await shutdown_websocket_service()
+        
+        logger.info("AutoML Platform API shut down successfully")
     
     return app
 
-# Module initialization
-def _initialize_api():
-    """Initialize API module and check for critical dependencies."""
-    import logging
-    logger = logging.getLogger(__name__)
+def create_orchestrator(config_path: str = None, 
+                       environment: str = "production",
+                       enhanced: bool = True,
+                       enable_optimizations: bool = True,
+                       enable_api_features: bool = True):
+    """
+    Create an AutoML orchestrator with optional enhancements, optimizations, and API features.
     
-    # Check for critical dependencies
-    missing_critical = []
+    Args:
+        config_path: Path to configuration file
+        environment: Environment name
+        enhanced: Whether to use EnhancedAutoMLOrchestrator
+        enable_optimizations: Whether to enable optimization features
+        enable_api_features: Whether to enable API features
     
-    try:
-        import fastapi
-    except ImportError:
-        missing_critical.append("fastapi")
+    Returns:
+        Orchestrator instance
+    """
+    config = load_config(config_path, environment)
     
-    try:
-        import sqlalchemy
-    except ImportError:
-        missing_critical.append("sqlalchemy")
+    # Enable optimization features in config if requested
+    if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
+        config.distributed_training = True
+        config.incremental_learning = True
+        config.enable_cache = True
+        config.cache_backend = "redis"
+        config.distributed_backend = "ray"
     
-    try:
-        import redis
-    except ImportError:
-        missing_critical.append("redis")
-    
-    try:
-        import pydantic
-    except ImportError:
-        missing_critical.append("pydantic")
-    
-    try:
-        import pyarrow
-    except ImportError:
-        missing_critical.append("pyarrow")
+    # Initialize API services if requested
+    services = {}
+    if enable_api_features:
+        # Initialize feature store if available
+        if FEATURE_STORE_AVAILABLE and hasattr(config, 'feature_store') and config.feature_store.enabled:
+            services["feature_store"] = FeatureStore(config.feature_store.to_dict())
         
-    if missing_critical:
-        logger.error(
-            f"Critical dependencies missing for API module: {missing_critical}. "
-            "Please install required dependencies."
-        )
-    else:
-        logger.info("AutoML Platform API module initialized successfully")
+        # Initialize version manager if available
+        if VERSIONING_AVAILABLE:
+            services["version_manager"] = ModelVersionManager(config)
     
-    return len(missing_critical) == 0
+    # Create orchestrator
+    if enhanced:
+        orchestrator = EnhancedAutoMLOrchestrator(config)
+    else:
+        orchestrator = AutoMLOrchestrator(config)
+    
+    # Attach services to orchestrator
+    for service_name, service in services.items():
+        setattr(orchestrator, service_name, service)
+    
+    return orchestrator
 
-# Initialize on import
-from datetime import datetime
-_api_initialized = _initialize_api()
+# Check Python version compatibility
+import sys
+if sys.version_info < (3, 8):
+    raise RuntimeError(
+        f"AutoML Platform requires Python 3.8 or later. "
+        f"Current version: {sys.version_info.major}.{sys.version_info.minor}"
+    )
+
+# Log initialization
+import logging
+logger = logging.getLogger(__name__)
+logger.info(f"AutoML Platform v{__version__} initialized")
+if OPTIMIZATIONS_AVAILABLE:
+    logger.info("Optimization components available: distributed training, incremental learning, pipeline cache")
+else:
+    logger.info("Running without optimization components. Install ray, dask, river for full functionality")
+
+api_features = check_api_features()
+if any(api_features.values()):
+    logger.info(f"API features loaded: {', '.join([k for k, v in api_features.items() if v])}")
+else:
+    logger.info("No API features loaded. Check module dependencies.")
