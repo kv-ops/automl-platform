@@ -12,8 +12,8 @@ import os
 import json
 import logging
 import asyncio
-import uuid  # AJOUT: Import manquant
-from concurrent.futures import ThreadPoolExecutor  # AJOUT: Import manquant
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Tuple, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
@@ -130,12 +130,12 @@ PLAN_LIMITS = {
         "max_job_duration_minutes": 30,
         "max_memory_gb": 4,
         "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.BATCH],
-        "api_rate_limit": 10,  # AJOUT: Pour billing_middleware
-        "llm_calls_per_month": 0,  # AJOUT: Pour billing_middleware
-        "max_api_calls_per_day": 100,  # AJOUT: Pour billing
-        "max_predictions_per_month": 1000  # AJOUT: Pour billing
+        "api_rate_limit": 10,
+        "llm_calls_per_month": 0,
+        "max_api_calls_per_day": 100,
+        "max_predictions_per_month": 1000
     },
-    PlanType.TRIAL.value: {
+    PlanType.STARTER.value: {
         "max_concurrent_jobs": 2,
         "max_workers": 4,  # DataRobot trial: 4 workers
         "gpu_access": False,
@@ -149,7 +149,7 @@ PLAN_LIMITS = {
         "max_api_calls_per_day": 1000,
         "max_predictions_per_month": 10000
     },
-    PlanType.PRO.value: {
+    PlanType.PROFESSIONAL.value: {
         "max_concurrent_jobs": 5,
         "max_workers": 8,
         "gpu_access": True,
@@ -715,7 +715,7 @@ class LocalScheduler:
     def __init__(self, config: AutoMLConfig, billing_manager: Optional[BillingManager] = None):
         self.config = config
         self.billing_manager = billing_manager
-        self.executor = ThreadPoolExecutor(max_workers=config.worker.max_workers)  # Utilisation correcte
+        self.executor = ThreadPoolExecutor(max_workers=config.worker.max_workers)
         self.active_jobs: Dict[str, JobRequest] = {}
     
     def submit_job(self, job_request: JobRequest) -> str:
@@ -756,6 +756,16 @@ class LocalScheduler:
             self.active_jobs[job_id].status = JobStatus.CANCELLED
             return True
         return False
+    
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get queue statistics"""
+        return {
+            'workers': self.executor._max_workers,
+            'active_jobs': len([j for j in self.active_jobs.values() 
+                              if j.status == JobStatus.RUNNING]),
+            'queued_jobs': len([j for j in self.active_jobs.values() 
+                              if j.status == JobStatus.QUEUED])
+        }
 
 
 # ============================================================================
@@ -827,7 +837,7 @@ def main():
     job = JobRequest(
         tenant_id="tenant_123",
         user_id="user_456",
-        plan_type=PlanType.PRO.value,
+        plan_type=PlanType.PROFESSIONAL.value,
         task_type="train",
         queue_type=QueueType.CPU_PRIORITY,
         payload={
