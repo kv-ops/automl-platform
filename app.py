@@ -68,8 +68,14 @@ from automl_platform.api.billing import BillingManager, UsageTracker, PlanType, 
 # Data connectors
 from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
 
-# Streaming
-from automl_platform.api.streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
+# Streaming - CORRECTED IMPORT
+from automl_platform.api.streaming import (
+    StreamingOrchestrator, 
+    StreamConfig, 
+    MLStreamProcessor,
+    StreamMessage,
+    KafkaStreamHandler
+)
 
 # MLOps
 from automl_platform.mlops_service import MLflowRegistry, RetrainingService, ModelExporter
@@ -79,22 +85,17 @@ from automl_platform.ab_testing import ABTestingService, MetricsComparator
 # Authentication
 from automl_platform.auth import TokenService, RBACService, QuotaService, AuditService, auth_router
 
-# Autoscaling - CORRECTED IMPORT
-from automl_platform.autoscaling import (
-    AutoscalingService, 
-    ResourceManager as AutoscaleResourceManager,
-    GPUScheduler as AutoscaleGPUScheduler,
-    JobScheduler as AutoscaleJobScheduler,
-    JobRequest, 
-    JobStatus, 
-    QueueType
-)
-
-# Scheduler - Import from existing scheduler.py
+# Scheduler - CORRECTED IMPORT
 from automl_platform.scheduler import (
     SchedulerFactory,
+    JobRequest,
+    JobStatus,
+    QueueType,
     PLAN_LIMITS,
-    PlanType as SchedulerPlanType
+    PlanType as SchedulerPlanType,
+    CeleryScheduler,
+    RayScheduler,
+    LocalScheduler
 )
 
 # Configure logging
@@ -187,6 +188,13 @@ llm_calls = Counter(
     registry=metrics_registry
 )
 
+streaming_messages = Counter(
+    'automl_streaming_messages_total',
+    'Total streaming messages processed',
+    ['platform', 'topic', 'status'],
+    registry=metrics_registry
+)
+
 # ============================================================================
 # Lifespan Management
 # ============================================================================
@@ -228,15 +236,11 @@ async def lifespan(app: FastAPI):
     # Initialize deployment manager
     app.state.deployment_manager = DeploymentManager(app.state.tenant_manager)
     
-    # Initialize scheduler using SchedulerFactory
+    # Initialize scheduler using SchedulerFactory - CORRECTED
     app.state.scheduler = SchedulerFactory.create_scheduler(config, app.state.billing_manager)
     
-    # Initialize autoscaling service
-    app.state.autoscaling = AutoscalingService(
-        config=config,
-        tenant_manager=app.state.tenant_manager,
-        billing_manager=app.state.billing_manager
-    )
+    # Initialize streaming if configured
+    app.state.streaming_orchestrators = {}
     
     # Initialize MLOps components
     app.state.mlflow_registry = MLflowRegistry(config)
@@ -280,8 +284,8 @@ async def lifespan(app: FastAPI):
     # Initialize orchestrators pool
     app.state.orchestrators = {}
     
-    # Initialize WebSocket connections
-    app.state.websocket_connections = {}
+    # Initialize WebSocket connections manager
+    app.state.websocket_manager = WebSocketManager()
     
     # Initialize cache for model pipelines
     app.state.pipeline_cache = {}
@@ -298,8 +302,11 @@ async def lifespan(app: FastAPI):
         app.state.monitoring.save_monitoring_data()
     
     # Close WebSocket connections
-    for ws in app.state.websocket_connections.values():
-        await ws.close()
+    await app.state.websocket_manager.disconnect_all()
+    
+    # Stop streaming orchestrators
+    for orchestrator in app.state.streaming_orchestrators.values():
+        orchestrator.stop()
     
     # Shutdown distributed computing
     if hasattr(config, 'distributed') and config.distributed.enabled:
@@ -317,6 +324,44 @@ async def lifespan(app: FastAPI):
     )
     
     logger.info("AutoML API shutdown complete")
+
+# ============================================================================
+# WebSocket Manager
+# ============================================================================
+
+class WebSocketManager:
+    """Manage WebSocket connections"""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+    
+    async def connect(self, websocket: WebSocket, client_id: str):
+        await websocket.accept()
+        if client_id not in self.active_connections:
+            self.active_connections[client_id] = []
+        self.active_connections[client_id].append(websocket)
+    
+    def disconnect(self, websocket: WebSocket, client_id: str):
+        if client_id in self.active_connections:
+            self.active_connections[client_id].remove(websocket)
+            if not self.active_connections[client_id]:
+                del self.active_connections[client_id]
+    
+    async def send_message(self, message: str, client_id: str):
+        if client_id in self.active_connections:
+            for connection in self.active_connections[client_id]:
+                await connection.send_text(message)
+    
+    async def broadcast(self, message: str):
+        for connections in self.active_connections.values():
+            for connection in connections:
+                await connection.send_text(message)
+    
+    async def disconnect_all(self):
+        for connections in self.active_connections.values():
+            for connection in connections:
+                await connection.close()
+        self.active_connections.clear()
 
 # ============================================================================
 # Application Setup
@@ -366,8 +411,8 @@ async def get_current_tenant(credentials: HTTPAuthorizationCredentials = Depends
         return {
             "tenant_id": "default",
             "user_id": "anonymous",
-            "plan": "free",
-            "limits": PLAN_LIMITS["free"]
+            "plan": PlanType.FREE.value,
+            "limits": PLAN_LIMITS[PlanType.FREE.value]
         }
     
     token = credentials.credentials
@@ -382,7 +427,7 @@ async def get_current_tenant(credentials: HTTPAuthorizationCredentials = Depends
             "tenant_id": tenant.tenant_id,
             "user_id": payload["sub"],
             "plan": tenant.plan,
-            "limits": PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS["free"])
+            "limits": PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS[PlanType.FREE.value])
         }
         
     except Exception as e:
@@ -513,6 +558,15 @@ class PredictRequest(BaseModel):
     data: Dict[str, Any] = Field(..., description="Input data for prediction")
     track: Optional[bool] = Field(True, description="Track predictions for monitoring")
 
+class StreamingConfig(BaseModel):
+    """Streaming configuration"""
+    platform: str = Field("kafka", description="Streaming platform: kafka, flink, pulsar, redis")
+    brokers: List[str] = Field(..., description="Broker addresses")
+    topic: str = Field(..., description="Topic name")
+    consumer_group: Optional[str] = Field("automl-consumer", description="Consumer group")
+    batch_size: Optional[int] = Field(100, description="Batch size")
+    window_size: Optional[int] = Field(60, description="Window size in seconds")
+
 class ExportRequest(BaseModel):
     """Model export request"""
     model_id: str
@@ -520,24 +574,6 @@ class ExportRequest(BaseModel):
     optimize_for_edge: bool = False
     quantize: bool = False
     target_device: Optional[str] = None
-
-class ABTestRequest(BaseModel):
-    """A/B test request"""
-    name: str
-    model_a_id: str
-    model_b_id: str
-    traffic_split: float = 0.5
-    duration_hours: int = 24
-    metrics: List[str] = ["accuracy", "latency"]
-
-class RetrainingSchedule(BaseModel):
-    """Retraining schedule configuration"""
-    model_id: str
-    schedule_type: str = Field("cron", description="Schedule type: cron, interval, trigger")
-    schedule_config: Dict[str, Any]
-    data_source: str
-    retrain_threshold: Optional[float] = None
-    notification_emails: Optional[List[str]] = None
 
 # ============================================================================
 # Health & Monitoring Endpoints
@@ -557,15 +593,16 @@ async def health_check():
             "mlflow": "healthy" if app.state.mlflow_registry else "disabled",
             "celery": "healthy" if config.worker.enabled else "disabled",
             "ray": "healthy" if hasattr(config, 'distributed') and config.distributed.enabled else "disabled",
-            "autoscaling": "healthy" if app.state.autoscaling else "disabled"
+            "scheduler": "healthy" if app.state.scheduler else "disabled",
+            "streaming": f"{len(app.state.streaming_orchestrators)} active" if app.state.streaming_orchestrators else "none"
         }
     }
     
-    # Check autoscaling status
-    if app.state.autoscaling:
-        system_status = app.state.autoscaling.get_system_status()
-        health_status["components"]["gpu"] = f"{len(system_status['gpus'])} GPUs available"
-        health_status["components"]["cluster"] = f"{system_status['cluster']['nodes']} nodes"
+    # Check scheduler status
+    if app.state.scheduler and hasattr(app.state.scheduler, 'get_queue_stats'):
+        queue_stats = app.state.scheduler.get_queue_stats()
+        health_status["components"]["workers"] = f"{queue_stats.get('workers', 0)} workers"
+        health_status["components"]["gpu_workers"] = f"{queue_stats.get('gpu_workers', 0)} GPU workers"
     
     # Check if any component is unhealthy
     if any(v == "unhealthy" for v in health_status["components"].values()):
@@ -582,7 +619,7 @@ async def get_metrics():
     )
 
 # ============================================================================
-# Training Endpoints with Autoscaling
+# Training Endpoints with Scheduler
 # ============================================================================
 
 @app.post("/api/v1/train")
@@ -594,31 +631,24 @@ async def start_training(
     train_request: TrainRequest,
     tenant: Dict = Depends(get_current_tenant)
 ):
-    """Start training job with autoscaling and resource management"""
+    """Start training job with scheduler"""
     
-    # Check concurrent job limits using autoscaling service
-    current_status = app.state.autoscaling.get_system_status()
-    tenant_jobs = [j for j in current_status["scheduler"]["running_jobs"] 
-                   if j.get("tenant_id") == tenant["tenant_id"]]
-    
-    if len(tenant_jobs) >= tenant["limits"]["max_concurrent_jobs"]:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Maximum concurrent jobs ({tenant['limits']['max_concurrent_jobs']}) reached for {tenant['plan']} plan"
-        )
+    # Check concurrent job limits
+    if app.state.scheduler and hasattr(app.state.scheduler, 'get_queue_stats'):
+        queue_stats = app.state.scheduler.get_queue_stats()
+        active_jobs = queue_stats.get('active_jobs', 0)
+        
+        if active_jobs >= tenant["limits"]["max_concurrent_jobs"]:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Maximum concurrent jobs ({tenant['limits']['max_concurrent_jobs']}) reached for {tenant['plan']} plan"
+            )
     
     # Check GPU access
     if train_request.use_gpu and not tenant["limits"]["gpu_access"]:
         raise HTTPException(
             status_code=403,
             detail=f"GPU access not available for {tenant['plan']} plan. Please upgrade to Pro or Enterprise."
-        )
-    
-    # Check distributed training access
-    if train_request.distributed and not tenant["limits"]["distributed_training"]:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Distributed training not available for {tenant['plan']} plan. Please upgrade to Pro or Enterprise."
         )
     
     # Load dataset
@@ -637,7 +667,7 @@ async def start_training(
     # Create experiment with MLflow tracking
     experiment_id = train_request.experiment_name or f"exp_{uuid.uuid4().hex[:8]}"
     
-    # Create job request for autoscaling
+    # Create job request for scheduler
     job = JobRequest(
         tenant_id=tenant["tenant_id"],
         user_id=tenant["user_id"],
@@ -650,16 +680,16 @@ async def start_training(
             "target_column": target_column,
             "train_request": train_request.dict()
         },
-        estimated_memory_gb=4.0,  # Estimate based on dataset size
+        estimated_memory_gb=4.0,
         estimated_time_minutes=train_request.max_runtime_seconds // 60,
         requires_gpu=train_request.use_gpu,
         num_gpus=1 if train_request.use_gpu else 0,
         gpu_memory_gb=8.0 if train_request.use_gpu else 0,
-        priority=tenant["limits"]["priority"]
+        priority=tenant["limits"]["queue_priority"]
     )
     
-    # Submit job through autoscaling service
-    job_id = app.state.autoscaling.submit_job(job)
+    # Submit job through scheduler
+    job_id = app.state.scheduler.submit_job(job)
     
     # Update metrics
     training_jobs.labels(
@@ -680,8 +710,7 @@ async def start_training(
         "experiment_id": experiment_id,
         "status": "queued",
         "queue_type": job.queue_type.queue_name,
-        "estimated_wait_time": f"{job.estimated_time_minutes} minutes",
-        "cluster_status": app.state.autoscaling.get_system_status()["cluster"]
+        "estimated_wait_time": f"{job.estimated_time_minutes} minutes"
     }
 
 @app.get("/api/v1/jobs/{job_id}/status")
@@ -690,9 +719,9 @@ async def get_job_status(
     job_id: str,
     tenant: Dict = Depends(get_current_tenant)
 ):
-    """Get job status from autoscaling service"""
+    """Get job status from scheduler"""
     
-    job = app.state.autoscaling.get_job_status(job_id)
+    job = app.state.scheduler.get_job_status(job_id)
     
     if not job:
         raise HTTPException(404, f"Job {job_id} not found")
@@ -712,146 +741,238 @@ async def get_job_status(
         "result": job.result
     }
 
+@app.delete("/api/v1/jobs/{job_id}")
+async def cancel_job(
+    request: Request,
+    job_id: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Cancel a running job"""
+    
+    job = app.state.scheduler.get_job_status(job_id)
+    
+    if not job:
+        raise HTTPException(404, f"Job {job_id} not found")
+    
+    if job.tenant_id != tenant["tenant_id"]:
+        raise HTTPException(403, "Access denied")
+    
+    success = app.state.scheduler.cancel_job(job_id)
+    
+    if success:
+        training_jobs.labels(
+            status="cancelled",
+            tenant=tenant["tenant_id"],
+            plan=tenant["plan"]
+        ).inc()
+    
+    return {"success": success, "job_id": job_id}
+
 # ============================================================================
-# Autoscaling Management Endpoints
+# Streaming Endpoints
 # ============================================================================
 
-@app.get("/api/v1/autoscaling/status")
-async def get_autoscaling_status(
+@app.post("/api/v1/streaming/start")
+async def start_streaming(
+    request: Request,
+    config: StreamingConfig,
+    model_id: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Start streaming pipeline for real-time predictions"""
+    
+    # Check if streaming is enabled for plan
+    if tenant["plan"] not in [PlanType.PRO.value, PlanType.ENTERPRISE.value]:
+        raise HTTPException(403, "Streaming requires Pro or Enterprise plan")
+    
+    # Load model
+    try:
+        model = app.state.mlflow_registry.get_production_model(model_id)
+        if not model:
+            raise FileNotFoundError()
+    except:
+        raise HTTPException(404, f"Model {model_id} not found")
+    
+    # Create streaming configuration
+    stream_config = StreamConfig(
+        platform=config.platform,
+        brokers=config.brokers,
+        topic=config.topic,
+        consumer_group=config.consumer_group or f"automl-{tenant['tenant_id']}",
+        batch_size=config.batch_size,
+        window_size=config.window_size
+    )
+    
+    # Create ML processor
+    processor = MLStreamProcessor(stream_config, model=model)
+    
+    # Create orchestrator
+    orchestrator = StreamingOrchestrator(stream_config)
+    orchestrator.set_processor(processor)
+    
+    # Store orchestrator
+    stream_id = f"stream_{uuid.uuid4().hex[:8]}"
+    app.state.streaming_orchestrators[stream_id] = orchestrator
+    
+    # Start streaming in background
+    asyncio.create_task(orchestrator.start(output_topic=f"{config.topic}_predictions"))
+    
+    return {
+        "stream_id": stream_id,
+        "status": "started",
+        "platform": config.platform,
+        "topic": config.topic,
+        "output_topic": f"{config.topic}_predictions"
+    }
+
+@app.get("/api/v1/streaming/{stream_id}/status")
+async def get_streaming_status(
+    request: Request,
+    stream_id: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get streaming pipeline status"""
+    
+    if stream_id not in app.state.streaming_orchestrators:
+        raise HTTPException(404, f"Stream {stream_id} not found")
+    
+    orchestrator = app.state.streaming_orchestrators[stream_id]
+    metrics = orchestrator.get_metrics()
+    
+    return {
+        "stream_id": stream_id,
+        "status": metrics.get("status", "unknown"),
+        "platform": metrics.get("platform"),
+        "topic": metrics.get("topic"),
+        "messages_processed": metrics.get("messages_processed", 0),
+        "messages_failed": metrics.get("messages_failed", 0),
+        "throughput_per_sec": metrics.get("throughput_per_sec", 0)
+    }
+
+@app.delete("/api/v1/streaming/{stream_id}")
+async def stop_streaming(
+    request: Request,
+    stream_id: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Stop streaming pipeline"""
+    
+    if stream_id not in app.state.streaming_orchestrators:
+        raise HTTPException(404, f"Stream {stream_id} not found")
+    
+    orchestrator = app.state.streaming_orchestrators[stream_id]
+    orchestrator.stop()
+    
+    del app.state.streaming_orchestrators[stream_id]
+    
+    return {"stream_id": stream_id, "status": "stopped"}
+
+# ============================================================================
+# WebSocket for Real-time Updates
+# ============================================================================
+
+@app.websocket("/ws/jobs/{job_id}")
+async def websocket_job_updates(
+    websocket: WebSocket,
+    job_id: str
+):
+    """WebSocket for real-time job updates"""
+    await app.state.websocket_manager.connect(websocket, job_id)
+    
+    try:
+        while True:
+            # Get job status from scheduler
+            job_status = app.state.scheduler.get_job_status(job_id)
+            
+            if job_status:
+                await websocket.send_json({
+                    "type": "job_update",
+                    "job_id": job_id,
+                    "status": job_status.status.value,
+                    "queue_type": job_status.queue_type.queue_name,
+                    "started_at": job_status.started_at.isoformat() if job_status.started_at else None,
+                    "error_message": job_status.error_message
+                })
+                
+                if job_status.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+                    break
+            
+            await asyncio.sleep(1)
+            
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        app.state.websocket_manager.disconnect(websocket, job_id)
+
+@app.websocket("/ws/streaming/{stream_id}")
+async def websocket_streaming_updates(
+    websocket: WebSocket,
+    stream_id: str
+):
+    """WebSocket for real-time streaming updates"""
+    await app.state.websocket_manager.connect(websocket, stream_id)
+    
+    try:
+        while True:
+            if stream_id not in app.state.streaming_orchestrators:
+                await websocket.send_json({
+                    "type": "stream_stopped",
+                    "stream_id": stream_id
+                })
+                break
+            
+            orchestrator = app.state.streaming_orchestrators[stream_id]
+            metrics = orchestrator.get_metrics()
+            
+            await websocket.send_json({
+                "type": "stream_update",
+                "stream_id": stream_id,
+                "metrics": metrics
+            })
+            
+            # Update Prometheus metrics
+            streaming_messages.labels(
+                platform=metrics.get("platform", "unknown"),
+                topic=metrics.get("topic", "unknown"),
+                status="processed"
+            ).inc(metrics.get("messages_processed", 0))
+            
+            await asyncio.sleep(5)  # Update every 5 seconds
+            
+    except Exception as e:
+        logger.error(f"WebSocket streaming error: {e}")
+    finally:
+        app.state.websocket_manager.disconnect(websocket, stream_id)
+
+# ============================================================================
+# Queue Management Endpoints
+# ============================================================================
+
+@app.get("/api/v1/queues/stats")
+async def get_queue_statistics(
     request: Request,
     tenant: Dict = Depends(get_current_tenant)
 ):
-    """Get autoscaling system status"""
+    """Get queue statistics from scheduler"""
     
-    status = app.state.autoscaling.get_system_status()
+    if not hasattr(app.state.scheduler, 'get_queue_stats'):
+        raise HTTPException(501, "Queue statistics not available")
     
-    # Filter sensitive information based on plan
-    if tenant["plan"] not in ["pro", "enterprise"]:
-        # Limited view for free/trial users
+    stats = app.state.scheduler.get_queue_stats()
+    
+    # Filter based on plan
+    if tenant["plan"] == PlanType.FREE.value:
+        # Limited view for free users
         return {
-            "timestamp": status["timestamp"],
             "your_jobs": {
-                "pending": len([j for j in status["scheduler"]["pending_jobs"] 
-                               if j.get("tenant_id") == tenant["tenant_id"]]),
-                "running": len([j for j in status["scheduler"]["running_jobs"] 
-                               if j.get("tenant_id") == tenant["tenant_id"]])
-            },
-            "cluster_utilization": status["cluster"]["utilization"]
+                "active": len([j for j in app.state.scheduler.active_jobs.values() 
+                             if j.tenant_id == tenant["tenant_id"] and j.status == JobStatus.RUNNING]),
+                "queued": len([j for j in app.state.scheduler.active_jobs.values() 
+                             if j.tenant_id == tenant["tenant_id"] and j.status == JobStatus.QUEUED])
+            }
         }
     
-    return status
-
-@app.post("/api/v1/autoscaling/scale")
-async def scale_cluster(
-    request: Request,
-    target_workers: int,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Manually scale the cluster (admin only)"""
-    
-    # Check if user is admin
-    if not app.state.rbac_service.check_permission(
-        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
-        "cluster",
-        "scale"
-    ):
-        raise HTTPException(403, "Admin access required")
-    
-    success = await app.state.autoscaling.scale_workers(target_workers)
-    
-    return {
-        "success": success,
-        "target_workers": target_workers,
-        "current_status": app.state.autoscaling.get_system_status()["cluster"]
-    }
-
-@app.get("/api/v1/autoscaling/optimize")
-async def optimize_resources(
-    request: Request,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Get resource optimization recommendations"""
-    
-    if tenant["plan"] not in ["enterprise"]:
-        raise HTTPException(403, "Enterprise plan required")
-    
-    optimizations = await app.state.autoscaling.optimize_resources()
-    
-    return optimizations
-
-# ============================================================================
-# GPU Management Endpoints
-# ============================================================================
-
-@app.get("/api/v1/gpu/status")
-async def get_gpu_status(
-    request: Request,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Get GPU cluster status"""
-    
-    system_status = app.state.autoscaling.get_system_status()
-    gpu_status = system_status.get("gpus", [])
-    
-    # Check GPU access for tenant
-    has_gpu_access = tenant["limits"].get("gpu_access", False)
-    
-    return {
-        "total_gpus": len(gpu_status),
-        "available_gpus": sum(1 for gpu in gpu_status if not gpu.get("allocated")),
-        "your_gpu_access": has_gpu_access,
-        "gpu_details": gpu_status if has_gpu_access else None,
-        "upgrade_required": not has_gpu_access,
-        "upgrade_message": "Upgrade to Pro or Enterprise plan for GPU access" if not has_gpu_access else None
-    }
-
-@app.post("/api/v1/gpu/request")
-async def request_gpu(
-    request: Request,
-    duration_hours: int = 1,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Request GPU allocation"""
-    
-    if not tenant["limits"].get("gpu_access", False):
-        raise HTTPException(403, "GPU access not available for your plan")
-    
-    # Check GPU hours quota
-    if not app.state.quota_service.check_quota(
-        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
-        "gpu_hours",
-        duration_hours
-    ):
-        raise HTTPException(429, "GPU hours quota exceeded")
-    
-    # Create GPU job request
-    job = JobRequest(
-        tenant_id=tenant["tenant_id"],
-        user_id=tenant["user_id"],
-        plan_type=tenant["plan"],
-        task_type="gpu_allocation",
-        queue_type=QueueType.GPU_INFERENCE,
-        requires_gpu=True,
-        num_gpus=1,
-        gpu_memory_gb=8.0,
-        estimated_time_minutes=duration_hours * 60
-    )
-    
-    job_id = app.state.autoscaling.submit_job(job)
-    
-    # Consume quota
-    app.state.quota_service.consume_quota(
-        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
-        "gpu_hours",
-        duration_hours
-    )
-    
-    return {
-        "allocation_id": job_id,
-        "duration_hours": duration_hours,
-        "status": "pending",
-        "estimated_wait_time": "Check status for updates"
-    }
+    return stats
 
 # ============================================================================
 # Model Export Endpoints
@@ -879,7 +1000,7 @@ async def export_model(
     try:
         if export_request.format.lower() == "onnx":
             # Create sample input for ONNX conversion
-            sample_input = np.random.randn(1, 10).astype(np.float32)  # Adjust based on your model
+            sample_input = np.random.randn(1, 10).astype(np.float32)
             
             success = app.state.model_exporter.export_to_onnx(
                 model,
@@ -942,86 +1063,6 @@ async def export_model(
     except Exception as e:
         logger.error(f"Export failed: {e}")
         raise HTTPException(500, f"Export failed: {str(e)}")
-
-# ============================================================================
-# A/B Testing Endpoints
-# ============================================================================
-
-@app.post("/api/v1/ab_tests")
-async def create_ab_test(
-    request: Request,
-    ab_test_request: ABTestRequest,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Create A/B test between two models"""
-    
-    # Create A/B test
-    test_id = app.state.ab_testing_service.create_ab_test(
-        model_name=ab_test_request.name,
-        champion_version=ab_test_request.model_a_id,
-        challenger_version=ab_test_request.model_b_id,
-        traffic_split=ab_test_request.traffic_split
-    )
-    
-    return {
-        "test_id": test_id,
-        "name": ab_test_request.name,
-        "status": "active",
-        "start_time": datetime.now().isoformat(),
-        "end_time": (datetime.now() + timedelta(hours=ab_test_request.duration_hours)).isoformat()
-    }
-
-@app.get("/api/v1/ab_tests/{test_id}/results")
-async def get_ab_test_results(
-    request: Request,
-    test_id: str,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Get A/B test results with statistical significance"""
-    
-    results = app.state.ab_testing_service.get_test_results(test_id)
-    
-    if not results:
-        raise HTTPException(404, f"A/B test {test_id} not found")
-    
-    return results
-
-# ============================================================================
-# WebSocket for Real-time Updates
-# ============================================================================
-
-@app.websocket("/ws/jobs/{job_id}")
-async def websocket_job_updates(
-    websocket: WebSocket,
-    job_id: str
-):
-    """WebSocket for real-time job updates"""
-    await websocket.accept()
-    
-    try:
-        while True:
-            # Get job status from autoscaling service
-            job_status = app.state.autoscaling.get_job_status(job_id)
-            
-            if job_status:
-                await websocket.send_json({
-                    "type": "job_update",
-                    "job_id": job_id,
-                    "status": job_status.status.value,
-                    "queue_type": job_status.queue_type.queue_name,
-                    "started_at": job_status.started_at.isoformat() if job_status.started_at else None,
-                    "error_message": job_status.error_message
-                })
-                
-                if job_status.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
-                    break
-            
-            await asyncio.sleep(1)
-            
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-    finally:
-        await websocket.close()
 
 # ============================================================================
 # Run Application
