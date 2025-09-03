@@ -7,7 +7,7 @@ Place in: automl_platform/api/streaming.py
 import json
 import logging
 import asyncio
-import os
+import os  # ADDED: Missing import - FIXED
 from typing import Dict, Any, Optional, List, Callable, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
@@ -126,6 +126,8 @@ class StreamProcessor(ABC):
         """Get processing metrics."""
         runtime = (datetime.now() - self.last_checkpoint).total_seconds()
         self.metrics["throughput_per_sec"] = self.processed_count / runtime if runtime > 0 else 0
+        self.metrics["messages_processed"] = self.processed_count
+        self.metrics["messages_failed"] = self.error_count
         return self.metrics
 
 
@@ -501,7 +503,7 @@ class RedisStreamHandler:
     async def start_consumer(self, processor: StreamProcessor, output_stream: str = None):
         """Start Redis Streams consumer."""
         consumer_group = self.config.consumer_group
-        consumer_name = f"{consumer_group}-{os.getpid()}"
+        consumer_name = f"{consumer_group}-{os.getpid()}"  # FIXED: os is now imported
         
         # Create consumer group
         try:
@@ -721,4 +723,4 @@ async def main():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    asyncio.run(main()
