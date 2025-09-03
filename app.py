@@ -103,6 +103,116 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# Configuration Management Endpoints
+# ============================================================================
+
+@app.get("/api/v1/config")
+async def get_configuration(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get current configuration (filtered by permissions)"""
+    
+    # Only admins can see full config
+    if tenant.get("role") == "admin":
+        return app.state.config_manager.export_config(format="json", include_secrets=False)
+    
+    # Regular users get summary
+    return app.state.config_manager.get_config_summary()
+
+@app.post("/api/v1/config/reload")
+async def reload_configuration(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Reload configuration from file (admin only)"""
+    
+    if tenant.get("role") != "admin":
+        raise HTTPException(403, "Admin access required")
+    
+    success = app.state.config_manager.reload_config()
+    
+    if success:
+        # Update global config reference
+        global config
+        config = app.state.config_manager.config
+        
+        return {"status": "success", "message": "Configuration reloaded"}
+    else:
+        return {"status": "no_change", "message": "Configuration unchanged"}
+
+@app.get("/api/v1/config/features")
+async def get_feature_flags(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get feature flags for current configuration"""
+    return app.state.config_manager.get_feature_flags()
+
+@app.get("/api/v1/config/limits")
+async def get_limits(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get limits for current plan"""
+    return app.state.config_manager.get_limits()
+
+# ============================================================================
+# Service Registry Endpoints
+# ============================================================================
+
+@app.get("/api/v1/services")
+async def list_services(
+    request: Request,
+    service_type: Optional[str] = None,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """List all registered services"""
+    
+    services = app.state.service_registry.list_services(service_type)
+    
+    # Get detailed info for each service
+    service_info = []
+    for service_name in services:
+        info = app.state.service_registry.get_info(service_name)
+        service_info.append({
+            "name": service_name,
+            "type": info.service_type,
+            "status": info.status.value,
+            "dependencies": info.dependencies,
+            "registered_at": info.registered_at.isoformat()
+        })
+    
+    return {
+        "services": service_info,
+        "total": len(service_info),
+        "statistics": app.state.service_registry.get_statistics()
+    }
+
+@app.get("/api/v1/services/{service_name}/status")
+async def get_service_status(
+    request: Request,
+    service_name: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get status of a specific service"""
+    
+    info = app.state.service_registry.get_info(service_name)
+    
+    if not info:
+        raise HTTPException(404, f"Service {service_name} not found")
+    
+    return {
+        "name": service_name,
+        "type": info.service_type,
+        "status": info.status.value,
+        "dependencies": info.dependencies,
+        "dependents": app.state.service_registry._get_dependent_services(service_name),
+        "registered_at": info.registered_at.isoformat(),
+        "last_health_check": info.last_health_check.isoformat() if info.last_health_check else None
+    }
+
+# ============================================================================
 # Configuration
 # ============================================================================
 
