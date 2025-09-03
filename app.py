@@ -1,7 +1,7 @@
 """
 Enhanced FastAPI application for AutoML Platform
 Production-ready with rate limiting, monitoring, and comprehensive endpoints
-Version: 3.0.0 - Full Enterprise Features
+Version: 3.0.0 - Full Enterprise Features with Autoscaling
 """
 
 from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, BackgroundTasks, WebSocket, Request, status
@@ -62,7 +62,7 @@ from automl_platform.llm import AutoMLLLMAssistant, DataCleaningAgent
 from automl_platform.prompts import PromptTemplates, PromptOptimizer
 
 # Infrastructure and billing
-from automl_platform.api.infrastructure import TenantManager, SecurityManager, DeploymentManager
+from automl_platform.infrastructure import TenantManager, SecurityManager, DeploymentManager
 from automl_platform.api.billing import BillingManager, UsageTracker, PlanType, BillingPeriod
 
 # Data connectors
@@ -72,17 +72,30 @@ from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
 from automl_platform.api.streaming import StreamingOrchestrator, StreamConfig, MLStreamProcessor
 
 # MLOps
-from automl_platform.api.mlops import MLflowIntegration, ModelRegistry, AutoRetrainer
-from automl_platform.api.export import ONNXExporter, PMMLExporter, EdgeDeploymentOptimizer
+from automl_platform.mlops_service import MLflowRegistry, RetrainingService, ModelExporter
+from automl_platform.export_service import ModelExporter as EnhancedModelExporter
+from automl_platform.ab_testing import ABTestingService, MetricsComparator
 
-# A/B Testing
-from automl_platform.api.ab_testing import ABTestManager, ModelComparator
+# Authentication
+from automl_platform.auth import TokenService, RBACService, QuotaService, AuditService, auth_router
 
-# SSO and Audit
-from automl_platform.api.auth import SSOManager, AuditLogger, GDPRCompliance
+# Autoscaling - CORRECTED IMPORT
+from automl_platform.autoscaling import (
+    AutoscalingService, 
+    ResourceManager as AutoscaleResourceManager,
+    GPUScheduler as AutoscaleGPUScheduler,
+    JobScheduler as AutoscaleJobScheduler,
+    JobRequest, 
+    JobStatus, 
+    QueueType
+)
 
-# Autoscaling
-from automl_platform.api.autoscaling import JobScheduler, ResourceManager, GPUScheduler
+# Scheduler - Import from existing scheduler.py
+from automl_platform.scheduler import (
+    SchedulerFactory,
+    PLAN_LIMITS,
+    PlanType as SchedulerPlanType
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -118,62 +131,13 @@ celery_app.conf.update(
 # Ray Configuration for Distributed Training
 # ============================================================================
 
-if config.distributed.enabled:
+if hasattr(config, 'distributed') and config.distributed.enabled:
     ray.init(
         address=config.distributed.ray_address,
         num_cpus=config.distributed.num_cpus,
         num_gpus=config.distributed.num_gpus,
         object_store_memory=config.distributed.object_store_memory_gb * 1024 * 1024 * 1024
     )
-
-# ============================================================================
-# Plan Limits Configuration
-# ============================================================================
-
-class PlanLimits:
-    """Define resource limits per plan"""
-    LIMITS = {
-        "free": {
-            "max_concurrent_jobs": 1,
-            "max_file_size_mb": 10,
-            "max_models_per_month": 10,
-            "max_predictions_per_day": 100,
-            "max_llm_calls_per_day": 10,
-            "gpu_access": False,
-            "distributed_training": False,
-            "priority": 0
-        },
-        "trial": {
-            "max_concurrent_jobs": 3,
-            "max_file_size_mb": 100,
-            "max_models_per_month": 100,
-            "max_predictions_per_day": 1000,
-            "max_llm_calls_per_day": 100,
-            "gpu_access": False,
-            "distributed_training": False,
-            "priority": 1
-        },
-        "pro": {
-            "max_concurrent_jobs": 10,
-            "max_file_size_mb": 1000,
-            "max_models_per_month": -1,  # Unlimited
-            "max_predictions_per_day": -1,
-            "max_llm_calls_per_day": 1000,
-            "gpu_access": True,
-            "distributed_training": True,
-            "priority": 2
-        },
-        "enterprise": {
-            "max_concurrent_jobs": -1,  # Unlimited
-            "max_file_size_mb": -1,
-            "max_models_per_month": -1,
-            "max_predictions_per_day": -1,
-            "max_llm_calls_per_day": -1,
-            "gpu_access": True,
-            "distributed_training": True,
-            "priority": 3
-        }
-    }
 
 # ============================================================================
 # Metrics with Custom Registry
@@ -258,54 +222,36 @@ async def lifespan(app: FastAPI):
     # Initialize infrastructure components
     app.state.tenant_manager = TenantManager(db_url=getattr(config, 'database_url', 'sqlite:///automl.db'))
     app.state.security_manager = SecurityManager(secret_key=getattr(config, 'secret_key', 'default-secret'))
-    app.state.billing_manager = BillingManager(tenant_manager=app.state.tenant_manager)
-    app.state.usage_tracker = UsageTracker(billing_manager=app.state.billing_manager)
+    app.state.billing_manager = BillingManager()
+    app.state.usage_tracker = UsageTracker()
     
     # Initialize deployment manager
     app.state.deployment_manager = DeploymentManager(app.state.tenant_manager)
     
-    # Initialize job scheduler and resource manager
-    app.state.job_scheduler = JobScheduler(
-        max_workers=config.worker.max_workers if config.worker.enabled else 4,
-        celery_app=celery_app if config.worker.enabled else None
+    # Initialize scheduler using SchedulerFactory
+    app.state.scheduler = SchedulerFactory.create_scheduler(config, app.state.billing_manager)
+    
+    # Initialize autoscaling service
+    app.state.autoscaling = AutoscalingService(
+        config=config,
+        tenant_manager=app.state.tenant_manager,
+        billing_manager=app.state.billing_manager
     )
-    app.state.resource_manager = ResourceManager(plan_limits=PlanLimits.LIMITS)
-    app.state.gpu_scheduler = GPUScheduler(num_gpus=config.distributed.num_gpus if config.distributed.enabled else 0)
     
     # Initialize MLOps components
-    app.state.mlflow = MLflowIntegration(
-        tracking_uri=config.mlops.mlflow_tracking_uri if hasattr(config, 'mlops') else "sqlite:///mlflow.db"
+    app.state.mlflow_registry = MLflowRegistry(config)
+    app.state.model_exporter = ModelExporter(config)
+    app.state.enhanced_exporter = EnhancedModelExporter()
+    app.state.ab_testing_service = ABTestingService(app.state.mlflow_registry)
+    
+    # Initialize authentication services
+    app.state.token_service = TokenService()
+    app.state.rbac_service = RBACService(app.state.tenant_manager.Session())
+    app.state.quota_service = QuotaService(
+        app.state.tenant_manager.Session(), 
+        app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None
     )
-    app.state.model_registry = ModelRegistry(mlflow=app.state.mlflow)
-    app.state.auto_retrainer = AutoRetrainer(
-        scheduler_backend=config.mlops.scheduler_backend if hasattr(config, 'mlops') else "celery"
-    )
-    
-    # Initialize A/B testing
-    app.state.ab_test_manager = ABTestManager()
-    app.state.model_comparator = ModelComparator()
-    
-    # Initialize SSO and Audit
-    if config.sso.enabled:
-        app.state.sso_manager = SSOManager(
-            provider=config.sso.provider,
-            client_id=config.sso.client_id,
-            client_secret=config.sso.client_secret,
-            redirect_uri=config.sso.redirect_uri
-        )
-    else:
-        app.state.sso_manager = None
-    
-    app.state.audit_logger = AuditLogger(
-        backend=config.audit.backend if hasattr(config, 'audit') else "database",
-        retention_days=config.audit.retention_days if hasattr(config, 'audit') else 90
-    )
-    app.state.gdpr_compliance = GDPRCompliance()
-    
-    # Initialize exporters
-    app.state.onnx_exporter = ONNXExporter()
-    app.state.pmml_exporter = PMMLExporter()
-    app.state.edge_optimizer = EdgeDeploymentOptimizer()
+    app.state.audit_service = AuditService(app.state.tenant_manager.Session())
     
     # Initialize LLM assistant if configured
     if hasattr(config, 'llm') and config.llm.enabled:
@@ -326,7 +272,7 @@ async def lifespan(app: FastAPI):
     )
     
     # Initialize Dask client for distributed processing
-    if config.distributed.dask_enabled:
+    if hasattr(config, 'distributed') and config.distributed.dask_enabled:
         app.state.dask_client = DaskClient(config.distributed.dask_scheduler_address)
     else:
         app.state.dask_client = None
@@ -356,14 +302,19 @@ async def lifespan(app: FastAPI):
         await ws.close()
     
     # Shutdown distributed computing
-    if config.distributed.enabled:
+    if hasattr(config, 'distributed') and config.distributed.enabled:
         ray.shutdown()
     
     if app.state.dask_client:
         await app.state.dask_client.close()
     
     # Flush audit logs
-    app.state.audit_logger.flush()
+    app.state.audit_service.log_action(
+        user_id=None,
+        tenant_id=None,
+        action="system_shutdown",
+        response_status=200
+    )
     
     logger.info("AutoML API shutdown complete")
 
@@ -380,10 +331,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Include auth router
+app.include_router(auth_router)
+
 # Rate limiter with plan-based limits
 def get_rate_limit_key(request: Request):
     """Get rate limit key based on user and plan"""
-    # This would be enhanced to get actual user plan
     return get_remote_address(request)
 
 limiter = Limiter(key_func=get_rate_limit_key)
@@ -414,41 +367,26 @@ async def get_current_tenant(credentials: HTTPAuthorizationCredentials = Depends
             "tenant_id": "default",
             "user_id": "anonymous",
             "plan": "free",
-            "limits": PlanLimits.LIMITS["free"]
+            "limits": PLAN_LIMITS["free"]
         }
     
     token = credentials.credentials
     try:
-        # Verify JWT token
-        payload = jwt.decode(
-            token, 
-            getattr(config.api, 'jwt_secret', 'secret'), 
-            algorithms=[getattr(config.api, 'jwt_algorithm', 'HS256')]
-        )
+        # Verify JWT token using TokenService
+        payload = app.state.token_service.verify_token(token)
         
         # Get tenant information
         tenant = app.state.tenant_manager.get_tenant(payload.get("tenant_id", "default"))
         
         return {
             "tenant_id": tenant.tenant_id,
-            "user_id": payload["user_id"],
+            "user_id": payload["sub"],
             "plan": tenant.plan,
-            "limits": PlanLimits.LIMITS.get(tenant.plan, PlanLimits.LIMITS["free"])
+            "limits": PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS["free"])
         }
         
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-def create_token(user_id: str, tenant_id: str) -> str:
-    """Create JWT token with tenant information"""
-    payload = {
-        "user_id": user_id,
-        "tenant_id": tenant_id,
-        "exp": datetime.utcnow() + timedelta(minutes=getattr(config.api, 'jwt_expiration_minutes', 60))
-    }
-    return jwt.encode(payload, getattr(config.api, 'jwt_secret', 'secret'), algorithm=getattr(config.api, 'jwt_algorithm', 'HS256'))
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
 # ============================================================================
 # Middleware for Billing & Quotas
@@ -463,35 +401,31 @@ async def billing_quota_middleware(request: Request, call_next):
     
     # Get tenant from token if auth is enabled
     if getattr(config.api, 'enable_auth', False):
-        # Extract tenant_id from JWT (simplified - should use proper auth)
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             try:
                 token = auth_header.split(" ")[1]
-                payload = jwt.decode(
-                    token,
-                    getattr(config.api, 'jwt_secret', 'secret'),
-                    algorithms=[getattr(config.api, 'jwt_algorithm', 'HS256')]
-                )
+                payload = app.state.token_service.verify_token(token)
                 tenant_id = payload.get("tenant_id", "default")
                 
-                # Check if account is suspended
-                if app.state.billing_manager.is_suspended(tenant_id):
-                    return JSONResponse(
-                        status_code=402,
-                        content={"detail": "Account suspended due to billing issues"}
-                    )
-                
-                # Check quotas for specific endpoints
+                # Check quotas using QuotaService
                 if "/train" in request.url.path:
-                    if not app.state.resource_manager.can_start_job(tenant_id):
+                    if not app.state.quota_service.check_quota(
+                        app.state.tenant_manager.get_tenant(tenant_id), 
+                        "concurrent_jobs", 
+                        1
+                    ):
                         return JSONResponse(
                             status_code=429,
                             content={"detail": "Concurrent job limit reached for your plan"}
                         )
                 
                 if "/llm" in request.url.path:
-                    if not app.state.resource_manager.can_use_llm(tenant_id):
+                    if not app.state.quota_service.check_quota(
+                        app.state.tenant_manager.get_tenant(tenant_id),
+                        "api_calls",
+                        1
+                    ):
                         return JSONResponse(
                             status_code=429,
                             content={"detail": "Daily LLM call limit reached for your plan"}
@@ -514,14 +448,10 @@ async def audit_middleware(request: Request, call_next):
     if auth_header.startswith("Bearer "):
         try:
             token = auth_header.split(" ")[1]
-            payload = jwt.decode(
-                token,
-                getattr(config.api, 'jwt_secret', 'secret'),
-                algorithms=[getattr(config.api, 'jwt_algorithm', 'HS256')]
-            )
+            payload = app.state.token_service.verify_token(token)
             tenant_info = {
                 "tenant_id": payload.get("tenant_id", "unknown"),
-                "user_id": payload.get("user_id", "unknown")
+                "user_id": payload.get("sub", "unknown")
             }
         except:
             pass
@@ -531,15 +461,12 @@ async def audit_middleware(request: Request, call_next):
     
     # Log to audit
     duration = time.time() - start_time
-    app.state.audit_logger.log(
-        action=f"{request.method} {request.url.path}",
-        tenant_id=tenant_info["tenant_id"],
+    app.state.audit_service.log_action(
         user_id=tenant_info["user_id"],
-        details={
-            "status_code": response.status_code,
-            "duration": duration,
-            "ip_address": request.client.host if request.client else "unknown"
-        }
+        tenant_id=tenant_info["tenant_id"],
+        action=f"{request.method} {request.url.path}",
+        response_status=response.status_code,
+        ip_address=request.client.host if request.client else "unknown"
     )
     
     # Record metrics
@@ -627,12 +554,18 @@ async def health_check():
         "components": {
             "storage": "healthy" if app.state.storage else "not configured",
             "monitoring": "healthy" if app.state.monitoring else "disabled",
-            "mlflow": "healthy" if app.state.mlflow else "disabled",
+            "mlflow": "healthy" if app.state.mlflow_registry else "disabled",
             "celery": "healthy" if config.worker.enabled else "disabled",
-            "ray": "healthy" if config.distributed.enabled else "disabled",
-            "gpu": f"{app.state.gpu_scheduler.available_gpus()}/{config.distributed.num_gpus} available" if config.distributed.enabled else "disabled"
+            "ray": "healthy" if hasattr(config, 'distributed') and config.distributed.enabled else "disabled",
+            "autoscaling": "healthy" if app.state.autoscaling else "disabled"
         }
     }
+    
+    # Check autoscaling status
+    if app.state.autoscaling:
+        system_status = app.state.autoscaling.get_system_status()
+        health_status["components"]["gpu"] = f"{len(system_status['gpus'])} GPUs available"
+        health_status["components"]["cluster"] = f"{system_status['cluster']['nodes']} nodes"
     
     # Check if any component is unhealthy
     if any(v == "unhealthy" for v in health_status["components"].values()):
@@ -663,9 +596,12 @@ async def start_training(
 ):
     """Start training job with autoscaling and resource management"""
     
-    # Check concurrent job limits
-    current_jobs = app.state.job_scheduler.get_tenant_jobs(tenant["tenant_id"])
-    if len(current_jobs) >= tenant["limits"]["max_concurrent_jobs"]:
+    # Check concurrent job limits using autoscaling service
+    current_status = app.state.autoscaling.get_system_status()
+    tenant_jobs = [j for j in current_status["scheduler"]["running_jobs"] 
+                   if j.get("tenant_id") == tenant["tenant_id"]]
+    
+    if len(tenant_jobs) >= tenant["limits"]["max_concurrent_jobs"]:
         raise HTTPException(
             status_code=429,
             detail=f"Maximum concurrent jobs ({tenant['limits']['max_concurrent_jobs']}) reached for {tenant['plan']} plan"
@@ -700,64 +636,30 @@ async def start_training(
     
     # Create experiment with MLflow tracking
     experiment_id = train_request.experiment_name or f"exp_{uuid.uuid4().hex[:8]}"
-    mlflow_run = app.state.mlflow.create_run(
-        experiment_name=f"{tenant['tenant_id']}/{experiment_id}",
-        tags={
-            "tenant_id": tenant["tenant_id"],
-            "user_id": tenant["user_id"],
-            "plan": tenant["plan"],
-            "dataset_id": dataset_id,
-            "target_column": target_column
-        }
-    )
     
-    # Schedule job based on plan priority
-    job_config = {
-        "experiment_id": experiment_id,
-        "dataset_id": dataset_id,
-        "target_column": target_column,
-        "train_request": train_request.dict(),
-        "tenant": tenant,
-        "mlflow_run_id": mlflow_run.info.run_id,
-        "priority": tenant["limits"]["priority"]
-    }
-    
-    if train_request.use_gpu:
-        # Schedule GPU job
-        job_id = app.state.gpu_scheduler.schedule_job(
-            job_config,
-            num_gpus=1,
-            priority=tenant["limits"]["priority"]
-        )
-    elif train_request.distributed:
-        # Schedule distributed job
-        job_id = celery_app.send_task(
-            'automl_tasks.distributed_train',
-            args=[job_config],
-            priority=tenant["limits"]["priority"],
-            queue=f"priority_{tenant['limits']['priority']}"
-        )
-    else:
-        # Schedule regular CPU job
-        job_id = celery_app.send_task(
-            'automl_tasks.train',
-            args=[job_config],
-            priority=tenant["limits"]["priority"],
-            queue=f"priority_{tenant['limits']['priority']}"
-        )
-    
-    # Track job
-    app.state.job_scheduler.register_job(
-        job_id=str(job_id),
+    # Create job request for autoscaling
+    job = JobRequest(
         tenant_id=tenant["tenant_id"],
-        experiment_id=experiment_id,
-        job_type="training",
-        resources={
-            "gpu": train_request.use_gpu,
-            "distributed": train_request.distributed,
-            "workers": train_request.num_workers if train_request.distributed else 1
-        }
+        user_id=tenant["user_id"],
+        plan_type=tenant["plan"],
+        task_type="train",
+        queue_type=QueueType.GPU_TRAINING if train_request.use_gpu else QueueType.CPU_PRIORITY,
+        payload={
+            "experiment_id": experiment_id,
+            "dataset_id": dataset_id,
+            "target_column": target_column,
+            "train_request": train_request.dict()
+        },
+        estimated_memory_gb=4.0,  # Estimate based on dataset size
+        estimated_time_minutes=train_request.max_runtime_seconds // 60,
+        requires_gpu=train_request.use_gpu,
+        num_gpus=1 if train_request.use_gpu else 0,
+        gpu_memory_gb=8.0 if train_request.use_gpu else 0,
+        priority=tenant["limits"]["priority"]
     )
+    
+    # Submit job through autoscaling service
+    job_id = app.state.autoscaling.submit_job(job)
     
     # Update metrics
     training_jobs.labels(
@@ -767,20 +669,188 @@ async def start_training(
     ).inc()
     
     # Track usage for billing
-    app.state.usage_tracker.track_training(
-        tenant_id=tenant["tenant_id"],
-        model_type="automl",
-        duration_estimate=train_request.max_runtime_seconds,
-        use_gpu=train_request.use_gpu
+    app.state.quota_service.consume_quota(
+        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
+        "compute_minutes",
+        train_request.max_runtime_seconds // 60
     )
     
     return {
-        "job_id": str(job_id),
+        "job_id": job_id,
         "experiment_id": experiment_id,
-        "mlflow_run_id": mlflow_run.info.run_id,
         "status": "queued",
-        "estimated_wait_time": app.state.job_scheduler.estimate_wait_time(tenant["limits"]["priority"]),
-        "queue_position": app.state.job_scheduler.get_queue_position(str(job_id))
+        "queue_type": job.queue_type.queue_name,
+        "estimated_wait_time": f"{job.estimated_time_minutes} minutes",
+        "cluster_status": app.state.autoscaling.get_system_status()["cluster"]
+    }
+
+@app.get("/api/v1/jobs/{job_id}/status")
+async def get_job_status(
+    request: Request,
+    job_id: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get job status from autoscaling service"""
+    
+    job = app.state.autoscaling.get_job_status(job_id)
+    
+    if not job:
+        raise HTTPException(404, f"Job {job_id} not found")
+    
+    # Verify tenant owns this job
+    if job.tenant_id != tenant["tenant_id"]:
+        raise HTTPException(403, "Access denied")
+    
+    return {
+        "job_id": job_id,
+        "status": job.status.value,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "queue_type": job.queue_type.queue_name,
+        "error_message": job.error_message,
+        "result": job.result
+    }
+
+# ============================================================================
+# Autoscaling Management Endpoints
+# ============================================================================
+
+@app.get("/api/v1/autoscaling/status")
+async def get_autoscaling_status(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get autoscaling system status"""
+    
+    status = app.state.autoscaling.get_system_status()
+    
+    # Filter sensitive information based on plan
+    if tenant["plan"] not in ["pro", "enterprise"]:
+        # Limited view for free/trial users
+        return {
+            "timestamp": status["timestamp"],
+            "your_jobs": {
+                "pending": len([j for j in status["scheduler"]["pending_jobs"] 
+                               if j.get("tenant_id") == tenant["tenant_id"]]),
+                "running": len([j for j in status["scheduler"]["running_jobs"] 
+                               if j.get("tenant_id") == tenant["tenant_id"]])
+            },
+            "cluster_utilization": status["cluster"]["utilization"]
+        }
+    
+    return status
+
+@app.post("/api/v1/autoscaling/scale")
+async def scale_cluster(
+    request: Request,
+    target_workers: int,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Manually scale the cluster (admin only)"""
+    
+    # Check if user is admin
+    if not app.state.rbac_service.check_permission(
+        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
+        "cluster",
+        "scale"
+    ):
+        raise HTTPException(403, "Admin access required")
+    
+    success = await app.state.autoscaling.scale_workers(target_workers)
+    
+    return {
+        "success": success,
+        "target_workers": target_workers,
+        "current_status": app.state.autoscaling.get_system_status()["cluster"]
+    }
+
+@app.get("/api/v1/autoscaling/optimize")
+async def optimize_resources(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get resource optimization recommendations"""
+    
+    if tenant["plan"] not in ["enterprise"]:
+        raise HTTPException(403, "Enterprise plan required")
+    
+    optimizations = await app.state.autoscaling.optimize_resources()
+    
+    return optimizations
+
+# ============================================================================
+# GPU Management Endpoints
+# ============================================================================
+
+@app.get("/api/v1/gpu/status")
+async def get_gpu_status(
+    request: Request,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Get GPU cluster status"""
+    
+    system_status = app.state.autoscaling.get_system_status()
+    gpu_status = system_status.get("gpus", [])
+    
+    # Check GPU access for tenant
+    has_gpu_access = tenant["limits"].get("gpu_access", False)
+    
+    return {
+        "total_gpus": len(gpu_status),
+        "available_gpus": sum(1 for gpu in gpu_status if not gpu.get("allocated")),
+        "your_gpu_access": has_gpu_access,
+        "gpu_details": gpu_status if has_gpu_access else None,
+        "upgrade_required": not has_gpu_access,
+        "upgrade_message": "Upgrade to Pro or Enterprise plan for GPU access" if not has_gpu_access else None
+    }
+
+@app.post("/api/v1/gpu/request")
+async def request_gpu(
+    request: Request,
+    duration_hours: int = 1,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Request GPU allocation"""
+    
+    if not tenant["limits"].get("gpu_access", False):
+        raise HTTPException(403, "GPU access not available for your plan")
+    
+    # Check GPU hours quota
+    if not app.state.quota_service.check_quota(
+        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
+        "gpu_hours",
+        duration_hours
+    ):
+        raise HTTPException(429, "GPU hours quota exceeded")
+    
+    # Create GPU job request
+    job = JobRequest(
+        tenant_id=tenant["tenant_id"],
+        user_id=tenant["user_id"],
+        plan_type=tenant["plan"],
+        task_type="gpu_allocation",
+        queue_type=QueueType.GPU_INFERENCE,
+        requires_gpu=True,
+        num_gpus=1,
+        gpu_memory_gb=8.0,
+        estimated_time_minutes=duration_hours * 60
+    )
+    
+    job_id = app.state.autoscaling.submit_job(job)
+    
+    # Consume quota
+    app.state.quota_service.consume_quota(
+        app.state.tenant_manager.get_tenant(tenant["tenant_id"]),
+        "gpu_hours",
+        duration_hours
+    )
+    
+    return {
+        "allocation_id": job_id,
+        "duration_hours": duration_hours,
+        "status": "pending",
+        "estimated_wait_time": "Check status for updates"
     }
 
 # ============================================================================
@@ -797,44 +867,68 @@ async def export_model(
     
     # Load model
     try:
-        model, metadata = app.state.storage.load_model(
-            export_request.model_id,
-            tenant_id=tenant["tenant_id"]
+        model = app.state.mlflow_registry.get_production_model(
+            export_request.model_id
         )
-    except FileNotFoundError:
+        if not model:
+            raise FileNotFoundError()
+    except:
         raise HTTPException(404, f"Model {export_request.model_id} not found")
     
     # Export based on format
     try:
         if export_request.format.lower() == "onnx":
-            exported_model = app.state.onnx_exporter.export(
+            # Create sample input for ONNX conversion
+            sample_input = np.random.randn(1, 10).astype(np.float32)  # Adjust based on your model
+            
+            success = app.state.model_exporter.export_to_onnx(
                 model,
-                optimize=export_request.optimize_for_edge,
-                quantize=export_request.quantize
+                sample_input,
+                f"exports/{tenant['tenant_id']}/{export_request.model_id}.onnx"
             )
+            
+            if not success:
+                raise Exception("ONNX export failed")
+            
             file_extension = ".onnx"
+            
         elif export_request.format.lower() == "pmml":
-            exported_model = app.state.pmml_exporter.export(model)
-            file_extension = ".pmml"
-        elif export_request.format.lower() == "tensorflow_lite":
-            exported_model = app.state.edge_optimizer.convert_to_tflite(
+            success = app.state.model_exporter.export_to_pmml(
                 model,
-                quantize=export_request.quantize,
-                target_device=export_request.target_device
+                f"exports/{tenant['tenant_id']}/{export_request.model_id}.pmml"
             )
+            
+            if not success:
+                raise Exception("PMML export failed")
+            
+            file_extension = ".pmml"
+            
+        elif export_request.format.lower() == "tensorflow_lite":
+            sample_input = np.random.randn(1, 10).astype(np.float32)
+            
+            success = app.state.model_exporter.export_to_tensorflow_lite(
+                model,
+                sample_input,
+                f"exports/{tenant['tenant_id']}/{export_request.model_id}.tflite"
+            )
+            
+            if not success:
+                raise Exception("TensorFlow Lite export failed")
+            
             file_extension = ".tflite"
         else:
             raise HTTPException(400, f"Unsupported export format: {export_request.format}")
         
-        # Save exported model
         export_path = f"exports/{tenant['tenant_id']}/{export_request.model_id}{file_extension}"
-        app.state.storage.save_artifact(exported_model, export_path)
         
         # Track usage
-        app.state.usage_tracker.track_export(
+        app.state.audit_service.log_action(
+            user_id=tenant["user_id"],
             tenant_id=tenant["tenant_id"],
-            model_id=export_request.model_id,
-            format=export_request.format
+            action=f"model_export_{export_request.format}",
+            resource_type="model",
+            resource_id=export_request.model_id,
+            response_status=200
         )
         
         return {
@@ -842,8 +936,7 @@ async def export_model(
             "export_format": export_request.format,
             "export_path": export_path,
             "optimized": export_request.optimize_for_edge,
-            "quantized": export_request.quantize,
-            "file_size_mb": len(exported_model) / (1024 * 1024)
+            "quantized": export_request.quantize
         }
         
     except Exception as e:
@@ -862,22 +955,12 @@ async def create_ab_test(
 ):
     """Create A/B test between two models"""
     
-    # Verify both models exist
-    for model_id in [ab_test_request.model_a_id, ab_test_request.model_b_id]:
-        try:
-            app.state.storage.load_model(model_id, tenant_id=tenant["tenant_id"])
-        except FileNotFoundError:
-            raise HTTPException(404, f"Model {model_id} not found")
-    
     # Create A/B test
-    test_id = app.state.ab_test_manager.create_test(
-        name=ab_test_request.name,
-        tenant_id=tenant["tenant_id"],
-        model_a_id=ab_test_request.model_a_id,
-        model_b_id=ab_test_request.model_b_id,
-        traffic_split=ab_test_request.traffic_split,
-        duration_hours=ab_test_request.duration_hours,
-        metrics=ab_test_request.metrics
+    test_id = app.state.ab_testing_service.create_ab_test(
+        model_name=ab_test_request.name,
+        champion_version=ab_test_request.model_a_id,
+        challenger_version=ab_test_request.model_b_id,
+        traffic_split=ab_test_request.traffic_split
     )
     
     return {
@@ -896,296 +979,12 @@ async def get_ab_test_results(
 ):
     """Get A/B test results with statistical significance"""
     
-    results = app.state.ab_test_manager.get_results(test_id, tenant_id=tenant["tenant_id"])
+    results = app.state.ab_testing_service.get_test_results(test_id)
     
     if not results:
         raise HTTPException(404, f"A/B test {test_id} not found")
     
-    # Calculate statistical significance
-    comparison = app.state.model_comparator.compare(
-        results["model_a_metrics"],
-        results["model_b_metrics"],
-        metrics=results["metrics"]
-    )
-    
-    return {
-        "test_id": test_id,
-        "status": results["status"],
-        "model_a": {
-            "id": results["model_a_id"],
-            "requests": results["model_a_requests"],
-            "metrics": results["model_a_metrics"]
-        },
-        "model_b": {
-            "id": results["model_b_id"],
-            "requests": results["model_b_requests"],
-            "metrics": results["model_b_metrics"]
-        },
-        "statistical_analysis": comparison,
-        "winner": comparison.get("winner"),
-        "confidence_level": comparison.get("confidence_level")
-    }
-
-# ============================================================================
-# MLOps Endpoints
-# ============================================================================
-
-@app.post("/api/v1/models/{model_id}/retrain")
-async def schedule_retraining(
-    request: Request,
-    model_id: str,
-    schedule: RetrainingSchedule,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Schedule automatic model retraining"""
-    
-    # Verify model exists
-    try:
-        model, metadata = app.state.storage.load_model(model_id, tenant_id=tenant["tenant_id"])
-    except FileNotFoundError:
-        raise HTTPException(404, f"Model {model_id} not found")
-    
-    # Schedule retraining
-    schedule_id = app.state.auto_retrainer.schedule(
-        model_id=model_id,
-        tenant_id=tenant["tenant_id"],
-        schedule_type=schedule.schedule_type,
-        schedule_config=schedule.schedule_config,
-        data_source=schedule.data_source,
-        retrain_threshold=schedule.retrain_threshold,
-        notification_emails=schedule.notification_emails
-    )
-    
-    return {
-        "schedule_id": schedule_id,
-        "model_id": model_id,
-        "schedule_type": schedule.schedule_type,
-        "next_run": app.state.auto_retrainer.get_next_run_time(schedule_id),
-        "status": "scheduled"
-    }
-
-@app.get("/api/v1/models/{model_id}/versions")
-async def get_model_versions(
-    request: Request,
-    model_id: str,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Get all versions of a model with metrics"""
-    
-    versions = app.state.model_registry.get_versions(
-        model_id=model_id,
-        tenant_id=tenant["tenant_id"]
-    )
-    
-    if not versions:
-        raise HTTPException(404, f"Model {model_id} not found")
-    
-    return {
-        "model_id": model_id,
-        "versions": [
-            {
-                "version": v["version"],
-                "created_at": v["created_at"],
-                "metrics": v["metrics"],
-                "tags": v["tags"],
-                "stage": v["stage"],  # staging, production, archived
-                "mlflow_run_id": v["mlflow_run_id"]
-            }
-            for v in versions
-        ],
-        "current_production": next((v for v in versions if v["stage"] == "production"), None)
-    }
-
-@app.post("/api/v1/models/{model_id}/rollback")
-async def rollback_model(
-    request: Request,
-    model_id: str,
-    target_version: str,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Rollback model to a previous version"""
-    
-    try:
-        app.state.model_registry.transition_stage(
-            model_id=model_id,
-            version=target_version,
-            stage="production",
-            tenant_id=tenant["tenant_id"]
-        )
-        
-        # Archive current production version
-        current_prod = app.state.model_registry.get_production_version(model_id, tenant["tenant_id"])
-        if current_prod and current_prod["version"] != target_version:
-            app.state.model_registry.transition_stage(
-                model_id=model_id,
-                version=current_prod["version"],
-                stage="archived",
-                tenant_id=tenant["tenant_id"]
-            )
-        
-        return {
-            "model_id": model_id,
-            "rolled_back_to": target_version,
-            "previous_version": current_prod["version"] if current_prod else None,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Rollback failed: {e}")
-        raise HTTPException(500, f"Rollback failed: {str(e)}")
-
-# ============================================================================
-# SSO Endpoints
-# ============================================================================
-
-@app.get("/api/v1/auth/sso/login")
-async def sso_login(request: Request):
-    """Initiate SSO login"""
-    if not app.state.sso_manager:
-        raise HTTPException(503, "SSO not configured")
-    
-    auth_url = app.state.sso_manager.get_authorization_url()
-    return {"auth_url": auth_url}
-
-@app.get("/api/v1/auth/sso/callback")
-async def sso_callback(request: Request, code: str, state: str):
-    """Handle SSO callback"""
-    if not app.state.sso_manager:
-        raise HTTPException(503, "SSO not configured")
-    
-    try:
-        user_info = await app.state.sso_manager.handle_callback(code, state)
-        
-        # Create or update user
-        tenant = app.state.tenant_manager.get_or_create_tenant_for_sso_user(user_info)
-        
-        # Generate JWT token
-        token = create_token(user_info["sub"], tenant.tenant_id)
-        
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "user_info": user_info,
-            "tenant_id": tenant.tenant_id
-        }
-        
-    except Exception as e:
-        logger.error(f"SSO callback failed: {e}")
-        raise HTTPException(400, f"SSO authentication failed: {str(e)}")
-
-# ============================================================================
-# GDPR Compliance Endpoints
-# ============================================================================
-
-@app.get("/api/v1/gdpr/export")
-async def export_user_data(
-    request: Request,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Export all user data (GDPR compliance)"""
-    
-    data = app.state.gdpr_compliance.export_user_data(
-        tenant_id=tenant["tenant_id"],
-        user_id=tenant["user_id"]
-    )
-    
-    # Create ZIP file with all data
-    export_path = f"gdpr_exports/{tenant['tenant_id']}/{tenant['user_id']}_{datetime.now().strftime('%Y%m%d')}.zip"
-    app.state.storage.save_artifact(data, export_path)
-    
-    return FileResponse(
-        export_path,
-        media_type="application/zip",
-        filename=f"user_data_export_{tenant['user_id']}.zip"
-    )
-
-@app.delete("/api/v1/gdpr/delete")
-async def delete_user_data(
-    request: Request,
-    confirm: bool = False,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Delete all user data (GDPR right to be forgotten)"""
-    
-    if not confirm:
-        raise HTTPException(400, "Please confirm data deletion by setting confirm=true")
-    
-    # Schedule deletion (with 30-day grace period)
-    deletion_id = app.state.gdpr_compliance.schedule_deletion(
-        tenant_id=tenant["tenant_id"],
-        user_id=tenant["user_id"],
-        grace_period_days=30
-    )
-    
-    return {
-        "deletion_id": deletion_id,
-        "scheduled_deletion_date": (datetime.now() + timedelta(days=30)).isoformat(),
-        "message": "Your data deletion has been scheduled. You have 30 days to cancel this request."
-    }
-
-# ============================================================================
-# Billing Endpoints
-# ============================================================================
-
-@app.get("/api/v1/billing/invoice/{tenant_id}")
-async def generate_invoice(
-    request: Request,
-    tenant_id: str,
-    month: Optional[int] = None,
-    year: Optional[int] = None,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Generate monthly invoice"""
-    
-    # Check authorization
-    if tenant["tenant_id"] != tenant_id and not tenant.get("is_admin"):
-        raise HTTPException(403, "Access denied")
-    
-    # Generate invoice
-    invoice = app.state.billing_manager.generate_invoice(
-        tenant_id=tenant_id,
-        month=month or datetime.now().month,
-        year=year or datetime.now().year
-    )
-    
-    return {
-        "invoice_id": invoice["invoice_id"],
-        "tenant_id": tenant_id,
-        "period": f"{invoice['year']}-{invoice['month']:02d}",
-        "plan": invoice["plan"],
-        "usage": invoice["usage"],
-        "charges": invoice["charges"],
-        "total": invoice["total"],
-        "currency": "USD",
-        "due_date": invoice["due_date"],
-        "status": invoice["status"]
-    }
-
-# ============================================================================
-# GPU Monitoring Endpoints
-# ============================================================================
-
-@app.get("/api/v1/gpu/status")
-async def get_gpu_status(
-    request: Request,
-    tenant: Dict = Depends(get_current_tenant)
-):
-    """Get GPU cluster status"""
-    
-    if not config.distributed.enabled:
-        raise HTTPException(503, "GPU cluster not configured")
-    
-    gpu_status = app.state.gpu_scheduler.get_status()
-    
-    return {
-        "total_gpus": gpu_status["total"],
-        "available_gpus": gpu_status["available"],
-        "gpu_queue_length": gpu_status["queue_length"],
-        "gpu_utilization": gpu_status["utilization"],
-        "gpu_memory": gpu_status["memory"],
-        "your_gpu_access": tenant["limits"]["gpu_access"],
-        "your_queue_position": app.state.gpu_scheduler.get_tenant_position(tenant["tenant_id"]) if tenant["limits"]["gpu_access"] else None
-    }
+    return results
 
 # ============================================================================
 # WebSocket for Real-time Updates
@@ -1201,21 +1000,20 @@ async def websocket_job_updates(
     
     try:
         while True:
-            # Get job status
-            job_status = app.state.job_scheduler.get_job_status(job_id)
+            # Get job status from autoscaling service
+            job_status = app.state.autoscaling.get_job_status(job_id)
             
             if job_status:
                 await websocket.send_json({
                     "type": "job_update",
                     "job_id": job_id,
-                    "status": job_status["status"],
-                    "progress": job_status.get("progress", 0),
-                    "metrics": job_status.get("metrics", {}),
-                    "eta": job_status.get("eta"),
-                    "logs": job_status.get("recent_logs", [])
+                    "status": job_status.status.value,
+                    "queue_type": job_status.queue_type.queue_name,
+                    "started_at": job_status.started_at.isoformat() if job_status.started_at else None,
+                    "error_message": job_status.error_message
                 })
                 
-                if job_status["status"] in ["completed", "failed", "cancelled"]:
+                if job_status.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
                     break
             
             await asyncio.sleep(1)
