@@ -7,7 +7,7 @@ Place in: automl_platform/api/streaming.py
 import json
 import logging
 import asyncio
-import os  # ADDED: Missing import
+import os
 from typing import Dict, Any, Optional, List, Callable, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
@@ -501,7 +501,7 @@ class RedisStreamHandler:
     async def start_consumer(self, processor: StreamProcessor, output_stream: str = None):
         """Start Redis Streams consumer."""
         consumer_group = self.config.consumer_group
-        consumer_name = f"{consumer_group}-{os.getpid()}"  # FIXED: Now os is imported
+        consumer_name = f"{consumer_group}-{os.getpid()}"
         
         # Create consumer group
         try:
