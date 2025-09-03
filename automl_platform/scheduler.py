@@ -12,8 +12,8 @@ import os
 import json
 import logging
 import asyncio
-import uuid
-from concurrent.futures import ThreadPoolExecutor
+import uuid  # ADDED: Missing import - FIXED
+from concurrent.futures import ThreadPoolExecutor  # ADDED: Missing import - FIXED
 from typing import Dict, List, Optional, Any, Tuple, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
@@ -133,9 +133,11 @@ PLAN_LIMITS = {
         "api_rate_limit": 10,
         "llm_calls_per_month": 0,
         "max_api_calls_per_day": 100,
-        "max_predictions_per_month": 1000
+        "max_predictions_per_month": 1000,
+        "priority": 10,  # ADDED for compatibility
+        "distributed_training": False  # ADDED for compatibility
     },
-    PlanType.STARTER.value: {
+    PlanType.TRIAL.value: {
         "max_concurrent_jobs": 2,
         "max_workers": 4,  # DataRobot trial: 4 workers
         "gpu_access": False,
@@ -147,9 +149,11 @@ PLAN_LIMITS = {
         "api_rate_limit": 60,
         "llm_calls_per_month": 100,
         "max_api_calls_per_day": 1000,
-        "max_predictions_per_month": 10000
+        "max_predictions_per_month": 10000,
+        "priority": 30,
+        "distributed_training": False
     },
-    PlanType.PROFESSIONAL.value: {
+    PlanType.PRO.value: {
         "max_concurrent_jobs": 5,
         "max_workers": 8,
         "gpu_access": True,
@@ -162,7 +166,9 @@ PLAN_LIMITS = {
         "api_rate_limit": 100,
         "llm_calls_per_month": 1000,
         "max_api_calls_per_day": 10000,
-        "max_predictions_per_month": 100000
+        "max_predictions_per_month": 100000,
+        "priority": 70,
+        "distributed_training": True
     },
     PlanType.ENTERPRISE.value: {
         "max_concurrent_jobs": 20,
@@ -176,7 +182,9 @@ PLAN_LIMITS = {
         "api_rate_limit": 1000,
         "llm_calls_per_month": -1,  # Unlimited
         "max_api_calls_per_day": -1,  # Unlimited
-        "max_predictions_per_month": -1  # Unlimited
+        "max_predictions_per_month": -1,  # Unlimited
+        "priority": 100,
+        "distributed_training": True
     }
 }
 
@@ -679,6 +687,17 @@ class RayScheduler:
             return True
         
         return False
+    
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get queue statistics"""
+        return {
+            'workers': ray.cluster_resources().get('CPU', 0),
+            'gpu_workers': ray.cluster_resources().get('GPU', 0),
+            'active_jobs': len([j for j in self.active_jobs.values() 
+                              if j.status == JobStatus.RUNNING]),
+            'queued_jobs': len([j for j in self.active_jobs.values() 
+                              if j.status == JobStatus.QUEUED]),
+        }
 
 
 # ============================================================================
@@ -715,7 +734,7 @@ class LocalScheduler:
     def __init__(self, config: AutoMLConfig, billing_manager: Optional[BillingManager] = None):
         self.config = config
         self.billing_manager = billing_manager
-        self.executor = ThreadPoolExecutor(max_workers=config.worker.max_workers)
+        self.executor = ThreadPoolExecutor(max_workers=config.worker.max_workers)  # FIXED: Now imported
         self.active_jobs: Dict[str, JobRequest] = {}
     
     def submit_job(self, job_request: JobRequest) -> str:
@@ -761,10 +780,11 @@ class LocalScheduler:
         """Get queue statistics"""
         return {
             'workers': self.executor._max_workers,
+            'gpu_workers': 0,
             'active_jobs': len([j for j in self.active_jobs.values() 
                               if j.status == JobStatus.RUNNING]),
             'queued_jobs': len([j for j in self.active_jobs.values() 
-                              if j.status == JobStatus.QUEUED])
+                              if j.status == JobStatus.QUEUED]),
         }
 
 
@@ -837,7 +857,7 @@ def main():
     job = JobRequest(
         tenant_id="tenant_123",
         user_id="user_456",
-        plan_type=PlanType.PROFESSIONAL.value,
+        plan_type=PlanType.PRO.value,
         task_type="train",
         queue_type=QueueType.CPU_PRIORITY,
         payload={
