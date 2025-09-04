@@ -11,7 +11,7 @@
 
 Production-ready AutoML platform with enterprise MLOps capabilities including incremental learning, real-time streaming, advanced scheduling, billing system, and LLM-powered insights.
 
-## 🚀 New in v3.0 - Advanced Feature
+## 🚀 New in v3.0 - Advanced Features
 
 - **Incremental Learning**: Online learning with River/Vowpal Wabbit, drift detection (ADWIN, DDM, EDDM, Page-Hinkley), and replay buffers
 - **Real-Time Streaming**: Kafka, Flink, Pulsar, and Redis Streams integration for ML on streaming data
