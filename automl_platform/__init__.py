@@ -20,6 +20,10 @@ A comprehensive platform for automated machine learning with advanced features i
 - Multi-source data connectors
 - Feature store management
 - Model versioning and promotion
+- A/B testing with statistical analysis
+- MLflow integration for experiment tracking
+- Advanced monitoring with Prometheus/Grafana
+- Job scheduling with CPU/GPU queue management
 
 Version: 2.1.0
 """
@@ -117,6 +121,114 @@ from .autoscaling import (
     ClusterNode
 )
 
+# Monitoring and MLOps
+from .monitoring import (
+    ModelMonitor,
+    DriftDetector,
+    DataQualityMonitor,
+    AlertManager,
+    MonitoringService,
+    MonitoringIntegration,
+    ModelPerformanceMetrics,
+    NotificationPriority
+)
+
+# MLOps Service
+from .mlops_service import (
+    MLflowRegistry,
+    RetrainingService,
+    ModelExporter as MLOpsModelExporter,
+    ModelVersionManager,
+    create_mlops_service,
+    ModelStage
+)
+
+# MLflow Registry Integration
+from .mlflow_registry import (
+    MLflowRegistry as MLflowRegistryV2,
+    ModelStage as MLflowModelStage
+)
+
+# Storage and Persistence
+from .storage import (
+    StorageManager,
+    StorageBackend,
+    MinIOStorage,
+    LocalStorage,
+    ModelMetadata as StorageModelMetadata,
+    FeatureStore
+)
+
+# Prompts and Templates
+from .prompts import (
+    PromptTemplates,
+    PromptOptimizer
+)
+
+# Job Scheduling
+from .scheduler import (
+    SchedulerFactory,
+    CeleryScheduler,
+    RayScheduler,
+    LocalScheduler,
+    JobRequest,
+    JobStatus,
+    QueueType,
+    PLAN_LIMITS
+)
+
+# WebSocket Service
+from .websocket import (
+    WebSocketServer,
+    ConnectionManager,
+    ChatService,
+    NotificationService,
+    LiveMonitoringService,
+    CollaborationService,
+    MessageType,
+    Message,
+    Notification,
+    TrainingMetrics
+)
+
+# Worker Management
+from .worker import (
+    AutoMLTask,
+    train_full_pipeline,
+    train_distributed_pipeline,
+    train_incremental_pipeline,
+    train_neural_pipeline_gpu,
+    predict_batch as worker_predict_batch,
+    warm_pipeline_cache,
+    check_cache_health,
+    clear_pipeline_cache,
+    optimize_memory_usage,
+    get_system_status,
+    GPUResourceManager
+)
+
+# TabNet Implementation
+from .tabnet_sklearn import (
+    TabNetClassifier,
+    TabNetRegressor,
+    TabNet,
+    TabNetLayer,
+    TabNetEncoder,
+    AttentiveTransformer
+)
+
+# Streamlit A/B Testing Dashboard
+try:
+    from .streamlit_ab_testing import (
+        ABTestingDashboard,
+        integrate_ab_testing_to_main_app
+    )
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
+    ABTestingDashboard = None
+    integrate_ab_testing_to_main_app = None
+
 # Optimization imports
 try:
     from .distributed_training import DistributedTrainer
@@ -156,7 +268,7 @@ from .auth import (
     AuditLog
 )
 from .sso_service import SSOService, SSOProvider
-from .audit_service import AuditService, AuditEventType, AuditSeverity
+from .audit_service import AuditService as AuditServiceV2, AuditEventType, AuditSeverity
 from .rgpd_compliance_service import (
     RGPDComplianceService,
     GDPRRequestType,
@@ -183,7 +295,7 @@ except ImportError:
 
 try:
     # Billing
-    from .api.billing import BillingManager, PlanType, UsageTracker
+    from .api.billing import BillingManager, PlanType as BillingPlanType, UsageTracker
     from .api.billing_routes import billing_router
     BILLING_AVAILABLE = True
 except ImportError:
@@ -200,11 +312,11 @@ except ImportError:
 
 try:
     # Feature store
-    from .api.feature_store import FeatureStore, FeatureSet, FeatureDefinition
+    from .api.feature_store import FeatureStore as APIFeatureStore, FeatureSet, FeatureDefinition
     FEATURE_STORE_AVAILABLE = True
 except ImportError:
     FEATURE_STORE_AVAILABLE = False
-    FeatureStore = None
+    APIFeatureStore = None
 
 try:
     # Infrastructure
@@ -350,6 +462,63 @@ __all__ = [
     "ResourceAllocation",
     "ClusterNode",
     
+    # Monitoring and MLOps
+    "ModelMonitor",
+    "DriftDetector",
+    "DataQualityMonitor",
+    "AlertManager",
+    "MonitoringService",
+    "MonitoringIntegration",
+    "ModelPerformanceMetrics",
+    "MLflowRegistry",
+    "RetrainingService",
+    "ModelVersionManager",
+    "create_mlops_service",
+    
+    # Storage
+    "StorageManager",
+    "StorageBackend",
+    "MinIOStorage",
+    "LocalStorage",
+    "FeatureStore",
+    
+    # Prompts
+    "PromptTemplates",
+    "PromptOptimizer",
+    
+    # Scheduling
+    "SchedulerFactory",
+    "CeleryScheduler",
+    "RayScheduler",
+    "JobRequest",
+    "JobStatus",
+    "QueueType",
+    
+    # WebSocket
+    "WebSocketServer",
+    "ConnectionManager",
+    "ChatService",
+    "NotificationService",
+    "LiveMonitoringService",
+    "CollaborationService",
+    "MessageType",
+    
+    # Worker
+    "AutoMLTask",
+    "train_full_pipeline",
+    "train_distributed_pipeline",
+    "train_incremental_pipeline",
+    "train_neural_pipeline_gpu",
+    "GPUResourceManager",
+    
+    # TabNet
+    "TabNetClassifier",
+    "TabNetRegressor",
+    
+    # Streamlit Dashboard
+    "ABTestingDashboard",
+    "integrate_ab_testing_to_main_app",
+    
     # Optimizations
     "DistributedTrainer",
     "IncrementalLearner",
@@ -379,7 +548,6 @@ __all__ = [
     "SSOProvider",
     
     # Audit
-    "AuditService",
     "AuditEventType",
     "AuditSeverity",
     
@@ -401,7 +569,6 @@ __all__ = [
     "billing_router",
     "ConnectorFactory",
     "ConnectionConfig",
-    "FeatureStore",
     "TenantManager",
     "llm_router",
     "mlops_router",
@@ -420,7 +587,8 @@ PACKAGE_INFO = {
     "license": "MIT",
     "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr", 
                   "distributed", "cache", "batch", "streaming", "websocket", "mlops", "llm",
-                  "feature-engineering", "ensemble", "deployment", "ab-testing"],
+                  "feature-engineering", "ensemble", "deployment", "ab-testing", "mlflow",
+                  "monitoring", "scheduler", "worker", "tabnet"],
     "classifiers": [
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -433,13 +601,16 @@ PACKAGE_INFO = {
     ],
     "features": {
         "core": ["automl", "feature_engineering", "model_selection", "ensemble", "inference"],
-        "enterprise": ["multi_tenant", "billing", "monitoring", "ab_testing"],
+        "enterprise": ["multi_tenant", "billing", "monitoring", "ab_testing", "scheduler"],
         "security": ["sso", "rbac", "audit_trail", "encryption"],
         "compliance": ["rgpd", "gdpr", "data_retention", "consent_management"],
-        "advanced": ["llm_integration", "streaming", "drift_detection", "data_quality"],
+        "advanced": ["llm_integration", "streaming", "drift_detection", "data_quality", "prompts"],
         "optimizations": ["distributed_training", "incremental_learning", "pipeline_cache", "memory_optimization"],
-        "deployment": ["model_export", "onnx", "pmml", "edge_deployment", "autoscaling"],
-        "api": ["batch_inference", "websocket", "connectors", "feature_store", "model_versioning"]
+        "deployment": ["model_export", "onnx", "pmml", "edge_deployment", "autoscaling", "docker"],
+        "api": ["batch_inference", "websocket", "connectors", "feature_store", "model_versioning"],
+        "mlops": ["mlflow", "experiment_tracking", "model_registry", "retraining", "monitoring"],
+        "ui": ["streamlit", "ab_testing_dashboard", "websocket_chat"],
+        "ml": ["tabnet", "neural_networks", "gpu_support"]
     }
 }
 
@@ -472,7 +643,8 @@ def check_api_features():
         "mlops": MLOPS_AVAILABLE,
         "versioning": VERSIONING_AVAILABLE,
         "streaming": STREAMING_AVAILABLE,
-        "websocket": WEBSOCKET_AVAILABLE
+        "websocket": WEBSOCKET_AVAILABLE,
+        "streamlit": STREAMLIT_AVAILABLE
     }
 
 def initialize_platform(config_path: str = None, environment: str = "production", 
@@ -504,7 +676,7 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         services["sso"] = SSOService()
     
     # Initialize audit service
-    services["audit"] = AuditService()
+    services["audit"] = AuditServiceV2()
     
     # Initialize RGPD service if enabled
     if config.rgpd.enabled:
@@ -537,6 +709,27 @@ def initialize_platform(config_path: str = None, environment: str = "production"
     # Initialize Model Export Service
     services["model_export"] = ModelExportService()
     services["model_exporter"] = ModelExporter()
+    
+    # Initialize Storage Manager
+    services["storage"] = StorageManager(
+        backend=config.storage.backend if hasattr(config, 'storage') else 'local'
+    )
+    
+    # Initialize Monitoring Service
+    if hasattr(config, 'monitoring') and config.monitoring.enabled:
+        services["monitoring"] = MonitoringService(services["storage"])
+    
+    # Initialize MLOps Service
+    services["mlops"] = create_mlops_service(config)
+    
+    # Initialize Scheduler
+    services["scheduler"] = SchedulerFactory.create_scheduler(
+        config,
+        services.get("billing")
+    )
+    
+    # Initialize WebSocket Server
+    services["websocket"] = WebSocketServer()
     
     # Initialize optimization services if available and enabled
     if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
@@ -578,7 +771,7 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         
         # Initialize feature store
         if FEATURE_STORE_AVAILABLE and hasattr(config, 'feature_store') and config.feature_store.enabled:
-            services["feature_store"] = FeatureStore(config.feature_store.to_dict())
+            services["feature_store"] = APIFeatureStore(config.feature_store.to_dict())
         
         # Initialize infrastructure
         if INFRASTRUCTURE_AVAILABLE:
@@ -835,7 +1028,7 @@ def create_orchestrator(config_path: str = None,
     if enable_api_features:
         # Initialize feature store if available
         if FEATURE_STORE_AVAILABLE and hasattr(config, 'feature_store') and config.feature_store.enabled:
-            services["feature_store"] = FeatureStore(config.feature_store.to_dict())
+            services["feature_store"] = APIFeatureStore(config.feature_store.to_dict())
         
         # Initialize version manager if available
         if VERSIONING_AVAILABLE:
@@ -886,3 +1079,8 @@ if any(api_features.values()):
     logger.info(f"API features loaded: {', '.join([k for k, v in api_features.items() if v])}")
 else:
     logger.info("No API features loaded. Check module dependencies.")
+
+# Log newly added modules
+logger.info("Additional modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, websocket, worker, tabnet")
+if STREAMLIT_AVAILABLE:
+    logger.info("Streamlit A/B testing dashboard available")
