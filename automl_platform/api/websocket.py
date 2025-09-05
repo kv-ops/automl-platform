@@ -1574,9 +1574,10 @@ async def initialize_websocket_service(redis_url: str = None):
 
 async def shutdown_websocket_service():
    """Cleanup WebSocket service"""
-   global connection_manager
+   global ws_server, connection_manager
    if ws_server is not None:
        await ws_server.cleanup()
+       ws_server = None
    connection_manager = None
 
 # ============================================================================
