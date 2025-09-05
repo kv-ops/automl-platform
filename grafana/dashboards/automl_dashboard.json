@@ -17,6 +17,57 @@
   "graphTooltip": 0,
   "id": 1,
   "links": [],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(ml_predictions_total, tenant_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Tenant",
+        "multi": true,
+        "name": "tenant_id",
+        "options": [],
+        "query": "label_values(ml_predictions_total, tenant_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(ml_predictions_total{tenant_id=~\"$tenant_id\"}, model_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Model",
+        "multi": true,
+        "name": "model_id",
+        "options": [],
+        "query": "label_values(ml_predictions_total{tenant_id=~\"$tenant_id\"}, model_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
   "panels": [
     {
       "datasource": "Prometheus",
@@ -67,7 +118,7 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -80,8 +131,8 @@
       "id": 2,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": ["lastNotNull", "mean"],
+          "displayMode": "table",
           "placement": "bottom"
         },
         "tooltip": {
@@ -91,12 +142,12 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "rate(automl_training_jobs_total[5m])",
+          "expr": "rate(ml_predictions_total{tenant_id=~\"$tenant_id\", model_id=~\"$model_id\"}[5m])",
           "refId": "A",
-          "legendFormat": "{{tenant_id}} - {{status}}"
+          "legendFormat": "{{tenant_id}} - {{model_id}}"
         }
       ],
-      "title": "Training Jobs Rate",
+      "title": "Prediction Rate",
       "type": "timeseries"
     },
     {
@@ -111,12 +162,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "red",
+                "color": "yellow",
                 "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.8
               }
             ]
           },
@@ -147,11 +202,11 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "avg(automl_model_cv_score)",
+          "expr": "avg(ml_model_accuracy{model_id=~\"$model_id\"})",
           "refId": "A"
         }
       ],
-      "title": "Average Model Performance",
+      "title": "Average Model Accuracy",
       "type": "gauge"
     },
     {
@@ -182,10 +237,11 @@
       "id": 4,
       "options": {
         "legend": {
-          "displayMode": "list",
-          "placement": "right"
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["lastNotNull"]
         },
-        "pieType": "pie",
+        "pieType": "donut",
         "reduceOptions": {
           "values": false,
           "calcs": [
@@ -200,7 +256,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum by (model_type) (automl_training_duration_seconds_count)",
+          "expr": "sum by (model_type) (ml_predictions_total{tenant_id=~\"$tenant_id\"})",
           "refId": "A",
           "legendFormat": "{{model_type}}"
         }
@@ -253,7 +309,7 @@
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 1
               }
             ]
           },
@@ -270,7 +326,7 @@
       "id": 5,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": ["lastNotNull", "mean"],
           "displayMode": "list",
           "placement": "bottom"
         },
@@ -281,12 +337,12 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, rate(automl_prediction_latency_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(ml_prediction_duration_seconds_bucket{tenant_id=~\"$tenant_id\", model_id=~\"$model_id\"}[5m])) by (le))",
           "refId": "A",
           "legendFormat": "p95 latency"
         },
         {
-          "expr": "histogram_quantile(0.50, rate(automl_prediction_latency_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.50, sum(rate(ml_prediction_duration_seconds_bucket{tenant_id=~\"$tenant_id\", model_id=~\"$model_id\"}[5m])) by (le))",
           "refId": "B",
           "legendFormat": "p50 latency"
         }
@@ -326,7 +382,7 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "area"
             }
           },
           "mappings": [],
@@ -347,7 +403,7 @@
               }
             ]
           },
-          "unit": "percentunit"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -360,8 +416,8 @@
       "id": 6,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
           "placement": "bottom"
         },
         "tooltip": {
@@ -371,12 +427,154 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "automl_drift_score",
+          "expr": "ml_data_drift_score{model_id=~\"$model_id\"}",
           "refId": "A",
-          "legendFormat": "{{tenant_id}} - {{model_id}} - {{feature}}"
+          "legendFormat": "{{model_id}} - {{feature}}"
         }
       ],
       "title": "Data Drift Monitoring",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(automl_connectors_requests_total{tenant_id=~\"$tenant_id\"}[5m])",
+          "refId": "A",
+          "legendFormat": "{{connector_type}}"
+        }
+      ],
+      "title": "Data Connector Requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(automl_feature_store_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])) by (le, operation)) * 1000",
+          "refId": "A",
+          "legendFormat": "{{operation}} - p95"
+        }
+      ],
+      "title": "Feature Store Latency",
       "type": "timeseries"
     },
     {
@@ -396,11 +594,11 @@
               },
               {
                 "color": "yellow",
-                "value": 5
+                "value": 1000
               },
               {
                 "color": "red",
-                "value": 10
+                "value": 10000
               }
             ]
           },
@@ -412,7 +610,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "id": 7,
       "options": {
@@ -433,11 +631,11 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(automl_active_jobs)",
+          "expr": "sum(automl_streaming_throughput{tenant_id=~\"$tenant_id\"})",
           "refId": "A"
         }
       ],
-      "title": "Active Jobs",
+      "title": "Streaming Messages/sec",
       "type": "stat"
     },
     {
@@ -454,6 +652,14 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1073741824
+              },
+              {
+                "color": "red",
+                "value": 10737418240
               }
             ]
           },
@@ -465,7 +671,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 24
+        "y": 32
       },
       "id": 8,
       "options": {
@@ -486,11 +692,11 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(automl_storage_usage_bytes)",
+          "expr": "sum(automl_feature_store_size_bytes{tenant_id=~\"$tenant_id\"})",
           "refId": "A"
         }
       ],
-      "title": "Total Storage Usage",
+      "title": "Feature Store Size",
       "type": "stat"
     },
     {
@@ -518,7 +724,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 24
+        "y": 32
       },
       "id": 9,
       "options": {
@@ -539,11 +745,11 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate(automl_predictions_total[1h]))",
+          "expr": "sum(automl_ui_sessions_total{tenant_id=~\"$tenant_id\"})",
           "refId": "A"
         }
       ],
-      "title": "Predictions/Hour",
+      "title": "Active UI Sessions",
       "type": "stat"
     },
     {
@@ -575,7 +781,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 24
+        "y": 32
       },
       "id": 10,
       "options": {
@@ -596,21 +802,150 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate(automl_training_jobs_total{status=\"failed\"}[1h])) / sum(rate(automl_training_jobs_total[1h]))",
+          "expr": "sum(rate(ml_prediction_errors_total{model_id=~\"$model_id\"}[1h])) / sum(rate(ml_predictions_total{model_id=~\"$model_id\"}[1h]))",
           "refId": "A"
         }
       ],
-      "title": "Job Failure Rate",
+      "title": "Error Rate",
       "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "sum"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tenant_id) (rate(ml_billing_api_calls_total{tenant_id=~\"$tenant_id\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "API Calls - {{tenant_id}}"
+        }
+      ],
+      "title": "API Calls by Tenant",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "sum"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tenant_id, model_id) (rate(ml_billing_compute_seconds_total{tenant_id=~\"$tenant_id\", model_id=~\"$model_id\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "{{tenant_id}} - {{model_id}}"
+        }
+      ],
+      "title": "Compute Time Usage",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",
   "schemaVersion": 27,
   "style": "dark",
-  "tags": ["automl", "monitoring"],
-  "templating": {
-    "list": []
-  },
+  "tags": ["automl", "monitoring", "ml", "platform"],
   "time": {
     "from": "now-1h",
     "to": "now"
@@ -619,5 +954,5 @@
   "timezone": "",
   "title": "AutoML Platform Dashboard",
   "uid": "automl-main",
-  "version": 1
+  "version": 2
 }
