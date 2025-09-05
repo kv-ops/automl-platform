@@ -1577,7 +1577,7 @@ async def shutdown_websocket_service():
    global ws_server, connection_manager
    if ws_server is not None:
        await ws_server.cleanup()
-       ws_server = None
+   ws_server = None  # Always assign to satisfy the global declaration
    connection_manager = None
 
 # ============================================================================
