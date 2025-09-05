@@ -24,6 +24,7 @@ A comprehensive platform for automated machine learning with advanced features i
 - MLflow integration for experiment tracking
 - Advanced monitoring with Prometheus/Grafana
 - Job scheduling with CPU/GPU queue management
+- Interactive UI with Streamlit dashboard
 
 Version: 3.0.1
 """
@@ -209,11 +210,37 @@ try:
         ABTestingDashboard,
         integrate_ab_testing_to_main_app
     )
-    STREAMLIT_AVAILABLE = True
+    STREAMLIT_AB_TESTING_AVAILABLE = True
 except ImportError:
-    STREAMLIT_AVAILABLE = False
+    STREAMLIT_AB_TESTING_AVAILABLE = False
     ABTestingDashboard = None
     integrate_ab_testing_to_main_app = None
+
+# UI Module - Main dashboard and components
+try:
+    from .ui import (
+        AutoMLDashboard,
+        DataQualityVisualizer,
+        ModelLeaderboard,
+        FeatureImportanceVisualizer,
+        DriftMonitor,
+        ChatInterface,
+        check_ui_dependencies,
+        get_ui_status,
+        launch_dashboard
+    )
+    UI_AVAILABLE = True
+except ImportError:
+    UI_AVAILABLE = False
+    AutoMLDashboard = None
+    DataQualityVisualizer = None
+    ModelLeaderboard = None
+    FeatureImportanceVisualizer = None
+    DriftMonitor = None
+    ChatInterface = None
+    check_ui_dependencies = None
+    get_ui_status = None
+    launch_dashboard = None
 
 # Optimization imports
 try:
@@ -425,7 +452,7 @@ __all__ = [
     "ModelPerformanceMetrics",
     "MLflowRegistry",
     "RetrainingService",
-    "ModelVersionManager",  # This is imported from mlops_service, not api
+    "ModelVersionManager",
     "create_mlops_service",
     
     # Storage
@@ -458,6 +485,18 @@ __all__ = [
     # TabNet
     "TabNetClassifier",
     "TabNetRegressor",
+    
+    # UI Components (conditionally added)
+    "UI_AVAILABLE",
+    "AutoMLDashboard",
+    "DataQualityVisualizer",
+    "ModelLeaderboard",
+    "FeatureImportanceVisualizer",
+    "DriftMonitor",
+    "ChatInterface",
+    "check_ui_dependencies",
+    "get_ui_status",
+    "launch_dashboard",
     
     # Streamlit Dashboard
     "ABTestingDashboard",
@@ -517,7 +556,7 @@ PACKAGE_INFO = {
     "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr", 
                   "distributed", "cache", "batch", "streaming", "websocket", "mlops", "llm",
                   "feature-engineering", "ensemble", "deployment", "ab-testing", "mlflow",
-                  "monitoring", "scheduler", "worker", "tabnet"],
+                  "monitoring", "scheduler", "worker", "tabnet", "ui", "dashboard", "streamlit"],
     "classifiers": [
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -538,7 +577,7 @@ PACKAGE_INFO = {
         "deployment": ["model_export", "onnx", "pmml", "edge_deployment", "autoscaling", "docker"],
         "api": ["batch_inference", "websocket", "connectors", "feature_store", "model_versioning"],
         "mlops": ["mlflow", "experiment_tracking", "model_registry", "retraining", "monitoring"],
-        "ui": ["streamlit", "ab_testing_dashboard", "websocket_chat"],
+        "ui": ["streamlit", "ab_testing_dashboard", "interactive_visualizations", "chat_interface"],
         "ml": ["tabnet", "neural_networks", "gpu_support"]
     }
 }
@@ -576,19 +615,62 @@ def check_api_features():
         "versioning": VERSIONING_AVAILABLE,
         "streaming": STREAMING_AVAILABLE,
         "websocket": WEBSOCKET_AVAILABLE,
-        "streamlit": STREAMLIT_AVAILABLE
+        "streamlit": STREAMLIT_AB_TESTING_AVAILABLE
+    }
+
+def check_ui_features():
+    """
+    Check which UI features are available.
+    
+    Returns:
+        dict: UI feature availability
+    """
+    features = {
+        "dashboard": UI_AVAILABLE,
+        "streamlit_ab_testing": STREAMLIT_AB_TESTING_AVAILABLE
+    }
+    
+    # Get detailed UI status if available
+    if UI_AVAILABLE and check_ui_dependencies:
+        features["dependencies"] = check_ui_dependencies()
+    
+    if UI_AVAILABLE and get_ui_status:
+        features["status"] = get_ui_status()
+    
+    return features
+
+def check_all_features():
+    """
+    Check all platform features availability.
+    
+    Returns:
+        dict: Complete feature availability report
+    """
+    return {
+        "optimizations": check_optimizations(),
+        "api": check_api_features(),
+        "ui": check_ui_features(),
+        "core": {
+            "config": True,
+            "orchestrator": True,
+            "data_prep": True,
+            "metrics": True,
+            "model_selection": True
+        }
     }
 
 def initialize_platform(config_path: str = None, environment: str = "production", 
-                       enable_optimizations: bool = True, enable_api_features: bool = True):
+                       enable_optimizations: bool = True, enable_api_features: bool = True,
+                       enable_ui: bool = True):
     """
-    Initialize the AutoML platform with all services including optimizations and API features.
+    Initialize the AutoML platform with all services including optimizations, API features, and UI.
     
     Args:
         config_path: Path to configuration file
         environment: Environment name (development, staging, production)
         enable_optimizations: Whether to enable optimization features
         enable_api_features: Whether to enable API features
+        enable_ui: Whether to enable UI features
     
     Returns:
         Dictionary with initialized services
@@ -660,6 +742,14 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         services.get("billing")
     )
     
+    # Initialize UI if available and enabled
+    if enable_ui and UI_AVAILABLE:
+        services["ui"] = {
+            "dashboard": AutoMLDashboard,
+            "launch_dashboard": launch_dashboard,
+            "status": get_ui_status() if get_ui_status else None
+        }
+    
     # Initialize API services if available and enabled
     if enable_api_features:
         # Initialize Batch Processing if available
@@ -730,8 +820,7 @@ def initialize_platform(config_path: str = None, environment: str = "production"
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"AutoML Platform initialized in {environment} mode")
-    logger.info(f"Optimizations available: {check_optimizations()}")
-    logger.info(f"API features available: {check_api_features()}")
+    logger.info(f"Features enabled: {check_all_features()}")
     
     return services
 
@@ -809,6 +898,7 @@ def create_app(config_path: str = None, environment: str = "production",
                 "sso": config.api.enable_sso,
                 "rgpd": config.rgpd.enabled,
                 "monitoring": config.monitoring.enabled,
+                "ui": UI_AVAILABLE,
                 "optimizations": check_optimizations(),
                 "api_features": check_api_features()
             }
@@ -830,8 +920,7 @@ def create_app(config_path: str = None, environment: str = "production",
                 "memory_percent": psutil.virtual_memory().percent,
                 "disk_usage": psutil.disk_usage('/').percent
             },
-            "optimizations": check_optimizations(),
-            "api_features": check_api_features()
+            "features": check_all_features()
         }
         
         # Add cache stats if available
@@ -997,25 +1086,16 @@ import logging
 logger = logging.getLogger(__name__)
 logger.info(f"AutoML Platform v{__version__} initialized")
 
-# Log optimization status
+# Log feature availability
+all_features = check_all_features()
+logger.info(f"Platform features: {all_features}")
+
+# Special messages for key features
+if UI_AVAILABLE:
+    logger.info("UI Dashboard available - run 'launch_dashboard()' to start")
+
 if OPTIMIZATIONS_AVAILABLE:
     logger.info("Optimization components available: distributed training, incremental learning, pipeline cache")
-else:
-    logger.info("Running without optimization components. Install ray, dask, river for full functionality")
 
-# Log API features status
-api_features = check_api_features()
-available_apis = [k for k, v in api_features.items() if v]
-if available_apis:
-    logger.info(f"API features dynamically detected: {', '.join(available_apis)}")
-else:
-    logger.info("No API features detected. API modules may not be installed or available.")
-
-# Log additional modules
-logger.info("Core modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, worker, tabnet")
-
-# Log Streamlit availability
-if STREAMLIT_AVAILABLE:
-    logger.info("Streamlit A/B testing dashboard available")
-else:
-    logger.debug("Streamlit not available - install streamlit package to enable dashboard")
+if any(check_api_features().values()):
+    logger.info(f"API features available: {', '.join([k for k, v in check_api_features().items() if v])}")
