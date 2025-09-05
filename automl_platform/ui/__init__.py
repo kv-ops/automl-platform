@@ -118,56 +118,84 @@ else:
     AutoMLDashboard = None
 
 # ============================================================================
+# Dynamically build __all__ based on available components
+# ============================================================================
+
+def _build_all_list():
+    """Dynamically build the __all__ list based on available components."""
+    all_list = ["__version__"]
+    
+    # Always include availability flags
+    all_list.extend([
+        "STREAMLIT_AVAILABLE",
+        "PLOTLY_AVAILABLE", 
+        "COMPONENTS_AVAILABLE",
+        "DASHBOARD_AVAILABLE"
+    ])
+    
+    # Always include helper functions (they handle unavailability gracefully)
+    all_list.extend([
+        "check_ui_dependencies",
+        "get_ui_status",
+        "launch_dashboard"
+    ])
+    
+    # Add components only if they're available
+    if DASHBOARD_AVAILABLE and AutoMLDashboard is not None:
+        all_list.append("AutoMLDashboard")
+    
+    if COMPONENTS_AVAILABLE:
+        # Data Quality Components
+        if DataQualityVisualizer is not None:
+            all_list.append("DataQualityVisualizer")
+        
+        # Model Components  
+        if ModelLeaderboard is not None:
+            all_list.append("ModelLeaderboard")
+        if FeatureImportanceVisualizer is not None:
+            all_list.append("FeatureImportanceVisualizer")
+        
+        # Monitoring Components
+        if DriftMonitor is not None:
+            all_list.append("DriftMonitor")
+        if TrainingProgressTracker is not None:
+            all_list.append("TrainingProgressTracker")
+        
+        # Interactive Components
+        if ChatInterface is not None:
+            all_list.append("ChatInterface")
+        if ExperimentComparator is not None:
+            all_list.append("ExperimentComparator")
+        
+        # Alert and Report Components
+        if AlertsAndNotifications is not None:
+            all_list.append("AlertsAndNotifications")
+        if ReportGenerator is not None:
+            all_list.append("ReportGenerator")
+        
+        # Advanced Visualizations
+        if DataFlowDiagram is not None:
+            all_list.append("DataFlowDiagram")
+        if ModelDeploymentUI is not None:
+            all_list.append("ModelDeploymentUI")
+        if CustomMetrics is not None:
+            all_list.append("CustomMetrics")
+        
+        # Utility functions
+        if create_sidebar_filters is not None:
+            all_list.append("create_sidebar_filters")
+        if create_action_buttons is not None:
+            all_list.append("create_action_buttons")
+        if show_loading_animation is not None:
+            all_list.append("show_loading_animation")
+    
+    return all_list
+
+# ============================================================================
 # Public API
 # ============================================================================
 
-__all__ = [
-    # Version info
-    "__version__",
-    
-    # Availability flags
-    "STREAMLIT_AVAILABLE",
-    "PLOTLY_AVAILABLE",
-    "COMPONENTS_AVAILABLE",
-    "DASHBOARD_AVAILABLE",
-    
-    # Main Dashboard
-    "AutoMLDashboard",
-    
-    # Data Quality Components
-    "DataQualityVisualizer",
-    
-    # Model Components
-    "ModelLeaderboard",
-    "FeatureImportanceVisualizer",
-    
-    # Monitoring Components
-    "DriftMonitor",
-    "TrainingProgressTracker",
-    
-    # Interactive Components
-    "ChatInterface",
-    "ExperimentComparator",
-    
-    # Alert and Report Components
-    "AlertsAndNotifications",
-    "ReportGenerator",
-    
-    # Advanced Visualizations
-    "DataFlowDiagram",
-    "ModelDeploymentUI",
-    "CustomMetrics",
-    
-    # Utility functions
-    "create_sidebar_filters",
-    "create_action_buttons",
-    "show_loading_animation",
-    
-    # Helper functions
-    "check_ui_dependencies",
-    "get_ui_status",
-    "launch_dashboard"
-]
+__all__ = _build_all_list()
 
 # ============================================================================
 # Helper Functions
