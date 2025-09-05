@@ -1574,12 +1574,11 @@ async def initialize_websocket_service(redis_url: str = None):
 
 async def shutdown_websocket_service():
     """Cleanup WebSocket service"""
-    global ws_server, connection_manager
+    global connection_manager
     # Store reference before cleanup
     server_to_cleanup = ws_server
     
-    # Reset globals first
-    ws_server = None
+    # Reset globals
     connection_manager = None
     
     # Then cleanup if needed
