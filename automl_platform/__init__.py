@@ -863,7 +863,9 @@ def create_orchestrator(config_path: str = None,
     # Initialize API services if requested
     services = {}
     if enable_api_features:
-        # Note: API services initialization removed since modules are not available
+        # Initialize version manager if available
+        if VERSIONING_AVAILABLE:
+            services["version_manager"] = ModelVersionManager(config)
         
         # Initialize LLM Assistant
         if hasattr(config, 'llm') and config.llm.enabled:
