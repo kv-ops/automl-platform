@@ -1577,8 +1577,8 @@ async def shutdown_websocket_service():
     global ws_server, connection_manager
     if ws_server:
         await ws_server.cleanup()
-        ws_server = None
-        connection_manager = None
+    ws_server = None
+    connection_manager = None
 
 # ============================================================================
 # Main Entry Point
