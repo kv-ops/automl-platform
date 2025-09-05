@@ -7,32 +7,42 @@ This module provides real-time communication capabilities including:
 - Push notifications for training, drift detection, and errors
 - Live monitoring during model training
 - Multi-user collaboration on projects
+- Presence system and typing indicators
+- Message persistence and rate limiting
 
 Author: MLOps Team
 Date: 2025
+Version: 3.0.1
 """
 
 import asyncio
 import json
 import logging
 import time
-from datetime import datetime
-from typing import Dict, List, Set, Optional, Any
-from dataclasses import dataclass, asdict
+import os
+from datetime import datetime, timedelta
+from typing import Dict, List, Set, Optional, Any, Tuple
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 import uuid
+import hashlib
+import traceback
 
 import websockets
 from websockets.server import WebSocketServerProtocol
-import aioredis
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import redis.asyncio as redis  # Updated from aioredis
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, deque
 import jwt
 import httpx
+
+# Configuration
+from ..config import load_config
 
 # Configure logging
 logging.basicConfig(
@@ -41,6 +51,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# Configuration
+# ============================================================================
+
+class WebSocketConfig:
+    """WebSocket service configuration"""
+    
+    def __init__(self):
+        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.jwt_secret = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+        self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
+        self.llm_endpoint = os.getenv("LLM_ENDPOINT", "http://localhost:8000/llm/chat")
+        self.max_connections_per_user = int(os.getenv("MAX_CONNECTIONS_PER_USER", "5"))
+        self.rate_limit_messages = int(os.getenv("RATE_LIMIT_MESSAGES", "100"))
+        self.rate_limit_window = int(os.getenv("RATE_LIMIT_WINDOW", "60"))  # seconds
+        self.message_persistence_ttl = int(os.getenv("MESSAGE_PERSISTENCE_TTL", "86400"))  # 24 hours
+        self.heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
+        self.reconnect_timeout = int(os.getenv("RECONNECT_TIMEOUT", "300"))  # 5 minutes
+        self.max_message_size = int(os.getenv("MAX_MESSAGE_SIZE", "1048576"))  # 1MB
+        self.enable_message_persistence = os.getenv("ENABLE_MESSAGE_PERSISTENCE", "true").lower() == "true"
+        self.enable_presence = os.getenv("ENABLE_PRESENCE", "true").lower() == "true"
+        self.enable_typing_indicators = os.getenv("ENABLE_TYPING_INDICATORS", "true").lower() == "true"
+
+config = WebSocketConfig()
 
 # ============================================================================
 # Data Models
@@ -59,6 +93,9 @@ class MessageType(str, Enum):
     DRIFT_ALERT = "drift_alert"
     MODEL_PERFORMANCE = "model_performance"
     SYSTEM_STATUS = "system_status"
+    PRESENCE = "presence"
+    TYPING = "typing"
+    ACK = "acknowledgment"
 
 
 class NotificationPriority(str, Enum):
@@ -79,19 +116,22 @@ class User:
     projects: List[str]
     connection_id: Optional[str] = None
     connected_at: Optional[datetime] = None
+    last_activity: Optional[datetime] = None
+    is_online: bool = False
 
 
 @dataclass
 class Message:
     """WebSocket message structure"""
-    id: str
-    type: MessageType
-    sender_id: str
-    recipient_id: Optional[str]
-    project_id: Optional[str]
-    timestamp: datetime
-    data: Dict[str, Any]
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    type: MessageType = MessageType.CHAT
+    sender_id: str = ""
+    recipient_id: Optional[str] = None
+    project_id: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    data: Dict[str, Any] = field(default_factory=dict)
     metadata: Optional[Dict[str, Any]] = None
+    ack_required: bool = False
 
 
 class ChatMessage(BaseModel):
@@ -101,23 +141,31 @@ class ChatMessage(BaseModel):
     project_id: str
     parent_message_id: Optional[str] = None
     attachments: Optional[List[Dict]] = None
+    
+    @validator('content')
+    def validate_content_length(cls, v):
+        if len(v) > config.max_message_size:
+            raise ValueError(f"Message too large. Max size: {config.max_message_size} bytes")
+        return v
 
 
 class Notification(BaseModel):
     """Notification model"""
     title: str
     message: str
-    priority: NotificationPriority
-    source: str
+    priority: NotificationPriority = NotificationPriority.MEDIUM
+    source: str = "system"
     project_id: Optional[str] = None
     user_ids: Optional[List[str]] = None
     data: Optional[Dict[str, Any]] = None
     action_required: bool = False
     action_url: Optional[str] = None
+    expires_at: Optional[datetime] = None
 
 
 class TrainingMetrics(BaseModel):
     """Training metrics for live monitoring"""
+    training_id: str
     epoch: int
     batch: int
     loss: float
@@ -131,23 +179,72 @@ class TrainingMetrics(BaseModel):
 
 
 # ============================================================================
+# Rate Limiter
+# ============================================================================
+
+class RateLimiter:
+    """Rate limiting for WebSocket connections"""
+    
+    def __init__(self, max_messages: int = 100, window_seconds: int = 60):
+        self.max_messages = max_messages
+        self.window_seconds = window_seconds
+        self.user_messages: Dict[str, deque] = defaultdict(deque)
+    
+    def check_rate_limit(self, user_id: str) -> Tuple[bool, Optional[int]]:
+        """
+        Check if user has exceeded rate limit
+        Returns: (is_allowed, seconds_until_reset)
+        """
+        now = time.time()
+        user_queue = self.user_messages[user_id]
+        
+        # Remove old messages outside window
+        while user_queue and user_queue[0] < now - self.window_seconds:
+            user_queue.popleft()
+        
+        if len(user_queue) >= self.max_messages:
+            # Calculate when the oldest message will expire
+            oldest = user_queue[0]
+            reset_in = int(oldest + self.window_seconds - now)
+            return False, reset_in
+        
+        # Add current message timestamp
+        user_queue.append(now)
+        return True, None
+    
+    def reset_user(self, user_id: str):
+        """Reset rate limit for a user"""
+        if user_id in self.user_messages:
+            del self.user_messages[user_id]
+
+
+# ============================================================================
 # Connection Manager
 # ============================================================================
 
 class ConnectionManager:
     """Manages WebSocket connections and routing"""
     
-    def __init__(self):
+    def __init__(self, redis_client: Optional[redis.Redis] = None):
         self.active_connections: Dict[str, WebSocketServerProtocol] = {}
         self.user_connections: Dict[str, Set[str]] = defaultdict(set)
         self.project_rooms: Dict[str, Set[str]] = defaultdict(set)
         self.connection_metadata: Dict[str, User] = {}
+        self.rate_limiter = RateLimiter(config.rate_limit_messages, config.rate_limit_window)
+        self.redis_client = redis_client
+        self.presence_tracker: Dict[str, Dict] = {}  # user_id -> {status, last_seen}
         
-    async def connect(self, websocket: WebSocketServerProtocol, user: User):
+    async def connect(self, websocket: WebSocketServerProtocol, user: User) -> str:
         """Register new WebSocket connection"""
+        # Check connection limit
+        if len(self.user_connections[user.id]) >= config.max_connections_per_user:
+            raise ValueError(f"Maximum connections ({config.max_connections_per_user}) exceeded for user")
+        
         connection_id = str(uuid.uuid4())
         user.connection_id = connection_id
         user.connected_at = datetime.utcnow()
+        user.last_activity = datetime.utcnow()
+        user.is_online = True
         
         self.active_connections[connection_id] = websocket
         self.user_connections[user.id].add(connection_id)
@@ -156,78 +253,222 @@ class ConnectionManager:
         # Add user to project rooms
         for project_id in user.projects:
             self.project_rooms[project_id].add(connection_id)
-            
+        
+        # Update presence
+        if config.enable_presence:
+            await self._update_presence(user.id, "online")
+        
+        # Store connection in Redis if available
+        if self.redis_client:
+            await self._store_connection_redis(connection_id, user)
+        
         logger.info(f"User {user.username} connected (ID: {connection_id})")
         
         # Send connection confirmation
         await self.send_personal_message(
             connection_id,
             Message(
-                id=str(uuid.uuid4()),
                 type=MessageType.AUTH,
                 sender_id="system",
                 recipient_id=user.id,
-                project_id=None,
-                timestamp=datetime.utcnow(),
-                data={"status": "connected", "user_id": user.id}
+                data={"status": "connected", "user_id": user.id, "connection_id": connection_id}
             )
         )
+        
+        # Notify others about presence
+        if config.enable_presence:
+            await self._broadcast_presence_update(user.id, "online", user.projects)
         
         return connection_id
     
     async def disconnect(self, connection_id: str):
         """Remove WebSocket connection"""
-        if connection_id in self.connection_metadata:
-            user = self.connection_metadata[connection_id]
-            
-            # Remove from user connections
-            self.user_connections[user.id].discard(connection_id)
-            if not self.user_connections[user.id]:
-                del self.user_connections[user.id]
-            
-            # Remove from project rooms
-            for project_id in user.projects:
-                self.project_rooms[project_id].discard(connection_id)
-                if not self.project_rooms[project_id]:
-                    del self.project_rooms[project_id]
-            
-            # Clean up connection data
-            del self.connection_metadata[connection_id]
-            if connection_id in self.active_connections:
-                del self.active_connections[connection_id]
-            
-            logger.info(f"User {user.username} disconnected (ID: {connection_id})")
-    
-    async def send_personal_message(self, connection_id: str, message: Message):
-        """Send message to specific connection"""
+        if connection_id not in self.connection_metadata:
+            return
+        
+        user = self.connection_metadata[connection_id]
+        
+        # Remove from user connections
+        self.user_connections[user.id].discard(connection_id)
+        
+        # Check if user has no more connections
+        if not self.user_connections[user.id]:
+            del self.user_connections[user.id]
+            if config.enable_presence:
+                await self._update_presence(user.id, "offline")
+                await self._broadcast_presence_update(user.id, "offline", user.projects)
+        
+        # Remove from project rooms
+        for project_id in user.projects:
+            self.project_rooms[project_id].discard(connection_id)
+            if not self.project_rooms[project_id]:
+                del self.project_rooms[project_id]
+        
+        # Clean up connection data
+        del self.connection_metadata[connection_id]
         if connection_id in self.active_connections:
-            websocket = self.active_connections[connection_id]
-            try:
-                await websocket.send(json.dumps(asdict(message), default=str))
-            except Exception as e:
-                logger.error(f"Error sending message to {connection_id}: {e}")
-                await self.disconnect(connection_id)
+            del self.active_connections[connection_id]
+        
+        # Remove from Redis if available
+        if self.redis_client:
+            await self._remove_connection_redis(connection_id)
+        
+        logger.info(f"User {user.username} disconnected (ID: {connection_id})")
     
-    async def send_to_user(self, user_id: str, message: Message):
+    async def send_personal_message(self, connection_id: str, message: Message) -> bool:
+        """Send message to specific connection"""
+        if connection_id not in self.active_connections:
+            return False
+        
+        websocket = self.active_connections[connection_id]
+        try:
+            message_data = asdict(message)
+            message_data['timestamp'] = message.timestamp.isoformat()
+            await websocket.send(json.dumps(message_data))
+            
+            # Store message if persistence enabled
+            if config.enable_message_persistence and self.redis_client:
+                await self._store_message_redis(message)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error sending message to {connection_id}: {e}")
+            await self.disconnect(connection_id)
+            return False
+    
+    async def send_to_user(self, user_id: str, message: Message) -> int:
         """Send message to all connections of a user"""
+        sent_count = 0
         if user_id in self.user_connections:
-            for connection_id in self.user_connections[user_id]:
-                await self.send_personal_message(connection_id, message)
+            for connection_id in self.user_connections[user_id].copy():
+                if await self.send_personal_message(connection_id, message):
+                    sent_count += 1
+        return sent_count
     
-    async def broadcast_to_project(self, project_id: str, message: Message):
+    async def broadcast_to_project(self, project_id: str, message: Message) -> int:
         """Broadcast message to all users in a project"""
+        sent_count = 0
         if project_id in self.project_rooms:
             tasks = []
-            for connection_id in self.project_rooms[project_id]:
+            for connection_id in self.project_rooms[project_id].copy():
                 tasks.append(self.send_personal_message(connection_id, message))
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            sent_count = sum(1 for r in results if r is True)
+        return sent_count
     
-    async def broadcast_to_all(self, message: Message):
+    async def broadcast_to_all(self, message: Message) -> int:
         """Broadcast message to all connected users"""
         tasks = []
-        for connection_id in self.active_connections:
+        for connection_id in self.active_connections.copy():
             tasks.append(self.send_personal_message(connection_id, message))
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return sum(1 for r in results if r is True)
+    
+    async def _update_presence(self, user_id: str, status: str):
+        """Update user presence status"""
+        self.presence_tracker[user_id] = {
+            "status": status,
+            "last_seen": datetime.utcnow().isoformat()
+        }
+        
+        if self.redis_client:
+            key = f"presence:{user_id}"
+            await self.redis_client.setex(
+                key,
+                config.reconnect_timeout,
+                json.dumps(self.presence_tracker[user_id])
+            )
+    
+    async def _broadcast_presence_update(self, user_id: str, status: str, projects: List[str]):
+        """Broadcast presence update to relevant users"""
+        message = Message(
+            type=MessageType.PRESENCE,
+            sender_id="system",
+            data={
+                "user_id": user_id,
+                "status": status,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+        
+        for project_id in projects:
+            await self.broadcast_to_project(project_id, message)
+    
+    async def _store_connection_redis(self, connection_id: str, user: User):
+        """Store connection info in Redis"""
+        try:
+            key = f"connection:{connection_id}"
+            data = {
+                "user_id": user.id,
+                "username": user.username,
+                "connected_at": user.connected_at.isoformat(),
+                "projects": user.projects
+            }
+            await self.redis_client.setex(key, config.reconnect_timeout, json.dumps(data))
+        except Exception as e:
+            logger.error(f"Failed to store connection in Redis: {e}")
+    
+    async def _remove_connection_redis(self, connection_id: str):
+        """Remove connection info from Redis"""
+        try:
+            key = f"connection:{connection_id}"
+            await self.redis_client.delete(key)
+        except Exception as e:
+            logger.error(f"Failed to remove connection from Redis: {e}")
+    
+    async def _store_message_redis(self, message: Message):
+        """Store message in Redis for persistence"""
+        try:
+            key = f"message:{message.id}"
+            message_data = asdict(message)
+            message_data['timestamp'] = message.timestamp.isoformat()
+            await self.redis_client.setex(
+                key,
+                config.message_persistence_ttl,
+                json.dumps(message_data)
+            )
+            
+            # Add to project message list
+            if message.project_id:
+                list_key = f"messages:{message.project_id}"
+                await self.redis_client.lpush(list_key, message.id)
+                await self.redis_client.ltrim(list_key, 0, 999)  # Keep last 1000 messages
+        except Exception as e:
+            logger.error(f"Failed to store message in Redis: {e}")
+    
+    def check_rate_limit(self, user_id: str) -> Tuple[bool, Optional[int]]:
+        """Check if user has exceeded rate limit"""
+        return self.rate_limiter.check_rate_limit(user_id)
+    
+    async def get_user_presence(self, user_id: str) -> Optional[Dict]:
+        """Get user presence status"""
+        if user_id in self.presence_tracker:
+            return self.presence_tracker[user_id]
+        
+        if self.redis_client:
+            try:
+                key = f"presence:{user_id}"
+                data = await self.redis_client.get(key)
+                if data:
+                    return json.loads(data)
+            except Exception as e:
+                logger.error(f"Failed to get presence from Redis: {e}")
+        
+        return None
+    
+    async def get_project_presence(self, project_id: str) -> List[Dict]:
+        """Get presence status for all users in a project"""
+        presence_list = []
+        if project_id in self.project_rooms:
+            for connection_id in self.project_rooms[project_id]:
+                if connection_id in self.connection_metadata:
+                    user = self.connection_metadata[connection_id]
+                    presence = await self.get_user_presence(user.id)
+                    if presence:
+                        presence['user_id'] = user.id
+                        presence['username'] = user.username
+                        presence_list.append(presence)
+        return presence_list
 
 
 # ============================================================================
@@ -237,10 +478,12 @@ class ConnectionManager:
 class ChatService:
     """Handles real-time chat with LLM integration"""
     
-    def __init__(self, llm_endpoint: str = "http://localhost:8000/llm/chat"):
-        self.llm_endpoint = llm_endpoint
+    def __init__(self, redis_client: Optional[redis.Redis] = None):
+        self.llm_endpoint = config.llm_endpoint
         self.conversation_history: Dict[str, List[ChatMessage]] = defaultdict(list)
         self.active_sessions: Dict[str, Dict] = {}
+        self.redis_client = redis_client
+        self.typing_status: Dict[str, Set[str]] = defaultdict(set)  # project_id -> Set[user_id]
         
     async def process_chat_message(
         self,
@@ -252,16 +495,17 @@ class ChatService:
         # Store message in conversation history
         self.conversation_history[message.project_id].append(message)
         
+        # Store in Redis if available
+        if self.redis_client:
+            await self._store_message_history(message)
+        
         # Broadcast user message to project room
         await connection_manager.broadcast_to_project(
             message.project_id,
             Message(
-                id=str(uuid.uuid4()),
                 type=MessageType.CHAT,
                 sender_id=message.sender_id,
-                recipient_id=None,
                 project_id=message.project_id,
-                timestamp=datetime.utcnow(),
                 data=message.dict()
             )
         )
@@ -284,12 +528,9 @@ class ChatService:
         await connection_manager.broadcast_to_project(
             message.project_id,
             Message(
-                id=str(uuid.uuid4()),
                 type=MessageType.CHAT,
                 sender_id="llm_assistant",
-                recipient_id=None,
                 project_id=message.project_id,
-                timestamp=datetime.utcnow(),
                 data=llm_message.dict(),
                 metadata=llm_response.get("metadata", {})
             )
@@ -302,7 +543,7 @@ class ChatService:
         try:
             async with httpx.AsyncClient() as client:
                 # Prepare context from conversation history
-                context = self._prepare_context(message.project_id)
+                context = await self._prepare_context(message.project_id)
                 
                 response = await client.post(
                     self.llm_endpoint,
@@ -330,8 +571,18 @@ class ChatService:
                 "error": str(e)
             }
     
-    def _prepare_context(self, project_id: str, max_messages: int = 10) -> List[Dict]:
+    async def _prepare_context(self, project_id: str, max_messages: int = 10) -> List[Dict]:
         """Prepare conversation context for LLM"""
+        # Try to get from Redis first
+        if self.redis_client:
+            try:
+                history = await self._get_message_history(project_id, max_messages)
+                if history:
+                    return history
+            except Exception as e:
+                logger.error(f"Failed to get message history from Redis: {e}")
+        
+        # Fallback to in-memory history
         history = self.conversation_history.get(project_id, [])
         recent_messages = history[-max_messages:] if len(history) > max_messages else history
         
@@ -339,10 +590,62 @@ class ChatService:
             {
                 "role": "assistant" if msg.sender_id == "llm_assistant" else "user",
                 "content": msg.content,
-                "timestamp": msg.dict().get("timestamp")
+                "timestamp": datetime.utcnow().isoformat()
             }
             for msg in recent_messages
         ]
+    
+    async def _store_message_history(self, message: ChatMessage):
+        """Store message history in Redis"""
+        try:
+            key = f"chat_history:{message.project_id}"
+            data = message.json()
+            await self.redis_client.lpush(key, data)
+            await self.redis_client.ltrim(key, 0, 99)  # Keep last 100 messages
+            await self.redis_client.expire(key, config.message_persistence_ttl)
+        except Exception as e:
+            logger.error(f"Failed to store message history: {e}")
+    
+    async def _get_message_history(self, project_id: str, limit: int = 10) -> List[Dict]:
+        """Get message history from Redis"""
+        try:
+            key = f"chat_history:{project_id}"
+            messages = await self.redis_client.lrange(key, 0, limit - 1)
+            return [json.loads(msg) for msg in messages]
+        except Exception as e:
+            logger.error(f"Failed to get message history: {e}")
+            return []
+    
+    async def handle_typing_indicator(
+        self,
+        user_id: str,
+        project_id: str,
+        is_typing: bool,
+        connection_manager: ConnectionManager
+    ):
+        """Handle typing indicator updates"""
+        if not config.enable_typing_indicators:
+            return
+        
+        if is_typing:
+            self.typing_status[project_id].add(user_id)
+        else:
+            self.typing_status[project_id].discard(user_id)
+        
+        # Broadcast typing status
+        await connection_manager.broadcast_to_project(
+            project_id,
+            Message(
+                type=MessageType.TYPING,
+                sender_id=user_id,
+                project_id=project_id,
+                data={
+                    "user_id": user_id,
+                    "is_typing": is_typing,
+                    "typing_users": list(self.typing_status[project_id])
+                }
+            )
+        )
 
 
 # ============================================================================
@@ -352,43 +655,95 @@ class ChatService:
 class NotificationService:
     """Handles push notifications for various events"""
     
-    def __init__(self, connection_manager: ConnectionManager):
+    def __init__(self, connection_manager: ConnectionManager, redis_client: Optional[redis.Redis] = None):
         self.connection_manager = connection_manager
         self.notification_queue: asyncio.Queue = asyncio.Queue()
         self.notification_history: List[Notification] = []
+        self.redis_client = redis_client
         
-    async def send_notification(self, notification: Notification):
+    async def send_notification(self, notification: Notification) -> str:
         """Send notification to specified users or project"""
+        notification_id = str(uuid.uuid4())
+        
         message = Message(
-            id=str(uuid.uuid4()),
+            id=notification_id,
             type=MessageType.NOTIFICATION,
             sender_id="system",
-            recipient_id=None,
             project_id=notification.project_id,
-            timestamp=datetime.utcnow(),
             data=notification.dict(),
             metadata={"priority": notification.priority.value}
         )
         
+        sent_count = 0
+        
         if notification.user_ids:
             # Send to specific users
             for user_id in notification.user_ids:
-                await self.connection_manager.send_to_user(user_id, message)
+                sent_count += await self.connection_manager.send_to_user(user_id, message)
         elif notification.project_id:
             # Send to project room
-            await self.connection_manager.broadcast_to_project(
+            sent_count = await self.connection_manager.broadcast_to_project(
                 notification.project_id, message
             )
         else:
             # Broadcast to all
-            await self.connection_manager.broadcast_to_all(message)
+            sent_count = await self.connection_manager.broadcast_to_all(message)
         
         # Store in history
         self.notification_history.append(notification)
+        if len(self.notification_history) > 1000:
+            self.notification_history = self.notification_history[-1000:]
+        
+        # Store in Redis if available
+        if self.redis_client:
+            await self._store_notification(notification_id, notification)
         
         # Log high priority notifications
         if notification.priority in [NotificationPriority.HIGH, NotificationPriority.CRITICAL]:
             logger.warning(f"High priority notification: {notification.title}")
+        
+        logger.info(f"Notification {notification_id} sent to {sent_count} connections")
+        return notification_id
+    
+    async def _store_notification(self, notification_id: str, notification: Notification):
+        """Store notification in Redis"""
+        try:
+            key = f"notification:{notification_id}"
+            data = notification.json()
+            ttl = config.message_persistence_ttl
+            
+            if notification.expires_at:
+                ttl = int((notification.expires_at - datetime.utcnow()).total_seconds())
+            
+            await self.redis_client.setex(key, ttl, data)
+            
+            # Add to user notification lists
+            if notification.user_ids:
+                for user_id in notification.user_ids:
+                    list_key = f"notifications:{user_id}"
+                    await self.redis_client.lpush(list_key, notification_id)
+                    await self.redis_client.ltrim(list_key, 0, 99)
+        except Exception as e:
+            logger.error(f"Failed to store notification: {e}")
+    
+    async def get_user_notifications(self, user_id: str, limit: int = 20) -> List[Dict]:
+        """Get notifications for a user"""
+        notifications = []
+        
+        if self.redis_client:
+            try:
+                list_key = f"notifications:{user_id}"
+                notification_ids = await self.redis_client.lrange(list_key, 0, limit - 1)
+                
+                for nid in notification_ids:
+                    key = f"notification:{nid.decode() if isinstance(nid, bytes) else nid}"
+                    data = await self.redis_client.get(key)
+                    if data:
+                        notifications.append(json.loads(data))
+            except Exception as e:
+                logger.error(f"Failed to get notifications: {e}")
+        
+        return notifications
     
     async def notify_training_event(
         self,
@@ -444,28 +799,6 @@ class NotificationService:
         )
         
         await self.send_notification(notification)
-    
-    async def notify_error(
-        self,
-        error_type: str,
-        message: str,
-        project_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        details: Optional[Dict] = None
-    ):
-        """Send error notifications"""
-        notification = Notification(
-            title=f"Error: {error_type}",
-            message=message,
-            priority=NotificationPriority.HIGH,
-            source="error_handler",
-            project_id=project_id,
-            user_ids=[user_id] if user_id else None,
-            data=details or {},
-            action_required=True
-        )
-        
-        await self.send_notification(notification)
 
 
 # ============================================================================
@@ -493,12 +826,9 @@ class LiveMonitoringService:
         
         # Notify users
         message = Message(
-            id=str(uuid.uuid4()),
             type=MessageType.TRAINING_UPDATE,
             sender_id="system",
-            recipient_id=None,
             project_id=project_id,
-            timestamp=datetime.utcnow(),
             data={
                 "training_id": training_id,
                 "status": "started",
@@ -518,18 +848,17 @@ class LiveMonitoringService:
         
         # Store metrics
         self.metrics_buffer[training_id].append(metrics)
+        if len(self.metrics_buffer[training_id]) > 1000:
+            self.metrics_buffer[training_id] = self.metrics_buffer[training_id][-1000:]
         
         # Prepare aggregated metrics
         aggregated = self._aggregate_metrics(training_id)
         
         # Broadcast metrics update
         message = Message(
-            id=str(uuid.uuid4()),
             type=MessageType.METRICS,
             sender_id="system",
-            recipient_id=None,
             project_id=project_id,
-            timestamp=datetime.utcnow(),
             data={
                 "training_id": training_id,
                 "current": metrics.dict(),
@@ -555,12 +884,9 @@ class LiveMonitoringService:
         
         # Send completion message
         message = Message(
-            id=str(uuid.uuid4()),
             type=MessageType.TRAINING_UPDATE,
             sender_id="system",
-            recipient_id=None,
             project_id=project_id,
-            timestamp=datetime.utcnow(),
             data={
                 "training_id": training_id,
                 "status": status,
@@ -593,8 +919,8 @@ class LiveMonitoringService:
         return {
             "total_batches": latest_metrics.batch,
             "total_epochs": latest_metrics.epoch,
-            "avg_loss": np.mean([m.loss for m in recent_metrics]),
-            "avg_accuracy": np.mean([m.accuracy for m in recent_metrics if m.accuracy]),
+            "avg_loss": float(np.mean([m.loss for m in recent_metrics])),
+            "avg_accuracy": float(np.mean([m.accuracy for m in recent_metrics if m.accuracy])) if any(m.accuracy for m in recent_metrics) else None,
             "loss_trend": self._calculate_trend([m.loss for m in recent_metrics]),
             "learning_rate": latest_metrics.learning_rate,
             "time_elapsed": latest_metrics.time_elapsed,
@@ -627,12 +953,12 @@ class LiveMonitoringService:
         return {
             "total_epochs": metrics_list[-1].epoch,
             "total_batches": metrics_list[-1].batch,
-            "final_loss": metrics_list[-1].loss,
-            "final_accuracy": metrics_list[-1].accuracy,
-            "best_loss": min(m.loss for m in metrics_list),
-            "best_accuracy": max(m.accuracy for m in metrics_list if m.accuracy),
+            "final_loss": float(metrics_list[-1].loss),
+            "final_accuracy": float(metrics_list[-1].accuracy) if metrics_list[-1].accuracy else None,
+            "best_loss": float(min(m.loss for m in metrics_list)),
+            "best_accuracy": float(max(m.accuracy for m in metrics_list if m.accuracy)) if any(m.accuracy for m in metrics_list) else None,
             "total_time": metrics_list[-1].time_elapsed,
-            "avg_batch_time": metrics_list[-1].time_elapsed / metrics_list[-1].batch
+            "avg_batch_time": metrics_list[-1].time_elapsed / metrics_list[-1].batch if metrics_list[-1].batch > 0 else 0
         }
     
     async def _check_training_anomalies(self, training_id: str, metrics: TrainingMetrics):
@@ -720,12 +1046,9 @@ class CollaborationService:
         
         # Notify other users
         message = Message(
-            id=str(uuid.uuid4()),
             type=MessageType.COLLABORATION,
             sender_id=user_id,
-            recipient_id=None,
             project_id=project_id,
-            timestamp=datetime.utcnow(),
             data={
                 "action": "user_joined",
                 "document_id": document_id,
@@ -749,8 +1072,9 @@ class CollaborationService:
             self.active_collaborations[session_key]["users"].discard(user_id)
             
             # Release any locks held by the user
-            if document_id in self.document_locks and self.document_locks[document_id] == user_id:
-                await self.release_lock(user_id, project_id, document_id)
+            locks_to_release = [k for k, v in self.document_locks.items() if v == user_id and k.startswith(document_id)]
+            for lock_key in locks_to_release:
+                del self.document_locks[lock_key]
             
             # Remove cursor position
             if user_id in self.cursor_positions:
@@ -758,12 +1082,9 @@ class CollaborationService:
             
             # Notify other users
             message = Message(
-                id=str(uuid.uuid4()),
                 type=MessageType.COLLABORATION,
                 sender_id=user_id,
-                recipient_id=None,
                 project_id=project_id,
-                timestamp=datetime.utcnow(),
                 data={
                     "action": "user_left",
                     "document_id": document_id,
@@ -777,123 +1098,6 @@ class CollaborationService:
             # Clean up empty sessions
             if not self.active_collaborations[session_key]["users"]:
                 del self.active_collaborations[session_key]
-    
-    async def acquire_lock(
-        self,
-        user_id: str,
-        project_id: str,
-        document_id: str,
-        section: Optional[str] = None
-    ) -> bool:
-        """Acquire edit lock on document or section"""
-        lock_key = f"{document_id}:{section}" if section else document_id
-        
-        if lock_key not in self.document_locks:
-            self.document_locks[lock_key] = user_id
-            
-            # Notify users about lock acquisition
-            message = Message(
-                id=str(uuid.uuid4()),
-                type=MessageType.COLLABORATION,
-                sender_id=user_id,
-                recipient_id=None,
-                project_id=project_id,
-                timestamp=datetime.utcnow(),
-                data={
-                    "action": "lock_acquired",
-                    "document_id": document_id,
-                    "section": section,
-                    "user_id": user_id
-                }
-            )
-            
-            await self.connection_manager.broadcast_to_project(project_id, message)
-            return True
-        
-        return False
-    
-    async def release_lock(
-        self,
-        user_id: str,
-        project_id: str,
-        document_id: str,
-        section: Optional[str] = None
-    ):
-        """Release edit lock"""
-        lock_key = f"{document_id}:{section}" if section else document_id
-        
-        if lock_key in self.document_locks and self.document_locks[lock_key] == user_id:
-            del self.document_locks[lock_key]
-            
-            # Notify users about lock release
-            message = Message(
-                id=str(uuid.uuid4()),
-                type=MessageType.COLLABORATION,
-                sender_id=user_id,
-                recipient_id=None,
-                project_id=project_id,
-                timestamp=datetime.utcnow(),
-                data={
-                    "action": "lock_released",
-                    "document_id": document_id,
-                    "section": section,
-                    "user_id": user_id
-                }
-            )
-            
-            await self.connection_manager.broadcast_to_project(project_id, message)
-    
-    async def broadcast_cursor_position(
-        self,
-        user_id: str,
-        project_id: str,
-        document_id: str,
-        position: Dict[str, Any]
-    ):
-        """Broadcast user's cursor position"""
-        self.cursor_positions[user_id] = position
-        
-        message = Message(
-            id=str(uuid.uuid4()),
-            type=MessageType.COLLABORATION,
-            sender_id=user_id,
-            recipient_id=None,
-            project_id=project_id,
-            timestamp=datetime.utcnow(),
-            data={
-                "action": "cursor_move",
-                "document_id": document_id,
-                "user_id": user_id,
-                "position": position
-            }
-        )
-        
-        await self.connection_manager.broadcast_to_project(project_id, message)
-    
-    async def broadcast_document_change(
-        self,
-        user_id: str,
-        project_id: str,
-        document_id: str,
-        change: Dict[str, Any]
-    ):
-        """Broadcast document changes for real-time sync"""
-        message = Message(
-            id=str(uuid.uuid4()),
-            type=MessageType.COLLABORATION,
-            sender_id=user_id,
-            recipient_id=None,
-            project_id=project_id,
-            timestamp=datetime.utcnow(),
-            data={
-                "action": "document_change",
-                "document_id": document_id,
-                "user_id": user_id,
-                "change": change
-            }
-        )
-        
-        await self.connection_manager.broadcast_to_project(project_id, message)
 
 
 # ============================================================================
@@ -903,28 +1107,67 @@ class CollaborationService:
 class WebSocketServer:
     """Main WebSocket server handling all real-time features"""
     
-    def __init__(self, redis_url: str = "redis://localhost"):
-        self.connection_manager = ConnectionManager()
-        self.chat_service = ChatService()
-        self.notification_service = NotificationService(self.connection_manager)
-        self.monitoring_service = LiveMonitoringService(self.connection_manager)
-        self.collaboration_service = CollaborationService(self.connection_manager)
-        self.redis_url = redis_url
-        self.redis_client: Optional[aioredis.Redis] = None
+    def __init__(self, redis_url: str = None):
+        self.redis_url = redis_url or config.redis_url
+        self.redis_client: Optional[redis.Redis] = None
+        self.connection_manager: Optional[ConnectionManager] = None
+        self.chat_service: Optional[ChatService] = None
+        self.notification_service: Optional[NotificationService] = None
+        self.monitoring_service: Optional[LiveMonitoringService] = None
+        self.collaboration_service: Optional[CollaborationService] = None
+        self._initialized = False
         
     async def initialize(self):
         """Initialize server components"""
+        if self._initialized:
+            return
+        
         try:
-            self.redis_client = await aioredis.create_redis_pool(self.redis_url)
-            logger.info("Connected to Redis")
+            # Initialize Redis with retry logic
+            self.redis_client = await self._connect_redis_with_retry()
+            
+            # Initialize services
+            self.connection_manager = ConnectionManager(self.redis_client)
+            self.chat_service = ChatService(self.redis_client)
+            self.notification_service = NotificationService(self.connection_manager, self.redis_client)
+            self.monitoring_service = LiveMonitoringService(self.connection_manager)
+            self.collaboration_service = CollaborationService(self.connection_manager)
+            
+            self._initialized = True
+            logger.info("WebSocket server initialized successfully")
+            
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            logger.error(f"Failed to initialize WebSocket server: {e}")
+            # Continue without Redis if it's not available
+            self.connection_manager = ConnectionManager(None)
+            self.chat_service = ChatService(None)
+            self.notification_service = NotificationService(self.connection_manager, None)
+            self.monitoring_service = LiveMonitoringService(self.connection_manager)
+            self.collaboration_service = CollaborationService(self.connection_manager)
+            self._initialized = True
+    
+    async def _connect_redis_with_retry(self, max_retries: int = 3, delay: int = 2) -> Optional[redis.Redis]:
+        """Connect to Redis with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                client = redis.from_url(self.redis_url)
+                await client.ping()
+                logger.info("Connected to Redis")
+                return client
+            except Exception as e:
+                logger.warning(f"Redis connection attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+        
+        logger.error("Failed to connect to Redis after all retries")
+        return None
     
     async def cleanup(self):
         """Cleanup server resources"""
         if self.redis_client:
-            self.redis_client.close()
-            await self.redis_client.wait_closed()
+            await self.redis_client.close()
+        self._initialized = False
+        logger.info("WebSocket server cleaned up")
     
     async def authenticate_user(self, websocket: WebSocketServerProtocol) -> Optional[User]:
         """Authenticate WebSocket connection"""
@@ -949,9 +1192,13 @@ class WebSocketServer:
                 }))
                 return None
             
-            # Decode and verify token (simplified - use proper JWT verification in production)
+            # Decode and verify token
             try:
-                payload = jwt.decode(token, "secret_key", algorithms=["HS256"])
+                payload = jwt.decode(
+                    token,
+                    config.jwt_secret,
+                    algorithms=[config.jwt_algorithm]
+                )
                 user = User(
                     id=payload["user_id"],
                     username=payload["username"],
@@ -961,10 +1208,10 @@ class WebSocketServer:
                 )
                 return user
                 
-            except jwt.InvalidTokenError:
+            except jwt.InvalidTokenError as e:
                 await websocket.send(json.dumps({
                     "type": "error",
-                    "message": "Invalid token"
+                    "message": f"Invalid token: {str(e)}"
                 }))
                 return None
                 
@@ -975,12 +1222,16 @@ class WebSocketServer:
             }))
             return None
         except Exception as e:
-            logger.error(f"Authentication error: {e}")
+            logger.error(f"Authentication error: {e}\n{traceback.format_exc()}")
             return None
     
     async def handle_connection(self, websocket: WebSocketServerProtocol, path: str):
         """Handle incoming WebSocket connection"""
+        if not self._initialized:
+            await self.initialize()
+        
         connection_id = None
+        heartbeat_task = None
         
         try:
             # Authenticate user
@@ -992,17 +1243,57 @@ class WebSocketServer:
             # Register connection
             connection_id = await self.connection_manager.connect(websocket, user)
             
+            # Start heartbeat
+            heartbeat_task = asyncio.create_task(self._send_heartbeat(connection_id))
+            
             # Handle messages
             async for message in websocket:
+                # Check rate limit
+                is_allowed, reset_in = self.connection_manager.check_rate_limit(user.id)
+                if not is_allowed:
+                    await self.connection_manager.send_personal_message(
+                        connection_id,
+                        Message(
+                            type=MessageType.ERROR,
+                            sender_id="system",
+                            data={
+                                "error": "Rate limit exceeded",
+                                "reset_in_seconds": reset_in
+                            }
+                        )
+                    )
+                    continue
+                
                 await self.handle_message(connection_id, message)
                 
         except WebSocketDisconnect:
             logger.info(f"WebSocket disconnected: {connection_id}")
         except Exception as e:
-            logger.error(f"WebSocket error: {e}")
+            logger.error(f"WebSocket error: {e}\n{traceback.format_exc()}")
         finally:
+            if heartbeat_task:
+                heartbeat_task.cancel()
             if connection_id:
                 await self.connection_manager.disconnect(connection_id)
+    
+    async def _send_heartbeat(self, connection_id: str):
+        """Send periodic heartbeat to keep connection alive"""
+        while True:
+            try:
+                await asyncio.sleep(config.heartbeat_interval)
+                await self.connection_manager.send_personal_message(
+                    connection_id,
+                    Message(
+                        type=MessageType.HEARTBEAT,
+                        sender_id="system",
+                        data={"status": "alive", "timestamp": datetime.utcnow().isoformat()}
+                    )
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Heartbeat error: {e}")
+                break
     
     async def handle_message(self, connection_id: str, raw_message: str):
         """Route incoming messages to appropriate handlers"""
@@ -1015,23 +1306,25 @@ class WebSocketServer:
                 logger.error(f"User not found for connection {connection_id}")
                 return
             
+            # Update last activity
+            user.last_activity = datetime.utcnow()
+            
             # Route message based on type
             if message_type == MessageType.CHAT:
                 await self.handle_chat_message(connection_id, data)
-                
             elif message_type == MessageType.COLLABORATION:
                 await self.handle_collaboration_message(connection_id, data)
-                
             elif message_type == MessageType.HEARTBEAT:
                 await self.handle_heartbeat(connection_id)
-                
+            elif message_type == MessageType.TYPING:
+                await self.handle_typing_indicator(connection_id, data)
             else:
                 logger.warning(f"Unknown message type: {message_type}")
                 
         except json.JSONDecodeError:
-            logger.error(f"Invalid JSON received: {raw_message}")
+            logger.error(f"Invalid JSON received: {raw_message[:100]}")
         except Exception as e:
-            logger.error(f"Error handling message: {e}")
+            logger.error(f"Error handling message: {e}\n{traceback.format_exc()}")
     
     async def handle_chat_message(self, connection_id: str, data: Dict):
         """Handle chat messages"""
@@ -1047,6 +1340,17 @@ class WebSocketServer:
         
         await self.chat_service.process_chat_message(
             chat_message,
+            self.connection_manager
+        )
+    
+    async def handle_typing_indicator(self, connection_id: str, data: Dict):
+        """Handle typing indicator"""
+        user = self.connection_manager.connection_metadata[connection_id]
+        
+        await self.chat_service.handle_typing_indicator(
+            user.id,
+            data["project_id"],
+            data["is_typing"],
             self.connection_manager
         )
     
@@ -1067,60 +1371,15 @@ class WebSocketServer:
                 data["project_id"],
                 data["document_id"]
             )
-        elif action == "acquire_lock":
-            result = await self.collaboration_service.acquire_lock(
-                user.id,
-                data["project_id"],
-                data["document_id"],
-                data.get("section")
-            )
-            # Send result back to user
-            await self.connection_manager.send_personal_message(
-                connection_id,
-                Message(
-                    id=str(uuid.uuid4()),
-                    type=MessageType.COLLABORATION,
-                    sender_id="system",
-                    recipient_id=user.id,
-                    project_id=data["project_id"],
-                    timestamp=datetime.utcnow(),
-                    data={"action": "lock_result", "success": result}
-                )
-            )
-        elif action == "release_lock":
-            await self.collaboration_service.release_lock(
-                user.id,
-                data["project_id"],
-                data["document_id"],
-                data.get("section")
-            )
-        elif action == "cursor_position":
-            await self.collaboration_service.broadcast_cursor_position(
-                user.id,
-                data["project_id"],
-                data["document_id"],
-                data["position"]
-            )
-        elif action == "document_change":
-            await self.collaboration_service.broadcast_document_change(
-                user.id,
-                data["project_id"],
-                data["document_id"],
-                data["change"]
-            )
     
     async def handle_heartbeat(self, connection_id: str):
         """Handle heartbeat messages"""
         await self.connection_manager.send_personal_message(
             connection_id,
             Message(
-                id=str(uuid.uuid4()),
-                type=MessageType.HEARTBEAT,
+                type=MessageType.ACK,
                 sender_id="system",
-                recipient_id=None,
-                project_id=None,
-                timestamp=datetime.utcnow(),
-                data={"status": "alive"}
+                data={"status": "alive", "timestamp": datetime.utcnow().isoformat()}
             )
         )
     
@@ -1138,7 +1397,15 @@ class WebSocketServer:
 # FastAPI Integration
 # ============================================================================
 
-app = FastAPI(title="MLOps WebSocket Service")
+# Security
+security = HTTPBearer()
+
+# Create FastAPI app
+app = FastAPI(
+    title="MLOps WebSocket Service",
+    version="3.0.1",
+    description="Real-time WebSocket service for MLOps platform"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1149,62 +1416,169 @@ app.add_middleware(
 )
 
 # Global server instance
-ws_server = WebSocketServer()
+ws_server: Optional[WebSocketServer] = None
 
+async def get_ws_server() -> WebSocketServer:
+    """Get or create WebSocket server instance"""
+    global ws_server
+    if not ws_server:
+        ws_server = WebSocketServer()
+        await ws_server.initialize()
+    return ws_server
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize WebSocket server on startup"""
+    await get_ws_server()
+    logger.info("WebSocket service started")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    global ws_server
+    if ws_server:
+        await ws_server.cleanup()
+    logger.info("WebSocket service stopped")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """FastAPI WebSocket endpoint"""
+    server = await get_ws_server()
     await websocket.accept()
-    await ws_server.handle_connection(websocket, "/ws")
-
+    await server.handle_connection(websocket, "/ws")
 
 @app.post("/api/notifications/send")
-async def send_notification(notification: Notification):
+async def send_notification(
+    notification: Notification,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     """REST endpoint to send notifications"""
-    await ws_server.notification_service.send_notification(notification)
-    return {"status": "sent", "notification_id": str(uuid.uuid4())}
+    server = await get_ws_server()
+    notification_id = await server.notification_service.send_notification(notification)
+    return {"status": "sent", "notification_id": notification_id}
 
+@app.get("/api/notifications/{user_id}")
+async def get_notifications(
+    user_id: str,
+    limit: int = 20,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Get notifications for a user"""
+    server = await get_ws_server()
+    notifications = await server.notification_service.get_user_notifications(user_id, limit)
+    return {"notifications": notifications}
 
 @app.post("/api/training/{training_id}/metrics")
-async def update_training_metrics(training_id: str, metrics: TrainingMetrics):
+async def update_training_metrics(
+    training_id: str,
+    metrics: TrainingMetrics,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     """REST endpoint to update training metrics"""
-    await ws_server.monitoring_service.update_metrics(training_id, metrics)
+    server = await get_ws_server()
+    await server.monitoring_service.update_metrics(training_id, metrics)
     return {"status": "updated"}
-
 
 @app.post("/api/training/{training_id}/start")
 async def start_training_monitoring(
     training_id: str,
-    project_id: str = None,
-    config: Dict = None
+    project_id: str = "default",
+    config: Dict = None,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """REST endpoint to start training monitoring"""
-    await ws_server.monitoring_service.start_monitoring(
-        project_id or "default",
+    server = await get_ws_server()
+    await server.monitoring_service.start_monitoring(
+        project_id,
         training_id,
         config or {}
     )
     return {"status": "monitoring_started"}
 
-
 @app.post("/api/training/{training_id}/stop")
-async def stop_training_monitoring(training_id: str, status: str = "completed"):
+async def stop_training_monitoring(
+    training_id: str,
+    status: str = "completed",
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     """REST endpoint to stop training monitoring"""
-    await ws_server.monitoring_service.stop_monitoring(training_id, status)
+    server = await get_ws_server()
+    await server.monitoring_service.stop_monitoring(training_id, status)
     return {"status": "monitoring_stopped"}
 
+@app.get("/api/presence/{project_id}")
+async def get_project_presence(
+    project_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Get presence information for a project"""
+    server = await get_ws_server()
+    presence = await server.connection_manager.get_project_presence(project_id)
+    return {"project_id": project_id, "presence": presence}
 
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
+    server = await get_ws_server()
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "active_connections": len(ws_server.connection_manager.active_connections),
-        "active_trainings": len(ws_server.monitoring_service.active_trainings)
+        "active_connections": len(server.connection_manager.active_connections),
+        "active_trainings": len(server.monitoring_service.active_trainings),
+        "redis_connected": server.redis_client is not None
     }
 
+@app.get("/api/stats")
+async def get_stats(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get WebSocket service statistics"""
+    server = await get_ws_server()
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "connections": {
+            "total": len(server.connection_manager.active_connections),
+            "by_user": {
+                uid: len(conns) 
+                for uid, conns in server.connection_manager.user_connections.items()
+            },
+            "by_project": {
+                pid: len(conns) 
+                for pid, conns in server.connection_manager.project_rooms.items()
+            }
+        },
+        "trainings": {
+            "active": len(server.monitoring_service.active_trainings),
+            "metrics_buffered": sum(
+                len(metrics) 
+                for metrics in server.monitoring_service.metrics_buffer.values()
+            )
+        },
+        "notifications": {
+            "history_size": len(server.notification_service.notification_history)
+        }
+    }
+
+# ============================================================================
+# Export Functions for __init__.py
+# ============================================================================
+
+# Global connection manager for import
+connection_manager: Optional[ConnectionManager] = None
+
+async def initialize_websocket_service(redis_url: str = None):
+    """Initialize WebSocket service for import in __init__.py"""
+    global ws_server, connection_manager
+    ws_server = WebSocketServer(redis_url)
+    await ws_server.initialize()
+    connection_manager = ws_server.connection_manager
+    return ws_server
+
+async def shutdown_websocket_service():
+    """Cleanup WebSocket service"""
+    global ws_server, connection_manager
+    if ws_server:
+        await ws_server.cleanup()
+        ws_server = None
+        connection_manager = None
 
 # ============================================================================
 # Main Entry Point
