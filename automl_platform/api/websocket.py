@@ -1422,7 +1422,7 @@ async def get_ws_server() -> WebSocketServer:
    """Get or create WebSocket server instance"""
    global ws_server
    if not ws_server:
-       ws_server = WebSocketServer()
+       ws_server = SomeServer()
        await ws_server.initialize()
    return ws_server
 
