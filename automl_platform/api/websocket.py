@@ -1566,7 +1566,7 @@ connection_manager: Optional[ConnectionManager] = None
 
 async def initialize_websocket_service(redis_url: str = None):
    """Initialize WebSocket service for import in __init__.py"""
-   global connection_manager
+   global ws_server, connection_manager
    ws_server = WebSocketServer(redis_url)
    await ws_server.initialize()
    connection_manager = ws_server.connection_manager
