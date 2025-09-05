@@ -263,133 +263,48 @@ from .rgpd_compliance_service import (
 )
 from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
 
-# API Module imports
-try:
-    # Batch processing
-    from .api.batch_inference import (
-        BatchInferenceEngine,
-        BatchJobConfig,
-        BatchJobResult,
-        BatchStatus,
-        BatchPriority,
-        BatchScheduler
-    )
-    BATCH_AVAILABLE = True
-except ImportError:
-    BATCH_AVAILABLE = False
-    BatchInferenceEngine = None
+# All API module imports have been removed since they're already present in another file
 
-try:
-    # Billing
-    from .api.billing import BillingManager, PlanType as BillingPlanType, UsageTracker
-    from .api.billing_routes import billing_router
-    BILLING_AVAILABLE = True
-except ImportError:
-    BILLING_AVAILABLE = False
-    billing_router = None
+# Set flags for removed API modules to False
+BATCH_AVAILABLE = False
+BatchInferenceEngine = None
 
-try:
-    # Data connectors
-    from .api.connectors import ConnectorFactory, ConnectionConfig
-    CONNECTORS_AVAILABLE = True
-except ImportError:
-    CONNECTORS_AVAILABLE = False
-    ConnectorFactory = None
+BILLING_AVAILABLE = False
+billing_router = None
 
-try:
-    # Feature store
-    from .api.feature_store import FeatureStore as APIFeatureStore, FeatureSet, FeatureDefinition
-    FEATURE_STORE_AVAILABLE = True
-except ImportError:
-    FEATURE_STORE_AVAILABLE = False
-    APIFeatureStore = None
+CONNECTORS_AVAILABLE = False
+ConnectorFactory = None
 
-try:
-    # Infrastructure
-    from .api.infrastructure import (
-        TenantManager,
-        SecurityManager,
-        ResourceMonitor,
-        DeploymentManager
-    )
-    INFRASTRUCTURE_AVAILABLE = True
-except ImportError:
-    INFRASTRUCTURE_AVAILABLE = False
-    TenantManager = None
+FEATURE_STORE_AVAILABLE = False
+APIFeatureStore = None
 
-try:
-    # LLM endpoints
-    from .api.llm_endpoints import router as llm_router
-    LLM_AVAILABLE = True
-except ImportError:
-    LLM_AVAILABLE = False
-    llm_router = None
+INFRASTRUCTURE_AVAILABLE = False
+TenantManager = None
 
-try:
-    # MLOps endpoints
-    from .api.mlops_endpoints import router as mlops_router
-    MLOPS_AVAILABLE = True
-except ImportError:
-    MLOPS_AVAILABLE = False
-    mlops_router = None
+LLM_AVAILABLE = False
+llm_router = None
 
-try:
-    # Model versioning
-    from .api.model_versioning import (
-        ModelVersionManager,
-        ModelVersion,
-        VersionStatus,
-        PromotionStrategy
-    )
-    VERSIONING_AVAILABLE = True
-except ImportError:
-    VERSIONING_AVAILABLE = False
-    ModelVersionManager = None
+MLOPS_AVAILABLE = False
+mlops_router = None
 
-try:
-    # Streaming
-    from .api.streaming import (
-        StreamConfig,
-        StreamingOrchestrator,
-        MLStreamProcessor
-    )
-    STREAMING_AVAILABLE = True
-except ImportError:
-    STREAMING_AVAILABLE = False
-    StreamingOrchestrator = None
+VERSIONING_AVAILABLE = False
+ModelVersionManager = None
 
-try:
-    # WebSocket
-    from .api.websocket import (
-        connection_manager,
-        websocket_endpoint,
-        initialize_websocket_service,
-        shutdown_websocket_service,
-        WebSocketServer,
-        ConnectionManager,
-        ChatService,
-        NotificationService,
-        LiveMonitoringService,
-        CollaborationService,
-        MessageType,
-        Message,
-        Notification,
-        TrainingMetrics
-    )
-    WEBSOCKET_AVAILABLE = True
-except ImportError:
-    WEBSOCKET_AVAILABLE = False
-    connection_manager = None
-    WebSocketServer = None
-    ConnectionManager = None
-    ChatService = None
-    NotificationService = None
-    LiveMonitoringService = None
-    CollaborationService = None
-    MessageType = None
-    Message = None
-    Notification = None
-    TrainingMetrics = None
+STREAMING_AVAILABLE = False
+StreamingOrchestrator = None
+
+WEBSOCKET_AVAILABLE = False
+connection_manager = None
+WebSocketServer = None
+ConnectionManager = None
+ChatService = None
+NotificationService = None
+LiveMonitoringService = None
+CollaborationService = None
+MessageType = None
+Message = None
+Notification = None
+TrainingMetrics = None
 
 # Make commonly used classes available at package level
 __all__ = [
@@ -500,15 +415,6 @@ __all__ = [
     "JobStatus",
     "QueueType",
     
-    # WebSocket
-    "WebSocketServer",
-    "ConnectionManager",
-    "ChatService",
-    "NotificationService",
-    "LiveMonitoringService",
-    "CollaborationService",
-    "MessageType",
-    
     # Worker
     "AutoMLTask",
     "train_full_pipeline",
@@ -567,21 +473,6 @@ __all__ = [
     "UnifiedAuthMiddleware",
     "RGPDMiddleware",
     "setup_auth_middleware",
-    
-    # API Components
-    "BatchInferenceEngine",
-    "BatchJobConfig",
-    "BillingManager",
-    "billing_router",
-    "ConnectorFactory",
-    "ConnectionConfig",
-    "TenantManager",
-    "llm_router",
-    "mlops_router",
-    "ModelVersionManager",
-    "StreamingOrchestrator",
-    "connection_manager",
-    "websocket_endpoint"
 ]
 
 # Package metadata
@@ -734,9 +625,7 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         services.get("billing")
     )
     
-    # Initialize WebSocket Server if available
-    if WEBSOCKET_AVAILABLE:
-        services["websocket"] = WebSocketServer()
+    # Note: WebSocket Server and API features initialization removed since modules are not available
     
     # Initialize optimization services if available and enabled
     if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
@@ -762,43 +651,7 @@ def initialize_platform(config_path: str = None, environment: str = "production"
                 max_memory_mb=config.incremental.max_memory_mb
             )
     
-    # Initialize API features if enabled
-    if enable_api_features:
-        # Initialize batch processing
-        if BATCH_AVAILABLE and hasattr(config, 'batch') and config.batch.enabled:
-            services["batch"] = BatchInferenceEngine(config)
-            services["batch_scheduler"] = BatchScheduler(services["batch"])
-        
-        # Initialize billing
-        if BILLING_AVAILABLE and hasattr(config, 'billing') and config.billing.enabled:
-            services["billing"] = BillingManager(
-                tenant_manager=services.get("tenant_manager"),
-                db_url=config.billing.db_url
-            )
-        
-        # Initialize feature store
-        if FEATURE_STORE_AVAILABLE and hasattr(config, 'feature_store') and config.feature_store.enabled:
-            services["feature_store"] = APIFeatureStore(config.feature_store.to_dict())
-        
-        # Initialize infrastructure
-        if INFRASTRUCTURE_AVAILABLE:
-            services["tenant_manager"] = TenantManager()
-            services["security_manager"] = SecurityManager()
-            services["resource_monitor"] = ResourceMonitor(services["tenant_manager"])
-            services["deployment_manager"] = DeploymentManager(services["tenant_manager"])
-        
-        # Initialize model versioning
-        if VERSIONING_AVAILABLE:
-            services["version_manager"] = ModelVersionManager(config)
-        
-        # Initialize streaming
-        if STREAMING_AVAILABLE and hasattr(config, 'streaming') and config.streaming.enabled:
-            stream_config = StreamConfig(
-                platform=config.streaming.platform,
-                brokers=config.streaming.brokers,
-                topic=config.streaming.topic
-            )
-            services["streaming"] = StreamingOrchestrator(stream_config)
+    # Note: API features initialization removed since modules are not available
     
     import logging
     logger = logging.getLogger(__name__)
@@ -854,25 +707,7 @@ def create_app(config_path: str = None, environment: str = "production",
     # Include auth router
     app.include_router(auth_router)
     
-    # Include API routers if available and enabled
-    if enable_api_features:
-        # Billing routes
-        if BILLING_AVAILABLE and billing_router:
-            app.include_router(billing_router)
-        
-        # LLM routes
-        if LLM_AVAILABLE and llm_router:
-            app.include_router(llm_router)
-        
-        # MLOps routes
-        if MLOPS_AVAILABLE and mlops_router:
-            app.include_router(mlops_router)
-    
-    # WebSocket endpoint
-    if WEBSOCKET_AVAILABLE and websocket_endpoint:
-        @app.websocket("/ws")
-        async def websocket_route(websocket, token: str):
-            await websocket_endpoint(websocket, token)
+    # Note: API routers removed since modules are not available
     
     # Health check
     @app.get("/health")
@@ -979,10 +814,7 @@ def create_app(config_path: str = None, environment: str = "production",
         logger = logging.getLogger(__name__)
         logger.info("Starting AutoML Platform API...")
         
-        # Initialize WebSocket service if available
-        if WEBSOCKET_AVAILABLE and hasattr(config, 'websocket') and config.websocket.enabled:
-            redis_url = config.websocket.redis_url if hasattr(config.websocket, 'redis_url') else None
-            await initialize_websocket_service(redis_url)
+        # Note: WebSocket service initialization removed since module is not available
         
         logger.info("AutoML Platform API started successfully")
     
@@ -994,9 +826,7 @@ def create_app(config_path: str = None, environment: str = "production",
         logger = logging.getLogger(__name__)
         logger.info("Shutting down AutoML Platform API...")
         
-        # Shutdown WebSocket service if available
-        if WEBSOCKET_AVAILABLE:
-            await shutdown_websocket_service()
+        # Note: WebSocket service shutdown removed since module is not available
         
         logger.info("AutoML Platform API shut down successfully")
     
@@ -1033,13 +863,7 @@ def create_orchestrator(config_path: str = None,
     # Initialize API services if requested
     services = {}
     if enable_api_features:
-        # Initialize feature store if available
-        if FEATURE_STORE_AVAILABLE and hasattr(config, 'feature_store') and config.feature_store.enabled:
-            services["feature_store"] = APIFeatureStore(config.feature_store.to_dict())
-        
-        # Initialize version manager if available
-        if VERSIONING_AVAILABLE:
-            services["version_manager"] = ModelVersionManager(config)
+        # Note: API services initialization removed since modules are not available
         
         # Initialize LLM Assistant
         if hasattr(config, 'llm') and config.llm.enabled:
@@ -1091,5 +915,3 @@ else:
 logger.info("Additional modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, worker, tabnet")
 if STREAMLIT_AVAILABLE:
     logger.info("Streamlit A/B testing dashboard available")
-if WEBSOCKET_AVAILABLE:
-    logger.info("WebSocket service available from api.websocket")
