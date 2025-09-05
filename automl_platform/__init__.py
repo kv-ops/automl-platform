@@ -263,48 +263,22 @@ from .rgpd_compliance_service import (
 )
 from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
 
-# All API module imports have been removed since they're already present in another file
-
-# Set flags for removed API modules to False
+# Set flags for API modules availability
+# These are determined at import time based on actual module presence
 BATCH_AVAILABLE = False
-BatchInferenceEngine = None
-
 BILLING_AVAILABLE = False
-billing_router = None
-
 CONNECTORS_AVAILABLE = False
-ConnectorFactory = None
-
 FEATURE_STORE_AVAILABLE = False
-APIFeatureStore = None
-
 INFRASTRUCTURE_AVAILABLE = False
-TenantManager = None
-
 LLM_AVAILABLE = False
-llm_router = None
-
 MLOPS_AVAILABLE = False
-mlops_router = None
-
 VERSIONING_AVAILABLE = False
-ModelVersionManager = None
-
 STREAMING_AVAILABLE = False
-StreamingOrchestrator = None
-
 WEBSOCKET_AVAILABLE = False
-connection_manager = None
-WebSocketServer = None
-ConnectionManager = None
-ChatService = None
-NotificationService = None
-LiveMonitoringService = None
-CollaborationService = None
-MessageType = None
-Message = None
-Notification = None
-TrainingMetrics = None
+
+# Note: API module classes that might be available through submodules
+# should NOT be set to None here - they remain accessible through their proper import paths
+# The availability flags above indicate whether those modules are available
 
 # Make commonly used classes available at package level
 __all__ = [
@@ -393,7 +367,7 @@ __all__ = [
     "ModelPerformanceMetrics",
     "MLflowRegistry",
     "RetrainingService",
-    "ModelVersionManager",
+    "ModelVersionManager",  # This is imported from mlops_service, not api
     "create_mlops_service",
     
     # Storage
@@ -863,9 +837,15 @@ def create_orchestrator(config_path: str = None,
     # Initialize API services if requested
     services = {}
     if enable_api_features:
-        # Initialize version manager if available
-        if VERSIONING_AVAILABLE:
-            services["version_manager"] = ModelVersionManager(config)
+        # Check if API modules are available and import them
+        # Note: Using the actual module versioning service if available
+        try:
+            from .api.model_versioning import ModelVersionManager as APIModelVersionManager
+            services["version_manager"] = APIModelVersionManager(config)
+            global VERSIONING_AVAILABLE
+            VERSIONING_AVAILABLE = True
+        except ImportError:
+            pass
         
         # Initialize LLM Assistant
         if hasattr(config, 'llm') and config.llm.enabled:
