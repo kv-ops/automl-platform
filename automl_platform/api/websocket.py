@@ -1435,9 +1435,15 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
    """Cleanup on shutdown"""
-   global ws_server
+   # Note: we deliberately avoid declaring ws_server as global here because
+   # we do not assign to it in this function. Using `global` without assignment
+   # triggers Flake8 F824. We can still access the module-level `ws_server`
+   # variable for read-only purposes. If cleanup is needed, perform it and
+   # optionally reset ws_server to None.
    if ws_server:
        await ws_server.cleanup()
+       # Optionally reset the global instance on shutdown
+       # ws_server = None
    logger.info("WebSocket service stopped")
 
 @app.websocket("/ws")
