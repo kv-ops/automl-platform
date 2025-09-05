@@ -365,7 +365,7 @@ try:
 except ImportError:
     WEBSOCKET_AVAILABLE = False
 
-# Make commonly used classes available at package level
+# Build __all__ list dynamically
 __all__ = [
     # Core AutoML
     "AutoMLConfig",
@@ -486,29 +486,6 @@ __all__ = [
     "TabNetClassifier",
     "TabNetRegressor",
     
-    # UI Components (conditionally added)
-    "UI_AVAILABLE",
-    "AutoMLDashboard",
-    "DataQualityVisualizer",
-    "ModelLeaderboard",
-    "FeatureImportanceVisualizer",
-    "DriftMonitor",
-    "ChatInterface",
-    "check_ui_dependencies",
-    "get_ui_status",
-    "launch_dashboard",
-    
-    # Streamlit Dashboard
-    "ABTestingDashboard",
-    "integrate_ab_testing_to_main_app",
-    
-    # Optimizations
-    "DistributedTrainer",
-    "IncrementalLearner",
-    "PipelineCache",
-    "CacheConfig",
-    "OPTIMIZATIONS_AVAILABLE",
-    
     # Authentication & Security
     "init_auth_system",
     "auth_router",
@@ -544,7 +521,42 @@ __all__ = [
     "UnifiedAuthMiddleware",
     "RGPDMiddleware",
     "setup_auth_middleware",
+    
+    # Availability flags
+    "UI_AVAILABLE",
+    "OPTIMIZATIONS_AVAILABLE",
+    "STREAMLIT_AB_TESTING_AVAILABLE",
 ]
+
+# Add UI components conditionally
+if UI_AVAILABLE:
+    __all__.extend([
+        "AutoMLDashboard",
+        "DataQualityVisualizer",
+        "ModelLeaderboard",
+        "FeatureImportanceVisualizer",
+        "DriftMonitor",
+        "ChatInterface",
+        "check_ui_dependencies",
+        "get_ui_status",
+        "launch_dashboard",
+    ])
+
+# Add Streamlit A/B Testing Dashboard conditionally
+if STREAMLIT_AB_TESTING_AVAILABLE:
+    __all__.extend([
+        "ABTestingDashboard",
+        "integrate_ab_testing_to_main_app",
+    ])
+
+# Add optimization components conditionally
+if OPTIMIZATIONS_AVAILABLE:
+    __all__.extend([
+        "DistributedTrainer",
+        "IncrementalLearner",
+        "PipelineCache",
+        "CacheConfig",
+    ])
 
 # Package metadata
 PACKAGE_INFO = {
