@@ -25,10 +25,10 @@ A comprehensive platform for automated machine learning with advanced features i
 - Advanced monitoring with Prometheus/Grafana
 - Job scheduling with CPU/GPU queue management
 
-Version: 2.1.0
+Version: 3.0.1
 """
 
-__version__ = "2.1.0"
+__version__ = "3.0.1"
 __author__ = "AutoML Platform Team"
 __email__ = "support@automl-platform.com"
 
@@ -175,20 +175,6 @@ from .scheduler import (
     JobStatus,
     QueueType,
     PLAN_LIMITS
-)
-
-# WebSocket Service
-from .websocket import (
-    WebSocketServer,
-    ConnectionManager,
-    ChatService,
-    NotificationService,
-    LiveMonitoringService,
-    CollaborationService,
-    MessageType,
-    Message,
-    Notification,
-    TrainingMetrics
 )
 
 # Worker Management
@@ -378,12 +364,32 @@ try:
         connection_manager,
         websocket_endpoint,
         initialize_websocket_service,
-        shutdown_websocket_service
+        shutdown_websocket_service,
+        WebSocketServer,
+        ConnectionManager,
+        ChatService,
+        NotificationService,
+        LiveMonitoringService,
+        CollaborationService,
+        MessageType,
+        Message,
+        Notification,
+        TrainingMetrics
     )
     WEBSOCKET_AVAILABLE = True
 except ImportError:
     WEBSOCKET_AVAILABLE = False
     connection_manager = None
+    WebSocketServer = None
+    ConnectionManager = None
+    ChatService = None
+    NotificationService = None
+    LiveMonitoringService = None
+    CollaborationService = None
+    MessageType = None
+    Message = None
+    Notification = None
+    TrainingMetrics = None
 
 # Make commonly used classes available at package level
 __all__ = [
@@ -728,8 +734,9 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         services.get("billing")
     )
     
-    # Initialize WebSocket Server
-    services["websocket"] = WebSocketServer()
+    # Initialize WebSocket Server if available
+    if WEBSOCKET_AVAILABLE:
+        services["websocket"] = WebSocketServer()
     
     # Initialize optimization services if available and enabled
     if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
@@ -1081,6 +1088,8 @@ else:
     logger.info("No API features loaded. Check module dependencies.")
 
 # Log newly added modules
-logger.info("Additional modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, websocket, worker, tabnet")
+logger.info("Additional modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, worker, tabnet")
 if STREAMLIT_AVAILABLE:
     logger.info("Streamlit A/B testing dashboard available")
+if WEBSOCKET_AVAILABLE:
+    logger.info("WebSocket service available from api.websocket")
