@@ -12,9 +12,64 @@ datasources:
       httpMethod: GET
       keepCookies: []
       timeInterval: 10s
-      queryTimeout: 60s
+      queryTimeout: 300s  # Increased from 60s to handle complex queries
       cacheLevel: 'High'
       incrementalQuerying: false
       incrementalQueryOverlapWindow: 10m
       prometheusType: Prometheus
       prometheusVersion: 2.40.0
+      # TLS/SSL configuration for secure environments
+      tlsSkipVerify: false
+      tlsAuth: false
+      tlsAuthWithCACert: false
+      # Custom query parameters
+      customQueryParameters: ""
+      # Exemplar configuration for trace correlation
+      exemplarTraceIdDestinations:
+        - name: traceID
+          datasourceUid: tempo
+      # Alert state history
+      alertmanagerUid: alertmanager
+      
+    # Secure JSON fields for authentication (uncomment if needed)
+    # secureJsonData:
+    #   basicAuthPassword: ""
+    #   tlsCACert: ""
+    #   tlsClientCert: ""
+    #   tlsClientKey: ""
+    
+    # Basic authentication (uncomment if needed)
+    # basicAuth: true
+    # basicAuthUser: "prometheus_user"
+    
+    # Additional headers for authentication
+    # httpHeaderName1: 'Authorization'
+    # secureJsonData:
+    #   httpHeaderValue1: 'Bearer <token>'
+
+  # Additional datasource for long-term storage (optional)
+  - name: Prometheus-LongTerm
+    type: prometheus
+    access: proxy
+    url: http://thanos-query:9090  # Or VictoriaMetrics endpoint
+    editable: true
+    jsonData:
+      httpMethod: GET
+      timeInterval: 30s
+      queryTimeout: 600s  # Longer timeout for historical queries
+      cacheLevel: 'High'
+      incrementalQuerying: true
+      incrementalQueryOverlapWindow: 30m
+      prometheusType: Prometheus
+      prometheusVersion: 2.40.0
+      # Custom label to identify long-term storage
+      customQueryParameters: "max_source_resolution=5m"
+      
+  # Alertmanager datasource for alert visualization
+  - name: Alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: true
+    jsonData:
+      implementation: prometheus
