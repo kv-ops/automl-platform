@@ -37,6 +37,86 @@ from .data_prep import DataPreprocessor, validate_data
 from .metrics import calculate_metrics, detect_task
 from .model_selection import get_available_models
 
+# Advanced modules
+from .ensemble import (
+    AutoMLEnsemble, 
+    AutoGluonEnsemble, 
+    WeightedEnsemble,
+    create_diverse_ensemble,
+    create_ensemble_pipeline
+)
+from .feature_engineering import (
+    AutoFeatureEngineer,
+    create_time_series_features,
+    create_text_features
+)
+from .inference import (
+    load_pipeline,
+    predict,
+    predict_proba,
+    predict_batch,
+    save_predictions,
+    explain_prediction,
+    validate_input
+)
+
+# LLM and Intelligence
+from .llm import (
+    LLMProvider,
+    OpenAIProvider,
+    AnthropicProvider,
+    LLMCache,
+    AdvancedRAGSystem,
+    EnhancedDataCleaningAgent,
+    AutoMLLLMAssistant,
+    WebSocketChatHandler
+)
+
+# Data Quality
+from .data_quality_agent import (
+    DataQualityAssessment,
+    AkkioStyleCleaningAgent,
+    DataRobotStyleQualityMonitor,
+    IntelligentDataQualityAgent
+)
+
+# Deployment and Export
+from .deployment import (
+    ModelExportService,
+    ExportFormat,
+    ServingMode,
+    DeploymentTarget,
+    ModelMetadata,
+    DeploymentSpec
+)
+from .export_service import (
+    ModelExporter,
+    ExportConfig
+)
+
+# A/B Testing
+from .ab_testing import (
+    ABTestingService,
+    TestStatus,
+    ModelType,
+    ABTestConfig,
+    ABTestResult,
+    MetricsComparator,
+    StatisticalTester
+)
+
+# Autoscaling and Resource Management
+from .autoscaling import (
+    AutoscalingService,
+    ResourceManager,
+    GPUScheduler,
+    JobScheduler,
+    ResourceType,
+    ScalingStrategy,
+    ResourceAllocation,
+    ClusterNode
+)
+
 # Optimization imports
 try:
     from .distributed_training import DistributedTrainer
@@ -56,7 +136,24 @@ from .auth import (
     auth_router,
     get_current_user,
     require_permission,
-    require_plan
+    require_plan,
+    AuthConfig,
+    PasswordService,
+    TokenService,
+    APIKeyService,
+    OAuthService,
+    RBACService,
+    QuotaService,
+    AuditService,
+    RateLimiter,
+    PlanType,
+    User,
+    Tenant,
+    Role,
+    Permission,
+    Project,
+    APIKey,
+    AuditLog
 )
 from .sso_service import SSOService, SSOProvider
 from .audit_service import AuditService, AuditEventType, AuditSeverity
@@ -189,6 +286,70 @@ __all__ = [
     "detect_task",
     "get_available_models",
     
+    # Advanced features
+    "AutoMLEnsemble",
+    "AutoGluonEnsemble",
+    "WeightedEnsemble",
+    "create_diverse_ensemble",
+    "create_ensemble_pipeline",
+    "AutoFeatureEngineer",
+    "create_time_series_features",
+    "create_text_features",
+    
+    # Inference
+    "load_pipeline",
+    "predict",
+    "predict_proba",
+    "predict_batch",
+    "save_predictions",
+    "explain_prediction",
+    "validate_input",
+    
+    # LLM and Intelligence
+    "LLMProvider",
+    "OpenAIProvider",
+    "AnthropicProvider",
+    "LLMCache",
+    "AdvancedRAGSystem",
+    "EnhancedDataCleaningAgent",
+    "AutoMLLLMAssistant",
+    "WebSocketChatHandler",
+    
+    # Data Quality
+    "DataQualityAssessment",
+    "AkkioStyleCleaningAgent",
+    "DataRobotStyleQualityMonitor",
+    "IntelligentDataQualityAgent",
+    
+    # Deployment
+    "ModelExportService",
+    "ExportFormat",
+    "ServingMode",
+    "DeploymentTarget",
+    "ModelMetadata",
+    "DeploymentSpec",
+    "ModelExporter",
+    "ExportConfig",
+    
+    # A/B Testing
+    "ABTestingService",
+    "TestStatus",
+    "ModelType",
+    "ABTestConfig",
+    "ABTestResult",
+    "MetricsComparator",
+    "StatisticalTester",
+    
+    # Autoscaling
+    "AutoscalingService",
+    "ResourceManager",
+    "GPUScheduler",
+    "JobScheduler",
+    "ResourceType",
+    "ScalingStrategy",
+    "ResourceAllocation",
+    "ClusterNode",
+    
     # Optimizations
     "DistributedTrainer",
     "IncrementalLearner",
@@ -202,6 +363,16 @@ __all__ = [
     "get_current_user",
     "require_permission",
     "require_plan",
+    "AuthConfig",
+    "PasswordService",
+    "TokenService",
+    "APIKeyService",
+    "OAuthService",
+    "RBACService",
+    "QuotaService",
+    "AuditService",
+    "RateLimiter",
+    "PlanType",
     
     # SSO
     "SSOService",
@@ -248,7 +419,8 @@ PACKAGE_INFO = {
     "requires_python": ">=3.8",
     "license": "MIT",
     "keywords": ["machine learning", "automl", "automation", "ai", "ml", "sso", "rgpd", "gdpr", 
-                  "distributed", "cache", "batch", "streaming", "websocket", "mlops"],
+                  "distributed", "cache", "batch", "streaming", "websocket", "mlops", "llm",
+                  "feature-engineering", "ensemble", "deployment", "ab-testing"],
     "classifiers": [
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -260,12 +432,13 @@ PACKAGE_INFO = {
         "Programming Language :: Python :: 3.11",
     ],
     "features": {
-        "core": ["automl", "feature_engineering", "model_selection"],
-        "enterprise": ["multi_tenant", "billing", "monitoring"],
+        "core": ["automl", "feature_engineering", "model_selection", "ensemble", "inference"],
+        "enterprise": ["multi_tenant", "billing", "monitoring", "ab_testing"],
         "security": ["sso", "rbac", "audit_trail", "encryption"],
         "compliance": ["rgpd", "gdpr", "data_retention", "consent_management"],
-        "advanced": ["llm_integration", "streaming", "drift_detection"],
+        "advanced": ["llm_integration", "streaming", "drift_detection", "data_quality"],
         "optimizations": ["distributed_training", "incremental_learning", "pipeline_cache", "memory_optimization"],
+        "deployment": ["model_export", "onnx", "pmml", "edge_deployment", "autoscaling"],
         "api": ["batch_inference", "websocket", "connectors", "feature_store", "model_versioning"]
     }
 }
@@ -338,6 +511,32 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         services["rgpd"] = RGPDComplianceService(
             audit_service=services["audit"]
         )
+    
+    # Initialize LLM Assistant
+    if config.llm.enabled:
+        llm_config = {
+            'provider': config.llm.provider,
+            'api_key': config.llm.api_key,
+            'model_name': config.llm.model_name,
+            'enable_rag': config.llm.enable_rag,
+            'cache_responses': config.llm.cache_responses
+        }
+        services["llm_assistant"] = AutoMLLLMAssistant(llm_config)
+    
+    # Initialize Data Quality Agent
+    services["data_quality"] = IntelligentDataQualityAgent(
+        llm_provider=services.get("llm_assistant").llm if "llm_assistant" in services else None
+    )
+    
+    # Initialize A/B Testing Service
+    services["ab_testing"] = ABTestingService()
+    
+    # Initialize Autoscaling Service
+    services["autoscaling"] = AutoscalingService(config)
+    
+    # Initialize Model Export Service
+    services["model_export"] = ModelExportService()
+    services["model_exporter"] = ModelExporter()
     
     # Initialize optimization services if available and enabled
     if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
@@ -452,8 +651,8 @@ def create_app(config_path: str = None, environment: str = "production",
     setup_auth_middleware(app, config)
     
     # Register routers
-    # Include auth router already imported at module level
-    app.include_router
+    # Include auth router
+    app.include_router(auth_router)
     
     # Include API routers if available and enabled
     if enable_api_features:
@@ -576,6 +775,8 @@ def create_app(config_path: str = None, environment: str = "production",
     @app.on_event("startup")
     async def startup_event():
         """Initialize services on startup."""
+        import logging
+        logger = logging.getLogger(__name__)
         logger.info("Starting AutoML Platform API...")
         
         # Initialize WebSocket service if available
@@ -589,6 +790,8 @@ def create_app(config_path: str = None, environment: str = "production",
     @app.on_event("shutdown")
     async def shutdown_event():
         """Cleanup on shutdown."""
+        import logging
+        logger = logging.getLogger(__name__)
         logger.info("Shutting down AutoML Platform API...")
         
         # Shutdown WebSocket service if available
@@ -637,6 +840,17 @@ def create_orchestrator(config_path: str = None,
         # Initialize version manager if available
         if VERSIONING_AVAILABLE:
             services["version_manager"] = ModelVersionManager(config)
+        
+        # Initialize LLM Assistant
+        if hasattr(config, 'llm') and config.llm.enabled:
+            llm_config = {
+                'provider': config.llm.provider,
+                'api_key': config.llm.api_key,
+                'model_name': config.llm.model_name,
+                'enable_rag': config.llm.enable_rag,
+                'cache_responses': config.llm.cache_responses
+            }
+            services["llm_assistant"] = AutoMLLLMAssistant(llm_config)
     
     # Create orchestrator
     if enhanced:
