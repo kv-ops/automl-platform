@@ -263,22 +263,80 @@ from .rgpd_compliance_service import (
 )
 from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
 
-# Set flags for API modules availability
-# These are determined at import time based on actual module presence
-BATCH_AVAILABLE = False
-BILLING_AVAILABLE = False
-CONNECTORS_AVAILABLE = False
-FEATURE_STORE_AVAILABLE = False
-INFRASTRUCTURE_AVAILABLE = False
-LLM_AVAILABLE = False
-MLOPS_AVAILABLE = False
-VERSIONING_AVAILABLE = False
-STREAMING_AVAILABLE = False
-WEBSOCKET_AVAILABLE = False
+# ============================================================================
+# Dynamic detection of API module availability
+# Each flag is set based on whether the corresponding module can be imported
+# ============================================================================
 
-# Note: API module classes that might be available through submodules
-# should NOT be set to None here - they remain accessible through their proper import paths
-# The availability flags above indicate whether those modules are available
+# Batch Inference API
+try:
+    from .api import batch_inference
+    BATCH_AVAILABLE = True
+except ImportError:
+    BATCH_AVAILABLE = False
+
+# Billing API
+try:
+    from .api import billing
+    BILLING_AVAILABLE = True
+except ImportError:
+    BILLING_AVAILABLE = False
+
+# Data Connectors API
+try:
+    from .api import connectors
+    CONNECTORS_AVAILABLE = True
+except ImportError:
+    CONNECTORS_AVAILABLE = False
+
+# Feature Store API
+try:
+    from .api import feature_store
+    FEATURE_STORE_AVAILABLE = True
+except ImportError:
+    FEATURE_STORE_AVAILABLE = False
+
+# Infrastructure API
+try:
+    from .api import infrastructure
+    INFRASTRUCTURE_AVAILABLE = True
+except ImportError:
+    INFRASTRUCTURE_AVAILABLE = False
+
+# LLM Endpoints API
+try:
+    from .api import llm_endpoints
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+
+# MLOps Endpoints API
+try:
+    from .api import mlops_endpoints
+    MLOPS_AVAILABLE = True
+except ImportError:
+    MLOPS_AVAILABLE = False
+
+# Model Versioning API
+try:
+    from .api import model_versioning
+    VERSIONING_AVAILABLE = True
+except ImportError:
+    VERSIONING_AVAILABLE = False
+
+# Streaming API
+try:
+    from .api import streaming
+    STREAMING_AVAILABLE = True
+except ImportError:
+    STREAMING_AVAILABLE = False
+
+# WebSocket API
+try:
+    from .api import websocket
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
 
 # Make commonly used classes available at package level
 __all__ = [
@@ -503,7 +561,10 @@ def check_optimizations():
     }
 
 def check_api_features():
-    """Check which API features are available."""
+    """
+    Check which API features are available.
+    All flags are dynamically determined based on module import success.
+    """
     return {
         "batch_processing": BATCH_AVAILABLE,
         "billing": BILLING_AVAILABLE,
@@ -599,7 +660,48 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         services.get("billing")
     )
     
-    # Note: WebSocket Server and API features initialization removed since modules are not available
+    # Initialize API services if available and enabled
+    if enable_api_features:
+        # Initialize Batch Processing if available
+        if BATCH_AVAILABLE:
+            from .api.batch_inference import BatchInferenceEngine
+            services["batch_engine"] = BatchInferenceEngine(config)
+        
+        # Initialize Billing if available
+        if BILLING_AVAILABLE:
+            from .api.billing import BillingService
+            services["billing"] = BillingService(config)
+        
+        # Initialize Connectors if available
+        if CONNECTORS_AVAILABLE:
+            from .api.connectors import ConnectorFactory
+            services["connectors"] = ConnectorFactory(config)
+        
+        # Initialize Feature Store if available
+        if FEATURE_STORE_AVAILABLE:
+            from .api.feature_store import APIFeatureStore
+            services["feature_store"] = APIFeatureStore(config)
+        
+        # Initialize Infrastructure if available
+        if INFRASTRUCTURE_AVAILABLE:
+            from .api.infrastructure import TenantManager
+            services["tenant_manager"] = TenantManager(config)
+        
+        # Initialize Model Versioning if available
+        if VERSIONING_AVAILABLE:
+            from .api.model_versioning import ModelVersionManager as APIModelVersionManager
+            services["version_manager"] = APIModelVersionManager(config)
+        
+        # Initialize Streaming if available
+        if STREAMING_AVAILABLE:
+            from .api.streaming import StreamingOrchestrator
+            services["streaming"] = StreamingOrchestrator(config)
+        
+        # Initialize WebSocket if available
+        if WEBSOCKET_AVAILABLE:
+            from .api.websocket import ConnectionManager, WebSocketServer
+            services["websocket_manager"] = ConnectionManager()
+            services["websocket_server"] = WebSocketServer(config)
     
     # Initialize optimization services if available and enabled
     if enable_optimizations and OPTIMIZATIONS_AVAILABLE:
@@ -624,8 +726,6 @@ def initialize_platform(config_path: str = None, environment: str = "production"
             services["incremental"] = IncrementalLearner(
                 max_memory_mb=config.incremental.max_memory_mb
             )
-    
-    # Note: API features initialization removed since modules are not available
     
     import logging
     logger = logging.getLogger(__name__)
@@ -681,7 +781,19 @@ def create_app(config_path: str = None, environment: str = "production",
     # Include auth router
     app.include_router(auth_router)
     
-    # Note: API routers removed since modules are not available
+    # Include API routers if available and enabled
+    if enable_api_features:
+        if BILLING_AVAILABLE:
+            from .api.billing import billing_router
+            app.include_router(billing_router)
+        
+        if LLM_AVAILABLE:
+            from .api.llm_endpoints import llm_router
+            app.include_router(llm_router)
+        
+        if MLOPS_AVAILABLE:
+            from .api.mlops_endpoints import mlops_router
+            app.include_router(mlops_router)
     
     # Health check
     @app.get("/health")
@@ -788,7 +900,11 @@ def create_app(config_path: str = None, environment: str = "production",
         logger = logging.getLogger(__name__)
         logger.info("Starting AutoML Platform API...")
         
-        # Note: WebSocket service initialization removed since module is not available
+        # Initialize WebSocket service if available
+        if WEBSOCKET_AVAILABLE and enable_api_features:
+            from .api.websocket import WebSocketServer
+            app.state.websocket_server = WebSocketServer(config)
+            logger.info("WebSocket service initialized")
         
         logger.info("AutoML Platform API started successfully")
     
@@ -800,7 +916,10 @@ def create_app(config_path: str = None, environment: str = "production",
         logger = logging.getLogger(__name__)
         logger.info("Shutting down AutoML Platform API...")
         
-        # Note: WebSocket service shutdown removed since module is not available
+        # Shutdown WebSocket service if available
+        if hasattr(app.state, 'websocket_server'):
+            await app.state.websocket_server.shutdown()
+            logger.info("WebSocket service shut down")
         
         logger.info("AutoML Platform API shut down successfully")
     
@@ -838,14 +957,9 @@ def create_orchestrator(config_path: str = None,
     services = {}
     if enable_api_features:
         # Check if API modules are available and import them
-        # Note: Using the actual module versioning service if available
-        try:
+        if VERSIONING_AVAILABLE:
             from .api.model_versioning import ModelVersionManager as APIModelVersionManager
             services["version_manager"] = APIModelVersionManager(config)
-            global VERSIONING_AVAILABLE
-            VERSIONING_AVAILABLE = True
-        except ImportError:
-            pass
         
         # Initialize LLM Assistant
         if hasattr(config, 'llm') and config.llm.enabled:
@@ -882,18 +996,26 @@ if sys.version_info < (3, 8):
 import logging
 logger = logging.getLogger(__name__)
 logger.info(f"AutoML Platform v{__version__} initialized")
+
+# Log optimization status
 if OPTIMIZATIONS_AVAILABLE:
     logger.info("Optimization components available: distributed training, incremental learning, pipeline cache")
 else:
     logger.info("Running without optimization components. Install ray, dask, river for full functionality")
 
+# Log API features status
 api_features = check_api_features()
-if any(api_features.values()):
-    logger.info(f"API features loaded: {', '.join([k for k, v in api_features.items() if v])}")
+available_apis = [k for k, v in api_features.items() if v]
+if available_apis:
+    logger.info(f"API features dynamically detected: {', '.join(available_apis)}")
 else:
-    logger.info("No API features loaded. Check module dependencies.")
+    logger.info("No API features detected. API modules may not be installed or available.")
 
-# Log newly added modules
-logger.info("Additional modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, worker, tabnet")
+# Log additional modules
+logger.info("Core modules loaded: monitoring, mlops_service, mlflow_registry, storage, prompts, scheduler, worker, tabnet")
+
+# Log Streamlit availability
 if STREAMLIT_AVAILABLE:
     logger.info("Streamlit A/B testing dashboard available")
+else:
+    logger.debug("Streamlit not available - install streamlit package to enable dashboard")
