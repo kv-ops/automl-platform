@@ -9,7 +9,7 @@ This module provides real-time communication capabilities including:
 - Multi-user collaboration on projects
 
 Author: MLOps Team
-Date: 2024
+Date: 2025
 """
 
 import asyncio
