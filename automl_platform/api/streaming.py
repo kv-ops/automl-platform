@@ -279,7 +279,7 @@ class KafkaStreamProcessor(StreamProcessor):
             logger.error(f"Failed to initialize Kafka clients: {e}")
             ml_streaming_errors_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 error_type="initialization"
             ).inc()
             raise
@@ -298,7 +298,7 @@ class KafkaStreamProcessor(StreamProcessor):
             
             ml_streaming_messages_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 topic=self.config.topic,
                 status="success"
             ).inc()
@@ -311,14 +311,14 @@ class KafkaStreamProcessor(StreamProcessor):
             
             ml_streaming_messages_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 topic=self.config.topic,
                 status="failure"
             ).inc()
             
             ml_streaming_errors_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 error_type=type(e).__name__
             ).inc()
             
@@ -328,7 +328,7 @@ class KafkaStreamProcessor(StreamProcessor):
             # Record processing latency
             ml_streaming_processing_latency_seconds.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 processor_type=self.__class__.__name__
             ).observe(time.time() - start_time)
     
@@ -339,7 +339,7 @@ class KafkaStreamProcessor(StreamProcessor):
         # Record batch size
         ml_streaming_batch_size.labels(
             tenant_id=self.config.tenant_id,
-            platform="kafka"
+            platform=self.config.platform  # Utilisation de self.config.platform au lieu de "kafka"
         ).observe(len(messages))
         
         try:
@@ -352,7 +352,7 @@ class KafkaStreamProcessor(StreamProcessor):
             
             ml_streaming_messages_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 topic=self.config.topic,
                 status="success"
             ).inc(len(messages))
@@ -365,14 +365,14 @@ class KafkaStreamProcessor(StreamProcessor):
             
             ml_streaming_messages_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 topic=self.config.topic,
                 status="failure"
             ).inc(len(messages))
             
             ml_streaming_errors_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 error_type=type(e).__name__
             ).inc()
             
@@ -382,7 +382,7 @@ class KafkaStreamProcessor(StreamProcessor):
             # Record processing latency
             ml_streaming_processing_latency_seconds.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 processor_type=self.__class__.__name__
             ).observe(time.time() - start_time)
     
@@ -435,7 +435,7 @@ class KafkaStreamProcessor(StreamProcessor):
                         
                         ml_streaming_lag.labels(
                             tenant_id=self.config.tenant_id,
-                            platform="kafka",
+                            platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                             topic=topic_partition.topic,
                             partition=str(topic_partition.partition)
                         ).set(lag)
@@ -454,7 +454,7 @@ class KafkaStreamProcessor(StreamProcessor):
             logger.error(f"Error in Kafka consumer loop: {e}")
             ml_streaming_errors_total.labels(
                 tenant_id=self.config.tenant_id,
-                platform="kafka",
+                platform=self.config.platform,  # Utilisation de self.config.platform au lieu de "kafka"
                 error_type="consumer_loop"
             ).inc()
             
@@ -472,6 +472,392 @@ class KafkaStreamProcessor(StreamProcessor):
             self.producer.close()
         
         logger.info("Kafka stream processor stopped")
+
+
+class PulsarStreamProcessor(StreamProcessor):
+    """Pulsar-based stream processor with metrics."""
+    
+    def __init__(self, config: StreamConfig):
+        super().__init__(config)
+        
+        if not PULSAR_AVAILABLE:
+            raise ImportError("pulsar-client not installed. Install with: pip install pulsar-client")
+        
+        self.client = None
+        self.consumer = None
+        self.producer = None
+        self._init_clients()
+    
+    def _init_clients(self):
+        """Initialize Pulsar clients."""
+        try:
+            # Create Pulsar client
+            self.client = pulsar.Client(
+                service_url=f'pulsar://{self.config.brokers[0]}',
+                authentication=None  # Add authentication if needed
+            )
+            
+            # Create consumer
+            self.consumer = self.client.subscribe(
+                topic=self.config.topic,
+                subscription_name=self.config.consumer_group,
+                consumer_type=pulsar.ConsumerType.Shared
+            )
+            
+            # Create producer
+            self.producer = self.client.create_producer(
+                topic=f'{self.config.topic}-output'
+            )
+            
+            logger.info(f"Initialized Pulsar clients for topic: {self.config.topic}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Pulsar clients: {e}")
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type="initialization"
+            ).inc()
+            raise
+    
+    async def process(self, message: StreamMessage) -> Optional[StreamMessage]:
+        """Process single Pulsar message with metrics."""
+        start_time = time.time()
+        
+        try:
+            result = await self._process_message_impl(message)
+            
+            self.processed_count += 1
+            self.messages_since_last_calc += 1
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="success"
+            ).inc()
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            self.error_count += 1
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="failure"
+            ).inc()
+            
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type=type(e).__name__
+            ).inc()
+            
+            return None
+            
+        finally:
+            ml_streaming_processing_latency_seconds.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                processor_type=self.__class__.__name__
+            ).observe(time.time() - start_time)
+    
+    async def process_batch(self, messages: List[StreamMessage]) -> List[StreamMessage]:
+        """Process batch of Pulsar messages with metrics."""
+        start_time = time.time()
+        
+        ml_streaming_batch_size.labels(
+            tenant_id=self.config.tenant_id,
+            platform=self.config.platform
+        ).observe(len(messages))
+        
+        try:
+            results = await self._process_batch_impl(messages)
+            
+            self.processed_count += len(messages)
+            self.messages_since_last_calc += len(messages)
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="success"
+            ).inc(len(messages))
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error processing batch: {e}")
+            self.error_count += len(messages)
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="failure"
+            ).inc(len(messages))
+            
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type=type(e).__name__
+            ).inc()
+            
+            return []
+            
+        finally:
+            ml_streaming_processing_latency_seconds.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                processor_type=self.__class__.__name__
+            ).observe(time.time() - start_time)
+    
+    async def _process_message_impl(self, message: StreamMessage) -> Optional[StreamMessage]:
+        """Actual message processing logic - to be implemented by subclass."""
+        return message
+    
+    async def _process_batch_impl(self, messages: List[StreamMessage]) -> List[StreamMessage]:
+        """Actual batch processing logic - to be implemented by subclass."""
+        results = []
+        for msg in messages:
+            result = await self._process_message_impl(msg)
+            if result:
+                results.append(result)
+        return results
+    
+    def run(self):
+        """Run the Pulsar consumer loop."""
+        self.running = True
+        
+        try:
+            while self.running:
+                try:
+                    # Receive message with timeout
+                    msg = self.consumer.receive(timeout_millis=1000)
+                    
+                    # Convert to StreamMessage
+                    stream_msg = StreamMessage(
+                        key=msg.partition_key() if msg.partition_key() else None,
+                        value=json.loads(msg.data().decode('utf-8')),
+                        timestamp=datetime.fromtimestamp(msg.publish_timestamp() / 1000),
+                        partition=0,  # Pulsar doesn't expose partition directly
+                        offset=0,  # Use message ID instead
+                        headers=msg.properties() if msg.properties() else None
+                    )
+                    
+                    # Process message
+                    asyncio.run(self.process(stream_msg))
+                    
+                    # Acknowledge message
+                    self.consumer.acknowledge(msg)
+                    
+                except Exception as timeout:
+                    # Timeout is normal, continue
+                    pass
+                
+                # Update throughput periodically
+                if (datetime.now() - self.last_throughput_calc).seconds > 5:
+                    self.update_throughput_metric()
+                
+                # Checkpoint periodically
+                if (datetime.now() - self.last_checkpoint).seconds > self.config.checkpoint_interval:
+                    self.checkpoint()
+                    
+        except Exception as e:
+            logger.error(f"Error in Pulsar consumer loop: {e}")
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type="consumer_loop"
+            ).inc()
+            
+        finally:
+            self.stop()
+    
+    def stop(self):
+        """Stop the Pulsar consumer."""
+        self.running = False
+        
+        if self.consumer:
+            self.consumer.close()
+        
+        if self.producer:
+            self.producer.close()
+        
+        if self.client:
+            self.client.close()
+        
+        logger.info("Pulsar stream processor stopped")
+
+
+class FlinkStreamProcessor(StreamProcessor):
+    """Flink-based stream processor with metrics."""
+    
+    def __init__(self, config: StreamConfig):
+        super().__init__(config)
+        
+        if not FLINK_AVAILABLE:
+            raise ImportError("pyflink not installed. Install with: pip install apache-flink")
+        
+        self.env = None
+        self.table_env = None
+        self._init_environment()
+    
+    def _init_environment(self):
+        """Initialize Flink environment."""
+        try:
+            # Create execution environment
+            self.env = StreamExecutionEnvironment.get_execution_environment()
+            self.table_env = StreamTableEnvironment.create(self.env)
+            
+            # Configure checkpointing
+            self.env.enable_checkpointing(self.config.checkpoint_interval * 1000)
+            
+            logger.info("Initialized Flink environment")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Flink environment: {e}")
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type="initialization"
+            ).inc()
+            raise
+    
+    async def process(self, message: StreamMessage) -> Optional[StreamMessage]:
+        """Process single Flink message with metrics."""
+        start_time = time.time()
+        
+        try:
+            result = await self._process_message_impl(message)
+            
+            self.processed_count += 1
+            self.messages_since_last_calc += 1
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="success"
+            ).inc()
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            self.error_count += 1
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="failure"
+            ).inc()
+            
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type=type(e).__name__
+            ).inc()
+            
+            return None
+            
+        finally:
+            ml_streaming_processing_latency_seconds.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                processor_type=self.__class__.__name__
+            ).observe(time.time() - start_time)
+    
+    async def process_batch(self, messages: List[StreamMessage]) -> List[StreamMessage]:
+        """Process batch of Flink messages with metrics."""
+        start_time = time.time()
+        
+        ml_streaming_batch_size.labels(
+            tenant_id=self.config.tenant_id,
+            platform=self.config.platform
+        ).observe(len(messages))
+        
+        try:
+            results = await self._process_batch_impl(messages)
+            
+            self.processed_count += len(messages)
+            self.messages_since_last_calc += len(messages)
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="success"
+            ).inc(len(messages))
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error processing batch: {e}")
+            self.error_count += len(messages)
+            
+            ml_streaming_messages_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                topic=self.config.topic,
+                status="failure"
+            ).inc(len(messages))
+            
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type=type(e).__name__
+            ).inc()
+            
+            return []
+            
+        finally:
+            ml_streaming_processing_latency_seconds.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                processor_type=self.__class__.__name__
+            ).observe(time.time() - start_time)
+    
+    async def _process_message_impl(self, message: StreamMessage) -> Optional[StreamMessage]:
+        """Actual message processing logic - to be implemented by subclass."""
+        return message
+    
+    async def _process_batch_impl(self, messages: List[StreamMessage]) -> List[StreamMessage]:
+        """Actual batch processing logic - to be implemented by subclass."""
+        results = []
+        for msg in messages:
+            result = await self._process_message_impl(msg)
+            if result:
+                results.append(result)
+        return results
+    
+    def run(self):
+        """Run the Flink job."""
+        self.running = True
+        
+        try:
+            # Execute Flink job
+            self.env.execute(f"Stream Processing - {self.config.topic}")
+            
+        except Exception as e:
+            logger.error(f"Error in Flink job: {e}")
+            ml_streaming_errors_total.labels(
+                tenant_id=self.config.tenant_id,
+                platform=self.config.platform,
+                error_type="job_execution"
+            ).inc()
+            
+        finally:
+            self.stop()
+    
+    def stop(self):
+        """Stop the Flink job."""
+        self.running = False
+        logger.info("Flink stream processor stopped")
 
 
 class MLStreamProcessor(KafkaStreamProcessor):
@@ -610,6 +996,39 @@ class StreamingOrchestrator:
         return metrics
 
 
+# Factory function to create appropriate processor based on platform
+def create_stream_processor(config: StreamConfig) -> StreamProcessor:
+    """
+    Create a stream processor based on the platform specified in config.
+    
+    Args:
+        config: StreamConfig with platform specification
+        
+    Returns:
+        Appropriate StreamProcessor instance
+    """
+    platform = config.platform.lower()
+    
+    if platform == "kafka":
+        return KafkaStreamProcessor(config)
+    elif platform == "pulsar":
+        return PulsarStreamProcessor(config)
+    elif platform == "flink":
+        return FlinkStreamProcessor(config)
+    else:
+        raise ValueError(f"Unsupported streaming platform: {platform}")
+
+
 # Export the registry and components so they can be imported by api.py
-__all__ = ['streaming_registry', 'StreamConfig', 'StreamMessage', 'StreamProcessor', 
-          'KafkaStreamProcessor', 'MLStreamProcessor', 'StreamingOrchestrator']
+__all__ = [
+    'streaming_registry', 
+    'StreamConfig', 
+    'StreamMessage', 
+    'StreamProcessor',
+    'KafkaStreamProcessor', 
+    'PulsarStreamProcessor',
+    'FlinkStreamProcessor',
+    'MLStreamProcessor', 
+    'StreamingOrchestrator',
+    'create_stream_processor'
+]
