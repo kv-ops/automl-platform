@@ -23,7 +23,7 @@ import pyarrow.parquet as pq
 import time
 
 # Métriques Prometheus
-from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
 
 # Storage backends
 try:
@@ -46,48 +46,58 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Déclaration des métriques Prometheus
+# Créer un registre local pour les métriques du feature store
+feature_store_registry = CollectorRegistry()
+
+# Déclaration des métriques Prometheus avec le registre local
 ml_feature_store_operations_total = Counter(
     'ml_feature_store_operations_total',
     'Total number of feature store operations',
-    ['tenant_id', 'operation', 'feature_set']  # operation: read, write, compute
+    ['tenant_id', 'operation', 'feature_set'],  # operation: read, write, compute
+    registry=feature_store_registry
 )
 
 ml_feature_store_latency_seconds = Histogram(
     'ml_feature_store_latency_seconds',
     'Feature store operation latency in seconds',
     ['tenant_id', 'operation', 'backend'],  # backend: local, redis, s3, minio
-    buckets=(0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0)
+    buckets=(0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0),
+    registry=feature_store_registry
 )
 
 ml_feature_store_size_bytes = Gauge(
     'ml_feature_store_size_bytes',
     'Total size of feature store in bytes',
-    ['tenant_id', 'feature_set']
+    ['tenant_id', 'feature_set'],
+    registry=feature_store_registry
 )
 
 ml_feature_store_cache_hits = Counter(
     'ml_feature_store_cache_hits',
     'Number of cache hits',
-    ['tenant_id', 'feature_set']
+    ['tenant_id', 'feature_set'],
+    registry=feature_store_registry
 )
 
 ml_feature_store_cache_misses = Counter(
     'ml_feature_store_cache_misses',
     'Number of cache misses',
-    ['tenant_id', 'feature_set']
+    ['tenant_id', 'feature_set'],
+    registry=feature_store_registry
 )
 
 ml_feature_store_errors_total = Counter(
     'ml_feature_store_errors_total',
     'Total number of feature store errors',
-    ['tenant_id', 'operation', 'error_type']
+    ['tenant_id', 'operation', 'error_type'],
+    registry=feature_store_registry
 )
 
 ml_feature_store_features_count = Gauge(
     'ml_feature_store_features_count',
     'Number of features per feature set',
-    ['tenant_id', 'feature_set']
+    ['tenant_id', 'feature_set'],
+    registry=feature_store_registry
 )
 
 
@@ -491,14 +501,18 @@ class FeatureStore:
                 self._update_online_store(feature_set_name, data, tenant_id)
             
             # Update size gauge
-            current_size = ml_feature_store_size_bytes.labels(
-                tenant_id=tenant_id,
-                feature_set=feature_set_name
-            )._value.get()
+            current_size = ml_feature_store_size_bytes._metrics.get(
+                tuple(sorted([('tenant_id', tenant_id), ('feature_set', feature_set_name)]))
+            )
+            if current_size:
+                current_value = current_size._value.get()
+            else:
+                current_value = 0
+            
             ml_feature_store_size_bytes.labels(
                 tenant_id=tenant_id,
                 feature_set=feature_set_name
-            ).set((current_size or 0) + data_size)
+            ).set(current_value + data_size)
             
             # Invalidate cache
             self._invalidate_cache(feature_set_name)
@@ -899,79 +913,79 @@ class FeatureStore:
         return df
 
 
-# Example usage
-def main():
-    """Example feature store usage with metrics."""
+# FastAPI router for feature store
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from typing import Optional
+
+feature_store_router = APIRouter(prefix="/feature-store", tags=["feature-store"])
+
+# Global feature store instance (initialized in api.py)
+_feature_store = None
+
+def get_feature_store():
+    """Get feature store instance."""
+    global _feature_store
+    if _feature_store is None:
+        config = {
+            "backend": "local",
+            "base_path": "./feature_store",
+            "cache_enabled": True,
+            "cache_ttl": 3600,
+            "redis_enabled": False,
+            "default_tenant_id": "default"
+        }
+        _feature_store = FeatureStore(config)
+    return _feature_store
+
+class FeatureSetRequest(BaseModel):
+    name: str
+    description: str
+    features: List[Dict[str, Any]]
+    entity_key: str = "entity_id"
+    timestamp_key: str = "timestamp"
+    tenant_id: str = "default"
+
+@feature_store_router.post("/register")
+async def register_feature_set(request: FeatureSetRequest):
+    """Register a new feature set."""
+    store = get_feature_store()
     
-    # Configure feature store
-    config = {
-        "backend": "local",
-        "base_path": "./feature_store",
-        "cache_enabled": True,
-        "cache_ttl": 3600,
-        "redis_enabled": False,
-        "default_tenant_id": "production"
-    }
+    # Create feature definitions
+    features = []
+    for f in request.features:
+        features.append(FeatureDefinition(
+            name=f["name"],
+            dtype=f.get("dtype", "float"),
+            description=f.get("description", "")
+        ))
     
-    # Create feature store
-    store = FeatureStore(config)
-    
-    # Define features
-    user_features = FeatureSet(
-        name="user_features",
-        description="User demographic and behavioral features",
-        features=[
-            FeatureDefinition(
-                name="age",
-                dtype="int",
-                description="User age"
-            ),
-            FeatureDefinition(
-                name="total_purchases",
-                dtype="float",
-                description="Total purchase amount"
-            ),
-            FeatureDefinition(
-                name="days_since_signup",
-                dtype="int",
-                description="Days since user signup"
-            )
-        ],
-        entity_key="user_id",
-        timestamp_key="timestamp",
-        tenant_id="production"
+    # Create feature set
+    feature_set = FeatureSet(
+        name=request.name,
+        description=request.description,
+        features=features,
+        entity_key=request.entity_key,
+        timestamp_key=request.timestamp_key,
+        tenant_id=request.tenant_id
     )
     
-    # Register feature set
-    store.register_feature_set(user_features)
+    success = store.register_feature_set(feature_set)
     
-    # Create sample data
-    data = pd.DataFrame({
-        "user_id": ["u1", "u2", "u3"],
-        "age": [25, 30, 35],
-        "total_purchases": [100.0, 250.0, 500.0],
-        "days_since_signup": [30, 60, 90],
-        "timestamp": [datetime.now()] * 3
-    })
-    
-    # Write features (metrics will be collected automatically)
-    store.write_features("user_features", data, tenant_id="production")
-    
-    # Read features (metrics will be collected automatically)
-    features = store.read_features(
-        feature_names=["age", "total_purchases"],
-        entity_ids=["u1", "u2"],
-        tenant_id="production"
-    )
-    
-    print("Retrieved features:")
-    print(features)
-    
-    # Compute statistics (metrics will be collected automatically)
-    stats = store.compute_statistics("user_features", tenant_id="production")
-    print("\nFeature statistics:")
-    print(json.dumps(stats, indent=2, default=str))
+    if success:
+        return {"status": "success", "feature_set": request.name}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to register feature set"
+        )
+
+@feature_store_router.get("/list")
+async def list_feature_sets():
+    """List all feature sets."""
+    store = get_feature_store()
+    return {"feature_sets": store.list_feature_sets()}
 
 
-if __name__ == "__main__":
-    main()
+# Export the registry and router so they can be imported by api.py
+__all__ = ['feature_store_registry', 'FeatureStore', 'FeatureSet', 'FeatureDefinition', 'feature_store_router']
