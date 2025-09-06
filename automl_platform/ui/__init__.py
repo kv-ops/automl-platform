@@ -15,78 +15,95 @@ __version__ = "1.0.0"
 __author__ = "AutoML Platform Team"
 
 # ============================================================================
-# Metrics imports and initialization
+# Metrics imports from ui_metrics.py
 # ============================================================================
 
 try:
-    from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
+    from .ui_metrics import (
+        # Metrics
+        ml_ui_sessions_total,
+        ml_ui_page_views_total,
+        ml_ui_api_calls_total,
+        ml_ui_response_time_seconds,
+        ml_ui_errors_total,
+        ml_ui_feature_usage,
+        
+        # Helper class
+        UIMetrics,
+        UISession,
+        
+        # Helper functions
+        track_streamlit_page,
+        track_streamlit_action
+    )
+    from prometheus_client import CollectorRegistry
     import time
+    
     METRICS_AVAILABLE = True
     
-    # Create a registry for UI metrics
+    # Create a registry for UI metrics (the metrics are already registered in ui_metrics.py)
     ui_registry = CollectorRegistry()
     
-    # Define UI metrics
-    ml_ui_sessions_total = Counter(
-        'ml_ui_sessions_total',
-        'Total number of UI sessions started',
-        ['page', 'user_type'],
-        registry=ui_registry
-    )
+    # Register existing metrics to our custom registry if needed
+    # Note: The metrics are already created in ui_metrics.py with the default registry
+    # We'll keep ui_registry for compatibility with the API's metrics collection
     
-    ml_ui_response_time_seconds = Histogram(
-        'ml_ui_response_time_seconds',
-        'UI response time in seconds',
-        ['component', 'action'],
-        buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
-        registry=ui_registry
-    )
-    
-    ml_ui_page_views_total = Counter(
-        'ml_ui_page_views_total',
-        'Total number of page views',
-        ['page', 'source'],
-        registry=ui_registry
-    )
-    
-    ml_ui_api_calls_total = Counter(
-        'ml_ui_api_calls_total',
-        'Total number of API calls from UI',
-        ['endpoint', 'method', 'status'],
-        registry=ui_registry
-    )
-    
-    ml_ui_active_users = Gauge(
-        'ml_ui_active_users',
-        'Number of active UI users',
-        ['page'],
-        registry=ui_registry
-    )
-    
-    ml_ui_component_renders_total = Counter(
-        'ml_ui_component_renders_total',
-        'Total number of component renders',
-        ['component', 'status'],
-        registry=ui_registry
-    )
-    
-    ml_ui_errors_total = Counter(
-        'ml_ui_errors_total',
-        'Total number of UI errors',
-        ['component', 'error_type'],
-        registry=ui_registry
-    )
-    
-except ImportError:
+except ImportError as e:
     METRICS_AVAILABLE = False
     ui_registry = None
     ml_ui_sessions_total = None
-    ml_ui_response_time_seconds = None
     ml_ui_page_views_total = None
     ml_ui_api_calls_total = None
-    ml_ui_active_users = None
-    ml_ui_component_renders_total = None
+    ml_ui_response_time_seconds = None
     ml_ui_errors_total = None
+    ml_ui_feature_usage = None
+    UIMetrics = None
+    UISession = None
+    track_streamlit_page = None
+    track_streamlit_action = None
+
+# ============================================================================
+# Additional metrics tracking functions (wrapper functions for compatibility)
+# ============================================================================
+
+def track_ui_response_time(component, action):
+    """Decorator to track UI response time (wrapper for UIMetrics)."""
+    def decorator(func):
+        if METRICS_AVAILABLE and UIMetrics:
+            metrics = UIMetrics()
+            return metrics.measure_response_time(component, action)(func)
+        else:
+            return func
+    return decorator
+
+def track_page_view(page, source="direct", tenant_id="default", user_role="user"):
+    """Track a page view in the UI (wrapper function)."""
+    if METRICS_AVAILABLE and track_streamlit_page:
+        track_streamlit_page(page, tenant_id, user_role)
+
+def track_api_call(endpoint, method, status, tenant_id="default"):
+    """Track an API call from the UI (wrapper function)."""
+    if METRICS_AVAILABLE and UIMetrics:
+        metrics = UIMetrics(tenant_id)
+        metrics.track_api_call(endpoint, method)
+
+def track_component_render(component, status="success", tenant_id="default"):
+    """Track a component render (wrapper function)."""
+    if METRICS_AVAILABLE and track_streamlit_action:
+        track_streamlit_action(f"{component}_render", status, tenant_id)
+
+def start_ui_session(page="main", user_type="standard", tenant_id="default"):
+    """Track the start of a UI session (wrapper function)."""
+    if METRICS_AVAILABLE and UIMetrics:
+        metrics = UIMetrics(tenant_id, user_type)
+        metrics.increment_session()
+        track_streamlit_page(page, tenant_id, user_type)
+
+def end_ui_session(page="main", tenant_id="default", user_role="user"):
+    """Track the end of a UI session (wrapper function)."""
+    if METRICS_AVAILABLE and UIMetrics:
+        metrics = UIMetrics(tenant_id, user_role)
+        metrics.decrement_session()
 
 # ============================================================================
 # Conditional imports to handle optional dependencies
@@ -192,70 +209,6 @@ else:
     AutoMLDashboard = None
 
 # ============================================================================
-# Metrics tracking decorators and functions
-# ============================================================================
-
-def track_ui_response_time(component, action):
-    """Decorator to track UI response time."""
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            if METRICS_AVAILABLE and ml_ui_response_time_seconds:
-                start_time = time.time()
-                try:
-                    result = func(*args, **kwargs)
-                    ml_ui_response_time_seconds.labels(
-                        component=component,
-                        action=action
-                    ).observe(time.time() - start_time)
-                    return result
-                except Exception as e:
-                    if ml_ui_errors_total:
-                        ml_ui_errors_total.labels(
-                            component=component,
-                            error_type=type(e).__name__
-                        ).inc()
-                    raise
-            else:
-                return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
-def track_page_view(page, source="direct"):
-    """Track a page view in the UI."""
-    if METRICS_AVAILABLE and ml_ui_page_views_total:
-        ml_ui_page_views_total.labels(page=page, source=source).inc()
-
-def track_api_call(endpoint, method, status):
-    """Track an API call from the UI."""
-    if METRICS_AVAILABLE and ml_ui_api_calls_total:
-        ml_ui_api_calls_total.labels(
-            endpoint=endpoint,
-            method=method,
-            status=status
-        ).inc()
-
-def track_component_render(component, status="success"):
-    """Track a component render."""
-    if METRICS_AVAILABLE and ml_ui_component_renders_total:
-        ml_ui_component_renders_total.labels(
-            component=component,
-            status=status
-        ).inc()
-
-def start_ui_session(page="main", user_type="standard"):
-    """Track the start of a UI session."""
-    if METRICS_AVAILABLE:
-        if ml_ui_sessions_total:
-            ml_ui_sessions_total.labels(page=page, user_type=user_type).inc()
-        if ml_ui_active_users:
-            ml_ui_active_users.labels(page=page).inc()
-
-def end_ui_session(page="main"):
-    """Track the end of a UI session."""
-    if METRICS_AVAILABLE and ml_ui_active_users:
-        ml_ui_active_users.labels(page=page).dec()
-
-# ============================================================================
 # Dynamically build __all__ based on available components
 # ============================================================================
 
@@ -277,16 +230,19 @@ def _build_all_list():
         all_list.extend([
             "ui_registry",
             "ml_ui_sessions_total",
-            "ml_ui_response_time_seconds",
             "ml_ui_page_views_total",
             "ml_ui_api_calls_total",
-            "ml_ui_active_users",
-            "ml_ui_component_renders_total",
+            "ml_ui_response_time_seconds",
             "ml_ui_errors_total",
+            "ml_ui_feature_usage",
+            "UIMetrics",
+            "UISession",
             "track_ui_response_time",
             "track_page_view",
             "track_api_call",
             "track_component_render",
+            "track_streamlit_page",
+            "track_streamlit_action",
             "start_ui_session",
             "end_ui_session"
         ])
@@ -393,6 +349,12 @@ def check_ui_dependencies():
     except ImportError:
         dependencies["sklearn"] = False
     
+    try:
+        import prometheus_client
+        dependencies["prometheus_client"] = True
+    except ImportError:
+        dependencies["prometheus_client"] = False
+    
     return dependencies
 
 
@@ -421,7 +383,8 @@ def get_ui_status():
             "custom_metrics": CustomMetrics is not None
         },
         "dashboard_available": DASHBOARD_AVAILABLE,
-        "metrics_enabled": METRICS_AVAILABLE
+        "metrics_enabled": METRICS_AVAILABLE,
+        "metrics_module": UIMetrics is not None
     }
     
     # Calculate overall readiness
@@ -466,8 +429,11 @@ def launch_dashboard(config=None, **kwargs):
         )
     
     # Track dashboard launch
-    start_ui_session(page="dashboard", user_type="admin")
-    track_page_view("dashboard", "launch")
+    tenant_id = kwargs.get('tenant_id', 'default')
+    user_type = kwargs.get('user_type', 'admin')
+    
+    start_ui_session(page="dashboard", user_type=user_type, tenant_id=tenant_id)
+    track_page_view("dashboard", "launch", tenant_id, user_type)
     
     # Import here to avoid issues if streamlit is not installed
     import sys
@@ -498,7 +464,8 @@ def launch_dashboard(config=None, **kwargs):
     
     # Add any additional arguments
     for key, value in kwargs.items():
-        cmd.extend([f"--{key}", str(value)])
+        if key not in ['tenant_id', 'user_type']:  # Skip already used kwargs
+            cmd.extend([f"--{key}", str(value)])
     
     # Launch the dashboard
     print(f"Launching AutoML Dashboard...")
@@ -510,13 +477,14 @@ def launch_dashboard(config=None, **kwargs):
         print(f"Error launching dashboard: {e}")
         if METRICS_AVAILABLE and ml_ui_errors_total:
             ml_ui_errors_total.labels(
-                component="dashboard",
-                error_type="LaunchError"
+                tenant_id=tenant_id,
+                error_type="LaunchError",
+                page="dashboard"
             ).inc()
         raise
     except KeyboardInterrupt:
         print("\nDashboard stopped by user")
-        end_ui_session(page="dashboard")
+        end_ui_session(page="dashboard", tenant_id=tenant_id)
 
 
 # ============================================================================
@@ -524,7 +492,7 @@ def launch_dashboard(config=None, **kwargs):
 # ============================================================================
 
 @track_ui_response_time("data_quality_visualizer", "create")
-def create_data_quality_visualizer():
+def create_data_quality_visualizer(tenant_id="default"):
     """
     Factory function to create a DataQualityVisualizer instance.
     
@@ -534,12 +502,12 @@ def create_data_quality_visualizer():
     if not COMPONENTS_AVAILABLE:
         raise ImportError("UI components are not available. Install required dependencies.")
     
-    track_component_render("data_quality_visualizer")
+    track_component_render("data_quality_visualizer", tenant_id=tenant_id)
     return DataQualityVisualizer()
 
 
 @track_ui_response_time("model_leaderboard", "create")
-def create_model_leaderboard():
+def create_model_leaderboard(tenant_id="default"):
     """
     Factory function to create a ModelLeaderboard instance.
     
@@ -549,12 +517,12 @@ def create_model_leaderboard():
     if not COMPONENTS_AVAILABLE:
         raise ImportError("UI components are not available. Install required dependencies.")
     
-    track_component_render("model_leaderboard")
+    track_component_render("model_leaderboard", tenant_id=tenant_id)
     return ModelLeaderboard()
 
 
 @track_ui_response_time("chat_interface", "create")
-def create_chat_interface():
+def create_chat_interface(tenant_id="default"):
     """
     Factory function to create a ChatInterface instance.
     
@@ -564,7 +532,7 @@ def create_chat_interface():
     if not COMPONENTS_AVAILABLE:
         raise ImportError("UI components are not available. Install required dependencies.")
     
-    track_component_render("chat_interface")
+    track_component_render("chat_interface", tenant_id=tenant_id)
     return ChatInterface()
 
 
@@ -580,7 +548,7 @@ if STREAMLIT_AVAILABLE and PLOTLY_AVAILABLE:
     if COMPONENTS_AVAILABLE:
         logger.info(f"AutoML UI module v{__version__} loaded successfully with all components")
         if METRICS_AVAILABLE:
-            logger.info("UI metrics collection enabled")
+            logger.info("UI metrics collection enabled via ui_metrics.py")
     else:
         logger.warning("AutoML UI module loaded but some components are unavailable")
 else:
@@ -617,6 +585,7 @@ if __name__ == "__main__":
     
     if METRICS_AVAILABLE:
         print("\nMetrics collection: Enabled")
+        print("  Using: ui_metrics.py module")
     
     if DASHBOARD_AVAILABLE:
         print("\nTo launch the dashboard, run:")
