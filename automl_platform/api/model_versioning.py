@@ -1,6 +1,7 @@
 """
 Module de gestion des versions de modèles pour AutoML Platform
 Gère le versioning sémantique, les rollbacks, et l'historique des modèles
+WITH PROMETHEUS METRICS INTEGRATION
 Place dans: automl_platform/api/model_versioning.py
 """
 
@@ -21,6 +22,9 @@ import time
 import asyncio
 from scipy import stats
 
+# Métriques Prometheus
+from prometheus_client import Counter, Histogram, Gauge
+
 # Imports depuis la structure du projet (niveau parent)
 import sys
 from pathlib import Path
@@ -34,6 +38,57 @@ from infrastructure import TenantManager, SecurityManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Déclaration des métriques Prometheus
+ml_model_versions_total = Gauge(
+    'ml_model_versions_total',
+    'Total number of model versions',
+    ['tenant_id', 'model_id', 'status']  # status: development, staging, production, archived
+)
+
+ml_model_promotions_total = Counter(
+    'ml_model_promotions_total',
+    'Total number of model promotions',
+    ['tenant_id', 'from_status', 'to_status', 'strategy']
+)
+
+ml_model_rollbacks_total = Counter(
+    'ml_model_rollbacks_total',
+    'Total number of model rollbacks',
+    ['tenant_id', 'reason']
+)
+
+ml_model_version_comparison_latency_seconds = Histogram(
+    'ml_model_version_comparison_latency_seconds',
+    'Time to compare model versions',
+    ['tenant_id'],
+    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0)
+)
+
+ml_model_ab_tests_active = Gauge(
+    'ml_model_ab_tests_active',
+    'Number of active A/B tests',
+    ['tenant_id']
+)
+
+ml_model_version_operations_total = Counter(
+    'ml_model_version_operations_total',
+    'Total version operations',
+    ['tenant_id', 'operation']  # create, delete, cleanup
+)
+
+ml_model_version_size_bytes = Gauge(
+    'ml_model_version_size_bytes',
+    'Size of model versions in bytes',
+    ['tenant_id', 'model_id', 'version']
+)
+
+ml_model_deployment_latency_seconds = Histogram(
+    'ml_model_deployment_latency_seconds',
+    'Model deployment latency',
+    ['tenant_id', 'strategy'],
+    buckets=(1.0, 5.0, 10.0, 30.0, 60.0, 300.0)
+)
 
 
 class VersionStatus(str, Enum):
@@ -174,7 +229,7 @@ class VersionComparison:
 
 
 class ModelVersionManager:
-    """Gestionnaire principal des versions de modèles avec intégration complète"""
+    """Gestionnaire principal des versions de modèles avec métriques Prometheus"""
     
     def __init__(self, config: AutoMLConfig = None):
         self.config = config or AutoMLConfig()
@@ -212,6 +267,9 @@ class ModelVersionManager:
         
         # Monitors actifs par modèle
         self.active_monitors: Dict[str, ModelMonitor] = {}
+        
+        # Initialiser les métriques de versions existantes
+        self._init_version_metrics()
     
     def _get_encryption_key(self) -> Optional[bytes]:
         """Récupère la clé d'encryption pour le tenant"""
@@ -320,13 +378,58 @@ class ModelVersionManager:
         conn.commit()
         conn.close()
     
+    def _init_version_metrics(self):
+        """Initialise les métriques Gauge pour les versions existantes"""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
+            
+            # Compter les versions par statut
+            cursor.execute("""
+                SELECT tenant_id, model_id, status, COUNT(*) as count
+                FROM model_versions
+                GROUP BY tenant_id, model_id, status
+            """)
+            
+            for row in cursor.fetchall():
+                tenant_id, model_id, status, count = row
+                ml_model_versions_total.labels(
+                    tenant_id=tenant_id,
+                    model_id=model_id,
+                    status=status
+                ).set(count)
+            
+            # Compter les tests A/B actifs
+            cursor.execute("""
+                SELECT tenant_id, COUNT(*) as count
+                FROM ab_tests
+                WHERE ended_at IS NULL
+                GROUP BY tenant_id
+            """)
+            
+            for row in cursor.fetchall():
+                tenant_id, count = row
+                ml_model_ab_tests_active.labels(tenant_id=tenant_id).set(count)
+            
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error initializing version metrics: {e}")
+    
     def create_version(self, 
                       model_id: str,
                       model_object: Any,
                       version_number: Optional[str] = None,
                       tenant_id: str = "default",
                       metadata: Optional[Dict[str, Any]] = None) -> ModelVersion:
-        """Crée une nouvelle version avec vérification des quotas"""
+        """Crée une nouvelle version avec métriques"""
+        
+        start_time = time.time()
+        
+        # Incrémenter le compteur d'opérations
+        ml_model_version_operations_total.labels(
+            tenant_id=tenant_id,
+            operation='create'
+        ).inc()
         
         # Vérification des quotas tenant
         tenant_config = self.tenant_manager.get_tenant(tenant_id)
@@ -361,8 +464,16 @@ class ModelVersionManager:
         
         # Calcul de la taille de stockage
         import sys
-        model_size_mb = sys.getsizeof(pickle.dumps(model_object)) / (1024 * 1024)
+        model_size_bytes = sys.getsizeof(pickle.dumps(model_object))
+        model_size_mb = model_size_bytes / (1024 * 1024)
         model_version.storage_mb_used = model_size_mb
+        
+        # Mettre à jour la métrique de taille
+        ml_model_version_size_bytes.labels(
+            tenant_id=tenant_id,
+            model_id=model_id,
+            version=version_number
+        ).set(model_size_bytes)
         
         # Sauvegarde du modèle via StorageManager
         try:
@@ -413,92 +524,21 @@ class ModelVersionManager:
                     storage=int(model_size_mb)
                 )
             
+            # Mettre à jour le compteur de versions
+            self._update_version_count_metric(tenant_id, model_id)
+            
             logger.info(f"Version créée: {model_id} v{version_number} pour tenant {tenant_id}")
             return model_version
             
         except Exception as e:
             logger.error(f"Erreur lors de la création de la version: {e}")
             raise
-    
-    def get_version(self, 
-                   model_id: str, 
-                   version_number: str = "latest",
-                   tenant_id: str = "default") -> Optional[ModelVersion]:
-        """Récupère une version avec vérification des permissions"""
-        
-        # Vérification des permissions tenant
-        if not self._check_tenant_access(tenant_id, model_id):
-            logger.warning(f"Accès refusé au modèle {model_id} pour tenant {tenant_id}")
-            return None
-        
-        # Si "latest", trouver la dernière version
-        if version_number == "latest":
-            version_number = self._get_latest_version(model_id, tenant_id)
-            if not version_number:
-                return None
-        
-        # Vérification du cache
-        cache_key = f"{tenant_id}:{model_id}:{version_number}"
-        if cache_key in self.version_cache:
-            return self.version_cache[cache_key]
-        
-        # Chargement depuis la base de données
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT metadata FROM model_versions
-            WHERE model_id = ? AND version = ? AND tenant_id = ?
-        """, (model_id, version_number, tenant_id))
-        
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
-            metadata = json.loads(result[0])
-            model_version = ModelVersion.from_dict(metadata)
-            self.version_cache[cache_key] = model_version
-            return model_version
-        
-        return None
-    
-    def list_versions(self, 
-                     model_id: str,
-                     tenant_id: str = "default",
-                     status_filter: Optional[VersionStatus] = None,
-                     include_metrics: bool = True) -> List[ModelVersion]:
-        """Liste les versions avec métriques optionnelles"""
-        
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        query = """
-            SELECT metadata, metrics FROM model_versions
-            WHERE model_id = ? AND tenant_id = ?
-        """
-        params = [model_id, tenant_id]
-        
-        if status_filter:
-            query += " AND JSON_EXTRACT(metadata, '$.status') = ?"
-            params.append(status_filter.value)
-        
-        query += " ORDER BY created_at DESC"
-        
-        cursor.execute(query, params)
-        results = cursor.fetchall()
-        conn.close()
-        
-        versions = []
-        for result in results:
-            metadata = json.loads(result[0])
-            version_obj = ModelVersion.from_dict(metadata)
-            
-            if include_metrics and result[1]:
-                version_obj.metrics = json.loads(result[1])
-            
-            versions.append(version_obj)
-        
-        return versions
+        finally:
+            # Enregistrer la latence d'opération
+            ml_model_deployment_latency_seconds.labels(
+                tenant_id=tenant_id,
+                strategy='create'
+            ).observe(time.time() - start_time)
     
     def promote_version(self,
                        model_id: str,
@@ -509,7 +549,9 @@ class ModelVersionManager:
                        promoted_by: Optional[str] = None,
                        reason: Optional[str] = None,
                        config: Optional[Dict[str, Any]] = None) -> bool:
-        """Promeut une version avec stratégie configurable"""
+        """Promeut une version avec métriques"""
+        
+        start_time = time.time()
         
         # Récupération de la version
         model_version = self.get_version(model_id, version_number, tenant_id)
@@ -536,7 +578,7 @@ class ModelVersionManager:
         
         try:
             # Mesure du temps de promotion
-            start_time = time.time()
+            from_status = model_version.status
             
             # Sauvegarde de l'historique
             self._save_promotion_history(
@@ -564,12 +606,23 @@ class ModelVersionManager:
                 # Sauvegarde
                 self._save_version_to_db(model_version)
                 
+                # Incrémenter le compteur de promotions
+                ml_model_promotions_total.labels(
+                    tenant_id=tenant_id,
+                    from_status=from_status.value,
+                    to_status=target_status.value,
+                    strategy=strategy.value
+                ).inc()
+                
                 # Si promotion en production, archiver l'ancienne version
                 if target_status == VersionStatus.PRODUCTION:
                     self._archive_old_production_version(model_id, tenant_id, version_number)
                     
                     # Démarrer le monitoring de production
                     self._start_production_monitoring(model_version)
+                
+                # Mettre à jour les métriques de versions
+                self._update_version_count_metric(tenant_id, model_id)
                 
                 logger.info(f"Version {model_id} v{version_number} promue de {old_status} vers {target_status}")
                 return True
@@ -579,329 +632,300 @@ class ModelVersionManager:
         except Exception as e:
             logger.error(f"Erreur lors de la promotion: {e}")
             return False
+        finally:
+            # Enregistrer la latence de déploiement
+            ml_model_deployment_latency_seconds.labels(
+                tenant_id=tenant_id,
+                strategy=strategy.value
+            ).observe(time.time() - start_time)
     
-    def _validate_promotion(self, model_version: ModelVersion, target_status: VersionStatus) -> bool:
-        """Valide qu'une promotion est autorisée avec règles étendues"""
-        
-        # Règles de promotion standards
-        allowed_transitions = {
-            VersionStatus.DEVELOPMENT: [VersionStatus.STAGING, VersionStatus.ARCHIVED, VersionStatus.AB_TESTING],
-            VersionStatus.STAGING: [VersionStatus.PRODUCTION, VersionStatus.DEVELOPMENT, VersionStatus.ARCHIVED, VersionStatus.AB_TESTING],
-            VersionStatus.PRODUCTION: [VersionStatus.ARCHIVED, VersionStatus.DEPRECATED],
-            VersionStatus.ARCHIVED: [VersionStatus.DEVELOPMENT],
-            VersionStatus.DEPRECATED: [],
-            VersionStatus.FAILED: [VersionStatus.ARCHIVED],
-            VersionStatus.AB_TESTING: [VersionStatus.PRODUCTION, VersionStatus.STAGING, VersionStatus.ARCHIVED]
-        }
-        
-        # Vérification des métriques minimales pour production
-        if target_status == VersionStatus.PRODUCTION:
-            if not model_version.metrics:
-                logger.warning("Pas de métriques disponibles pour promotion en production")
-                return False
-            
-            # Seuils minimaux selon le type de modèle
-            if model_version.model_type == "classification":
-                min_accuracy = self.config.min_accuracy
-                if model_version.metrics.get('accuracy', 0) < min_accuracy:
-                    logger.warning(f"Accuracy ({model_version.metrics.get('accuracy')}) < seuil minimum ({min_accuracy})")
-                    return False
-            else:  # regression
-                min_r2 = self.config.min_r2
-                if model_version.metrics.get('r2', -float('inf')) < min_r2:
-                    logger.warning(f"R2 ({model_version.metrics.get('r2')}) < seuil minimum ({min_r2})")
-                    return False
-        
-        return target_status in allowed_transitions.get(model_version.status, [])
-    
-    def _manual_promotion(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Promotion manuelle avec validation basique"""
-        if not model_version.metrics:
-            logger.warning("Aucune métrique disponible pour la promotion")
-        
-        # Vérification optionnelle du drift
-        if config.get('check_drift', False):
-            if model_version.drift_detected:
-                logger.warning("Drift détecté sur le modèle")
-                if not config.get('force', False):
-                    return False
-        
-        return True
-    
-    def _auto_threshold_promotion(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Promotion automatique basée sur des seuils configurables"""
-        
-        # Récupération des seuils depuis config ou valeurs par défaut
-        thresholds = config.get('thresholds', {})
-        if not thresholds:
-            thresholds = {
-                VersionStatus.STAGING: {
-                    "accuracy": 0.8,
-                    "f1": 0.75,
-                    "auc": 0.75
-                },
-                VersionStatus.PRODUCTION: {
-                    "accuracy": 0.85,
-                    "f1": 0.80,
-                    "auc": 0.85
-                }
-            }
-        
-        required_metrics = thresholds.get(target_status, {})
-        
-        # Vérification des seuils
-        for metric_name, threshold in required_metrics.items():
-            if metric_name not in model_version.metrics:
-                logger.warning(f"Métrique {metric_name} manquante")
-                return False
-            
-            if model_version.metrics[metric_name] < threshold:
-                logger.warning(f"Métrique {metric_name} ({model_version.metrics[metric_name]}) "
-                             f"en dessous du seuil ({threshold})")
-                return False
-        
-        return True
-    
-    def _auto_improvement_promotion(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Promotion si amélioration significative par rapport à la version actuelle"""
-        
-        # Récupération de la version actuelle en production
-        current_prod = self._get_current_production_version(model_version.model_id, model_version.tenant_id)
-        
-        if not current_prod:
-            # Pas de version en production, promotion automatique
-            return True
-        
-        # Comparaison des versions
-        comparison = self.compare_versions(
-            model_version.model_id,
-            current_prod.version,
-            model_version.version,
-            model_version.tenant_id
-        )
-        
-        # Seuil d'amélioration requis (configurable)
-        min_improvement = config.get('min_improvement', 0.05)  # 5% par défaut
-        
-        if comparison.improvement_rate < min_improvement:
-            logger.warning(f"Amélioration insuffisante: {comparison.improvement_rate:.2%} < {min_improvement:.2%}")
-            return False
-        
-        return comparison.is_significantly_better
-    
-    def _blue_green_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Déploiement blue-green avec bascule instantanée et rollback automatique"""
-        
-        if target_status != VersionStatus.PRODUCTION:
-            return self._manual_promotion(model_version, target_status, config)
+    def rollback_version(self,
+                        model_id: str,
+                        target_version: str,
+                        tenant_id: str = "default",
+                        reason: Optional[str] = None,
+                        rolled_by: Optional[str] = None) -> bool:
+        """Rollback avec métriques"""
         
         try:
-            # Préparation de l'environnement "green"
-            logger.info(f"Préparation environnement green pour {model_version.model_id}")
+            # Récupération de la version actuelle en production
+            current_prod = self._get_current_production_version(model_id, tenant_id)
+            if not current_prod:
+                logger.error("Aucune version en production à rollback")
+                return False
             
-            # Configuration du déploiement
-            model_version.deployment_config = {
-                "strategy": "blue_green",
-                "environment": "green",
-                "ready_for_switch": False,
-                "health_check_url": config.get('health_check_url'),
-                "rollback_threshold": config.get('rollback_threshold', 0.1)
-            }
+            # Récupération de la version cible
+            target = self.get_version(model_id, target_version, tenant_id)
+            if not target:
+                logger.error(f"Version cible non trouvée: {target_version}")
+                return False
             
-            # Déploiement en parallèle (utilise le DeploymentManager de infrastructure.py)
-            from infrastructure import DeploymentManager
-            deployment_manager = DeploymentManager(self.tenant_manager)
+            # Capture des métriques avant rollback
+            metrics_before = current_prod.metrics.copy()
             
-            if self.config.storage.backend == "local":
-                # Déploiement Docker local
-                container_id = deployment_manager.deploy_model_docker(
-                    model_version.tenant_id,
-                    model_version.model_path,
-                    port=8001  # Port green
-                )
-                model_version.container_id = container_id
-            else:
-                # Déploiement Kubernetes
-                deployment_name = deployment_manager.deploy_model_kubernetes(
-                    model_version.tenant_id,
-                    model_version.model_path,
-                    replicas=config.get('replicas', 3)
-                )
-                model_version.container_id = deployment_name
+            # Sauvegarde de l'historique de rollback
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
             
-            # Tests de santé et monitoring initial
-            if self._health_check(model_version):
-                # Monitoring pendant la période de test
-                test_duration = config.get('test_duration_seconds', 300)  # 5 minutes par défaut
-                time.sleep(test_duration)
-                
-                # Vérification des métriques pendant le test
-                if self._check_deployment_metrics(model_version, config):
-                    # Bascule blue -> green
-                    model_version.deployment_config["ready_for_switch"] = True
-                    model_version.deployment_config["environment"] = "blue"  # Maintenant en production
-                    logger.info("Bascule blue -> green effectuée avec succès")
-                    return True
-                else:
-                    # Rollback automatique
-                    logger.warning("Métriques dégradées, rollback automatique")
-                    self._cleanup_deployment(model_version)
-                    return False
+            cursor.execute("""
+                INSERT INTO rollback_history 
+                (model_id, from_version, to_version, tenant_id, rolled_back_at, rolled_back_by, reason, metrics_before)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                model_id,
+                current_prod.version,
+                target_version,
+                tenant_id,
+                datetime.now(),
+                rolled_by,
+                reason,
+                json.dumps(metrics_before)
+            ))
             
-            return False
+            conn.commit()
             
-        except Exception as e:
-            logger.error(f"Erreur déploiement blue-green: {e}")
-            self._cleanup_deployment(model_version)
-            return False
-    
-    def _canary_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Déploiement progressif canary avec monitoring continu"""
-        
-        if target_status != VersionStatus.PRODUCTION:
-            return self._manual_promotion(model_version, target_status, config)
-        
-        try:
-            # Configuration canary
-            canary_config = {
-                "strategy": "canary",
-                "initial_traffic": config.get('initial_traffic', 5),  # 5% du trafic initial
-                "increment": config.get('increment', 10),  # Augmentation de 10% à chaque étape
-                "error_threshold": config.get('error_threshold', 0.01),  # 1% d'erreurs max
-                "rollback_on_error": config.get('rollback_on_error', True),
-                "monitoring_interval": config.get('monitoring_interval', 60)  # secondes
-            }
+            # Incrémenter le compteur de rollbacks
+            ml_model_rollbacks_total.labels(
+                tenant_id=tenant_id,
+                reason=reason or 'manual'
+            ).inc()
             
-            model_version.deployment_config = canary_config
+            # Effectuer le rollback
+            current_prod.status = VersionStatus.ARCHIVED
+            target.status = VersionStatus.PRODUCTION
             
-            # Déploiement initial avec trafic minimal
-            from infrastructure import DeploymentManager
-            deployment_manager = DeploymentManager(self.tenant_manager)
+            # Nettoyer le déploiement actuel
+            self._cleanup_deployment(current_prod)
             
-            if self.config.storage.backend == "local":
-                container_id = deployment_manager.deploy_model_docker(
-                    model_version.tenant_id,
-                    model_version.model_path,
-                    port=8002
-                )
-                model_version.container_id = container_id
-            else:
-                deployment_name = deployment_manager.deploy_model_kubernetes(
-                    model_version.tenant_id,
-                    model_version.model_path,
-                    replicas=1  # Commence avec peu de replicas
-                )
-                model_version.container_id = deployment_name
-            
-            # Déploiement progressif
-            current_traffic = canary_config["initial_traffic"]
-            
-            while current_traffic <= 100:
-                logger.info(f"Canary: {current_traffic}% du trafic")
-                
-                # Mise à jour de la configuration de trafic
-                model_version.deployment_config["current_traffic"] = current_traffic
-                
-                # Attente et monitoring
-                time.sleep(canary_config["monitoring_interval"])
-                
-                # Vérification des métriques
-                metrics = self._monitor_canary_metrics(model_version, current_traffic)
-                
-                if not metrics['healthy']:
-                    if canary_config["rollback_on_error"]:
-                        logger.warning(f"Métriques canary dégradées à {current_traffic}%, rollback")
-                        self._cleanup_deployment(model_version)
-                        return False
-                    else:
-                        logger.warning(f"Métriques dégradées mais rollback désactivé")
-                
-                # Augmentation du trafic
-                if current_traffic < 100:
-                    current_traffic = min(100, current_traffic + canary_config["increment"])
-                else:
-                    break
-            
-            logger.info("Déploiement canary réussi - 100% du trafic")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erreur déploiement canary: {e}")
-            self._cleanup_deployment(model_version)
-            return False
-    
-    def _shadow_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Déploiement shadow pour comparaison sans impact sur la production"""
-        
-        if target_status != VersionStatus.PRODUCTION:
-            return self._manual_promotion(model_version, target_status, config)
-        
-        try:
-            # Configuration shadow
-            model_version.deployment_config = {
-                "strategy": "shadow",
-                "shadow_duration_hours": config.get('shadow_duration_hours', 24),
-                "comparison_metrics": config.get('comparison_metrics', ["latency", "accuracy", "error_rate"]),
-                "async_processing": True
-            }
-            
-            logger.info(f"Déploiement shadow de {model_version.model_id} v{model_version.version}")
-            
-            # Déploiement en mode shadow (pas de trafic réel)
+            # Redéployer la version cible
             from infrastructure import DeploymentManager
             deployment_manager = DeploymentManager(self.tenant_manager)
             
             container_id = deployment_manager.deploy_model_docker(
-                model_version.tenant_id,
-                model_version.model_path,
-                port=8003  # Port shadow
+                tenant_id,
+                target.model_path,
+                port=8000
             )
-            model_version.container_id = container_id
+            target.container_id = container_id
             
-            # Simulation de la période shadow avec collecte de métriques
-            shadow_start = time.time()
-            shadow_duration_seconds = model_version.deployment_config["shadow_duration_hours"] * 3600
+            # Mise à jour en base
+            self._save_version_to_db(current_prod)
+            self._save_version_to_db(target)
             
-            shadow_results = {
-                "predictions_count": 0,
-                "latency_samples": [],
-                "accuracy_samples": [],
-                "errors": 0
-            }
+            # Capture des métriques après rollback (après un délai)
+            time.sleep(60)  # Attendre 1 minute pour stabilisation
+            metrics_after = self._collect_production_metrics(target)
             
-            # Monitoring pendant la période shadow
-            while (time.time() - shadow_start) < shadow_duration_seconds:
-                # Collecte des métriques shadow (en production, les requêtes seraient dupliquées)
-                metrics = self._collect_shadow_metrics(model_version)
-                
-                shadow_results["predictions_count"] += metrics.get("count", 0)
-                shadow_results["latency_samples"].append(metrics.get("latency", 0))
-                if "accuracy" in metrics:
-                    shadow_results["accuracy_samples"].append(metrics["accuracy"])
-                shadow_results["errors"] += metrics.get("errors", 0)
-                
-                # Vérification périodique
-                time.sleep(60)  # Check toutes les minutes
+            # Mise à jour de l'historique avec métriques après
+            cursor.execute("""
+                UPDATE rollback_history 
+                SET metrics_after = ?
+                WHERE model_id = ? AND from_version = ? AND to_version = ?
+                ORDER BY rolled_back_at DESC LIMIT 1
+            """, (
+                json.dumps(metrics_after),
+                model_id,
+                current_prod.version,
+                target_version
+            ))
             
-            # Analyse des résultats shadow
-            analysis = self._analyze_shadow_results(model_version, shadow_results)
+            conn.commit()
+            conn.close()
             
-            if analysis.get("performance_acceptable", False):
-                logger.info("Résultats shadow acceptables, promotion confirmée")
-                self._cleanup_deployment(model_version)  # Nettoyer le déploiement shadow
-                return True
-            else:
-                logger.warning(f"Résultats shadow insuffisants: {analysis.get('reason')}")
-                self._cleanup_deployment(model_version)
-                return False
+            # Mettre à jour les métriques de versions
+            self._update_version_count_metric(tenant_id, model_id)
+            
+            logger.info(f"Rollback effectué: {model_id} de v{current_prod.version} vers v{target_version}")
+            
+            # Notification du rollback
+            self._notify_rollback(model_id, current_prod.version, target_version, reason)
+            
+            return True
             
         except Exception as e:
-            logger.error(f"Erreur déploiement shadow: {e}")
-            self._cleanup_deployment(model_version)
+            logger.error(f"Erreur lors du rollback: {e}")
             return False
     
+    def compare_versions(self,
+                        model_id: str,
+                        version_a: str,
+                        version_b: str,
+                        tenant_id: str = "default") -> VersionComparison:
+        """Compare deux versions avec métriques"""
+        
+        start_time = time.time()
+        
+        try:
+            # Récupération des versions
+            model_a = self.get_version(model_id, version_a, tenant_id)
+            model_b = self.get_version(model_id, version_b, tenant_id)
+            
+            if not model_a or not model_b:
+                raise ValueError("Une ou plusieurs versions non trouvées")
+            
+            # Création de la comparaison
+            comparison = VersionComparison(
+                version_a=model_a,
+                version_b=model_b
+            )
+            
+            # Calcul des différences de métriques
+            for metric_name in set(model_a.metrics.keys()) | set(model_b.metrics.keys()):
+                val_a = model_a.metrics.get(metric_name, 0)
+                val_b = model_b.metrics.get(metric_name, 0)
+                comparison.metrics_diff[metric_name] = val_b - val_a
+            
+            # Calcul du taux d'amélioration global
+            improvements = []
+            for metric, diff in comparison.metrics_diff.items():
+                if metric in model_a.metrics and model_a.metrics[metric] != 0:
+                    improvements.append(diff / model_a.metrics[metric])
+            
+            if improvements:
+                comparison.improvement_rate = np.mean(improvements)
+            
+            # Tests statistiques
+            comparison.statistical_tests = self._perform_statistical_tests(model_a, model_b)
+            comparison.is_significantly_better = comparison.statistical_tests.get("significant", False)
+            
+            # Comparaison des coûts
+            comparison.cost_diff = model_b.estimated_cost - model_a.estimated_cost
+            if model_a.estimated_cost > 0:
+                comparison.efficiency_ratio = (model_b.metrics.get('accuracy', 0) / model_b.estimated_cost) / \
+                                             (model_a.metrics.get('accuracy', 0) / model_a.estimated_cost)
+            
+            # Recommandation basée sur métriques et coût
+            if comparison.improvement_rate > 0.1:
+                comparison.recommendation = f"Version {version_b} fortement recommandée (amélioration de {comparison.improvement_rate:.1%})"
+            elif comparison.improvement_rate > 0 and comparison.cost_diff <= 0:
+                comparison.recommendation = f"Version {version_b} recommandée (meilleure et moins chère)"
+            elif comparison.improvement_rate > 0.05 and comparison.efficiency_ratio > 1:
+                comparison.recommendation = f"Version {version_b} recommandée (meilleur rapport qualité/coût)"
+            else:
+                comparison.recommendation = f"Version {version_a} reste préférable"
+            
+            # Évaluation des risques
+            comparison.risk_assessment = {
+                "drift_risk": max(model_a.drift_score, model_b.drift_score),
+                "stability": "stable" if abs(comparison.improvement_rate) < 0.02 else "changing",
+                "cost_increase": comparison.cost_diff > 0,
+                "requires_retraining": model_b.drift_detected
+            }
+            
+            # Sauvegarde de la comparaison
+            self._save_comparison_to_db(comparison)
+            
+            return comparison
+            
+        finally:
+            # Enregistrer la latence de comparaison
+            ml_model_version_comparison_latency_seconds.labels(
+                tenant_id=tenant_id
+            ).observe(time.time() - start_time)
+    
+    def cleanup_old_versions(self,
+                            model_id: str,
+                            tenant_id: str = "default",
+                            keep_last_n: int = 10,
+                            keep_production: bool = True,
+                            keep_days: int = 90) -> int:
+        """Nettoie les anciennes versions avec métriques"""
+        
+        # Incrémenter le compteur d'opérations
+        ml_model_version_operations_total.labels(
+            tenant_id=tenant_id,
+            operation='cleanup'
+        ).inc()
+        
+        versions = self.list_versions(model_id, tenant_id)
+        
+        # Tri par date de création
+        versions.sort(key=lambda v: v.created_at, reverse=True)
+        
+        # Identification des versions à supprimer
+        versions_to_delete = []
+        kept_count = 0
+        cutoff_date = datetime.now() - timedelta(days=keep_days)
+        
+        for v in versions:
+            # Garder les versions en production si demandé
+            if keep_production and v.status == VersionStatus.PRODUCTION:
+                continue
+            
+            # Garder les versions récentes
+            if v.created_at > cutoff_date:
+                continue
+            
+            # Garder les N dernières versions
+            if kept_count < keep_last_n:
+                kept_count += 1
+                continue
+            
+            versions_to_delete.append(v)
+        
+        # Suppression avec libération des ressources
+        deleted_count = 0
+        total_storage_freed = 0
+        
+        for v in versions_to_delete:
+            if self._delete_version(v):
+                deleted_count += 1
+                total_storage_freed += v.storage_mb_used
+                
+                # Libération des ressources tenant
+                self.tenant_manager.release_resources(
+                    tenant_id,
+                    storage=int(v.storage_mb_used)
+                )
+                
+                # Incrémenter le compteur d'opérations de suppression
+                ml_model_version_operations_total.labels(
+                    tenant_id=tenant_id,
+                    operation='delete'
+                ).inc()
+        
+        # Mettre à jour les métriques de versions
+        self._update_version_count_metric(tenant_id, model_id)
+        
+        logger.info(f"Supprimé {deleted_count} versions pour {model_id}, "
+                   f"libéré {total_storage_freed:.2f} MB")
+        
+        return deleted_count
+    
+    def _update_version_count_metric(self, tenant_id: str, model_id: str):
+        """Met à jour les métriques Gauge des versions"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        # Compter les versions par statut pour ce modèle
+        cursor.execute("""
+            SELECT status, COUNT(*) as count
+            FROM model_versions
+            WHERE tenant_id = ? AND model_id = ?
+            GROUP BY status
+        """, (tenant_id, model_id))
+        
+        # Réinitialiser les compteurs à 0
+        for status in VersionStatus:
+            ml_model_versions_total.labels(
+                tenant_id=tenant_id,
+                model_id=model_id,
+                status=status.value
+            ).set(0)
+        
+        # Mettre à jour avec les valeurs actuelles
+        for row in cursor.fetchall():
+            status, count = row
+            ml_model_versions_total.labels(
+                tenant_id=tenant_id,
+                model_id=model_id,
+                status=status
+            ).set(count)
+        
+        conn.close()
+    
     def _ab_testing_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
-        """Déploiement A/B testing avec analyse statistique"""
+        """Déploiement A/B testing avec métriques"""
         
         try:
             import uuid
@@ -931,6 +955,10 @@ class ModelVersionManager:
             
             control_version.ab_test_id = ab_config["test_id"]
             control_version.ab_test_group = "control"
+            
+            # Incrémenter le compteur de tests A/B actifs
+            current_ab_tests = ml_model_ab_tests_active.labels(tenant_id=model_version.tenant_id)._value.get() or 0
+            ml_model_ab_tests_active.labels(tenant_id=model_version.tenant_id).set(current_ab_tests + 1)
             
             # Déploiement des deux versions
             from infrastructure import DeploymentManager
@@ -984,6 +1012,9 @@ class ModelVersionManager:
                             ab_metrics
                         )
                         
+                        # Décrémenter le compteur de tests A/B actifs
+                        ml_model_ab_tests_active.labels(tenant_id=model_version.tenant_id).dec()
+                        
                         # Promotion si treatment gagne
                         if winner == "treatment":
                             self._cleanup_deployment(control_version)
@@ -996,6 +1027,10 @@ class ModelVersionManager:
             
             # Temps écoulé sans gagnant clair
             logger.warning("A/B test terminé sans gagnant significatif")
+            
+            # Décrémenter le compteur de tests A/B actifs
+            ml_model_ab_tests_active.labels(tenant_id=model_version.tenant_id).dec()
+            
             self._cleanup_deployment(model_version)
             return False
             
@@ -1003,270 +1038,7 @@ class ModelVersionManager:
             logger.error(f"Erreur déploiement A/B testing: {e}")
             return False
     
-    def rollback_version(self,
-                        model_id: str,
-                        target_version: str,
-                        tenant_id: str = "default",
-                        reason: Optional[str] = None,
-                        rolled_by: Optional[str] = None) -> bool:
-        """Rollback avec sauvegarde des métriques avant/après"""
-        
-        try:
-            # Récupération de la version actuelle en production
-            current_prod = self._get_current_production_version(model_id, tenant_id)
-            if not current_prod:
-                logger.error("Aucune version en production à rollback")
-                return False
-            
-            # Récupération de la version cible
-            target = self.get_version(model_id, target_version, tenant_id)
-            if not target:
-                logger.error(f"Version cible non trouvée: {target_version}")
-                return False
-            
-            # Capture des métriques avant rollback
-            metrics_before = current_prod.metrics.copy()
-            
-            # Sauvegarde de l'historique de rollback
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                INSERT INTO rollback_history 
-                (model_id, from_version, to_version, tenant_id, rolled_back_at, rolled_back_by, reason, metrics_before)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                model_id,
-                current_prod.version,
-                target_version,
-                tenant_id,
-                datetime.now(),
-                rolled_by,
-                reason,
-                json.dumps(metrics_before)
-            ))
-            
-            conn.commit()
-            
-            # Effectuer le rollback
-            current_prod.status = VersionStatus.ARCHIVED
-            target.status = VersionStatus.PRODUCTION
-            
-            # Nettoyer le déploiement actuel
-            self._cleanup_deployment(current_prod)
-            
-            # Redéployer la version cible
-            from infrastructure import DeploymentManager
-            deployment_manager = DeploymentManager(self.tenant_manager)
-            
-            container_id = deployment_manager.deploy_model_docker(
-                tenant_id,
-                target.model_path,
-                port=8000
-            )
-            target.container_id = container_id
-            
-            # Mise à jour en base
-            self._save_version_to_db(current_prod)
-            self._save_version_to_db(target)
-            
-            # Capture des métriques après rollback (après un délai)
-            time.sleep(60)  # Attendre 1 minute pour stabilisation
-            metrics_after = self._collect_production_metrics(target)
-            
-            # Mise à jour de l'historique avec métriques après
-            cursor.execute("""
-                UPDATE rollback_history 
-                SET metrics_after = ?
-                WHERE model_id = ? AND from_version = ? AND to_version = ?
-                ORDER BY rolled_back_at DESC LIMIT 1
-            """, (
-                json.dumps(metrics_after),
-                model_id,
-                current_prod.version,
-                target_version
-            ))
-            
-            conn.commit()
-            conn.close()
-            
-            logger.info(f"Rollback effectué: {model_id} de v{current_prod.version} vers v{target_version}")
-            
-            # Notification du rollback
-            self._notify_rollback(model_id, current_prod.version, target_version, reason)
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erreur lors du rollback: {e}")
-            return False
-    
-    def compare_versions(self,
-                        model_id: str,
-                        version_a: str,
-                        version_b: str,
-                        tenant_id: str = "default") -> VersionComparison:
-        """Compare deux versions avec tests statistiques avancés"""
-        
-        # Récupération des versions
-        model_a = self.get_version(model_id, version_a, tenant_id)
-        model_b = self.get_version(model_id, version_b, tenant_id)
-        
-        if not model_a or not model_b:
-            raise ValueError("Une ou plusieurs versions non trouvées")
-        
-        # Création de la comparaison
-        comparison = VersionComparison(
-            version_a=model_a,
-            version_b=model_b
-        )
-        
-        # Calcul des différences de métriques
-        for metric_name in set(model_a.metrics.keys()) | set(model_b.metrics.keys()):
-            val_a = model_a.metrics.get(metric_name, 0)
-            val_b = model_b.metrics.get(metric_name, 0)
-            comparison.metrics_diff[metric_name] = val_b - val_a
-        
-        # Calcul du taux d'amélioration global
-        improvements = []
-        for metric, diff in comparison.metrics_diff.items():
-            if metric in model_a.metrics and model_a.metrics[metric] != 0:
-                improvements.append(diff / model_a.metrics[metric])
-        
-        if improvements:
-            comparison.improvement_rate = np.mean(improvements)
-        
-        # Tests statistiques
-        comparison.statistical_tests = self._perform_statistical_tests(model_a, model_b)
-        comparison.is_significantly_better = comparison.statistical_tests.get("significant", False)
-        
-        # Comparaison des coûts
-        comparison.cost_diff = model_b.estimated_cost - model_a.estimated_cost
-        if model_a.estimated_cost > 0:
-            comparison.efficiency_ratio = (model_b.metrics.get('accuracy', 0) / model_b.estimated_cost) / \
-                                         (model_a.metrics.get('accuracy', 0) / model_a.estimated_cost)
-        
-        # Recommandation basée sur métriques et coût
-        if comparison.improvement_rate > 0.1:
-            comparison.recommendation = f"Version {version_b} fortement recommandée (amélioration de {comparison.improvement_rate:.1%})"
-        elif comparison.improvement_rate > 0 and comparison.cost_diff <= 0:
-            comparison.recommendation = f"Version {version_b} recommandée (meilleure et moins chère)"
-        elif comparison.improvement_rate > 0.05 and comparison.efficiency_ratio > 1:
-            comparison.recommendation = f"Version {version_b} recommandée (meilleur rapport qualité/coût)"
-        else:
-            comparison.recommendation = f"Version {version_a} reste préférable"
-        
-        # Évaluation des risques
-        comparison.risk_assessment = {
-            "drift_risk": max(model_a.drift_score, model_b.drift_score),
-            "stability": "stable" if abs(comparison.improvement_rate) < 0.02 else "changing",
-            "cost_increase": comparison.cost_diff > 0,
-            "requires_retraining": model_b.drift_detected
-        }
-        
-        # Sauvegarde de la comparaison
-        self._save_comparison_to_db(comparison)
-        
-        return comparison
-    
-    def get_version_history(self,
-                           model_id: str,
-                           tenant_id: str = "default",
-                           days_back: int = 30) -> pd.DataFrame:
-        """Récupère l'historique avec métriques de billing"""
-        
-        conn = sqlite3.connect(str(self.db_path))
-        
-        query = """
-            SELECT 
-                version,
-                status,
-                created_at,
-                created_by,
-                JSON_EXTRACT(metrics, '$.accuracy') as accuracy,
-                JSON_EXTRACT(metrics, '$.f1') as f1,
-                JSON_EXTRACT(metrics, '$.auc') as auc,
-                compute_hours_used,
-                predictions_count,
-                storage_mb_used,
-                estimated_cost
-            FROM model_versions
-            WHERE model_id = ? 
-                AND tenant_id = ?
-                AND created_at > datetime('now', ?)
-            ORDER BY created_at DESC
-        """
-        
-        df = pd.read_sql_query(
-            query,
-            conn,
-            params=(model_id, tenant_id, f'-{days_back} days')
-        )
-        
-        conn.close()
-        
-        # Ajout de colonnes calculées
-        if not df.empty:
-            df['cost_per_prediction'] = df['estimated_cost'] / df['predictions_count'].replace(0, 1)
-            df['efficiency_score'] = df['accuracy'] / df['estimated_cost'].replace(0, 1)
-        
-        return df
-    
-    def cleanup_old_versions(self,
-                            model_id: str,
-                            tenant_id: str = "default",
-                            keep_last_n: int = 10,
-                            keep_production: bool = True,
-                            keep_days: int = 90) -> int:
-        """Nettoie les anciennes versions avec politique de rétention"""
-        
-        versions = self.list_versions(model_id, tenant_id)
-        
-        # Tri par date de création
-        versions.sort(key=lambda v: v.created_at, reverse=True)
-        
-        # Identification des versions à supprimer
-        versions_to_delete = []
-        kept_count = 0
-        cutoff_date = datetime.now() - timedelta(days=keep_days)
-        
-        for v in versions:
-            # Garder les versions en production si demandé
-            if keep_production and v.status == VersionStatus.PRODUCTION:
-                continue
-            
-            # Garder les versions récentes
-            if v.created_at > cutoff_date:
-                continue
-            
-            # Garder les N dernières versions
-            if kept_count < keep_last_n:
-                kept_count += 1
-                continue
-            
-            versions_to_delete.append(v)
-        
-        # Suppression avec libération des ressources
-        deleted_count = 0
-        total_storage_freed = 0
-        
-        for v in versions_to_delete:
-            if self._delete_version(v):
-                deleted_count += 1
-                total_storage_freed += v.storage_mb_used
-                
-                # Libération des ressources tenant
-                self.tenant_manager.release_resources(
-                    tenant_id,
-                    storage=int(v.storage_mb_used)
-                )
-        
-        logger.info(f"Supprimé {deleted_count} versions pour {model_id}, "
-                   f"libéré {total_storage_freed:.2f} MB")
-        
-        return deleted_count
-    
-    # Méthodes helper privées
+    # Méthodes helper privées restantes...
     
     def _check_quota(self, tenant_id: str, resource_type: str) -> bool:
         """Vérifie les quotas du tenant"""
@@ -1351,6 +1123,9 @@ class ModelVersionManager:
             
             # Nettoyer le déploiement
             self._cleanup_deployment(current)
+            
+            # Mettre à jour les métriques
+            self._update_version_count_metric(tenant_id, model_id)
     
     def _save_version_to_db(self, model_version: ModelVersion):
         """Sauvegarde une version en base de données"""
@@ -1485,6 +1260,13 @@ class ModelVersionManager:
                 model_version.model_id,
                 model_version.version,
                 model_version.tenant_id
+            )
+            
+            # Suppression de la métrique de taille
+            ml_model_version_size_bytes.remove(
+                tenant_id=model_version.tenant_id,
+                model_id=model_version.model_id,
+                version=model_version.version
             )
             
             # Suppression de la base de données
@@ -1834,32 +1616,407 @@ class ModelVersionManager:
         
         return tests
     
-    def export_version_to_docker(self, model_id: str, version_number: str, 
-                                tenant_id: str = "default") -> str:
-        """Export une version spécifique vers Docker"""
-        model_version = self.get_version(model_id, version_number, tenant_id)
-        if not model_version:
-            raise ValueError(f"Version {version_number} non trouvée")
-        
-        # Utilise la méthode du StorageManager
-        return self.storage.export_model_to_docker(
-            model_id, 
-            version_number, 
-            tenant_id
-        )
+    # Méthodes restantes inchangées...
     
-    def export_version_to_onnx(self, model_id: str, version_number: str,
-                              tenant_id: str = "default") -> str:
-        """Export une version vers ONNX"""
-        model_version = self.get_version(model_id, version_number, tenant_id)
-        if not model_version:
-            raise ValueError(f"Version {version_number} non trouvée")
+    def get_version(self, 
+                   model_id: str, 
+                   version_number: str = "latest",
+                   tenant_id: str = "default") -> Optional[ModelVersion]:
+        """Récupère une version avec vérification des permissions"""
         
-        return self.storage.export_model_to_onnx(
-            model_id,
-            version_number,
-            tenant_id
+        # Vérification des permissions tenant
+        if not self._check_tenant_access(tenant_id, model_id):
+            logger.warning(f"Accès refusé au modèle {model_id} pour tenant {tenant_id}")
+            return None
+        
+        # Si "latest", trouver la dernière version
+        if version_number == "latest":
+            version_number = self._get_latest_version(model_id, tenant_id)
+            if not version_number:
+                return None
+        
+        # Vérification du cache
+        cache_key = f"{tenant_id}:{model_id}:{version_number}"
+        if cache_key in self.version_cache:
+            return self.version_cache[cache_key]
+        
+        # Chargement depuis la base de données
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT metadata FROM model_versions
+            WHERE model_id = ? AND version = ? AND tenant_id = ?
+        """, (model_id, version_number, tenant_id))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            metadata = json.loads(result[0])
+            model_version = ModelVersion.from_dict(metadata)
+            self.version_cache[cache_key] = model_version
+            return model_version
+        
+        return None
+    
+    def list_versions(self, 
+                     model_id: str,
+                     tenant_id: str = "default",
+                     status_filter: Optional[VersionStatus] = None,
+                     include_metrics: bool = True) -> List[ModelVersion]:
+        """Liste les versions avec métriques optionnelles"""
+        
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT metadata, metrics FROM model_versions
+            WHERE model_id = ? AND tenant_id = ?
+        """
+        params = [model_id, tenant_id]
+        
+        if status_filter:
+            query += " AND JSON_EXTRACT(metadata, '$.status') = ?"
+            params.append(status_filter.value)
+        
+        query += " ORDER BY created_at DESC"
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        conn.close()
+        
+        versions = []
+        for result in results:
+            metadata = json.loads(result[0])
+            version_obj = ModelVersion.from_dict(metadata)
+            
+            if include_metrics and result[1]:
+                version_obj.metrics = json.loads(result[1])
+            
+            versions.append(version_obj)
+        
+        return versions
+    
+    def _validate_promotion(self, model_version: ModelVersion, target_status: VersionStatus) -> bool:
+        """Valide qu'une promotion est autorisée avec règles étendues"""
+        
+        # Règles de promotion standards
+        allowed_transitions = {
+            VersionStatus.DEVELOPMENT: [VersionStatus.STAGING, VersionStatus.ARCHIVED, VersionStatus.AB_TESTING],
+            VersionStatus.STAGING: [VersionStatus.PRODUCTION, VersionStatus.DEVELOPMENT, VersionStatus.ARCHIVED, VersionStatus.AB_TESTING],
+            VersionStatus.PRODUCTION: [VersionStatus.ARCHIVED, VersionStatus.DEPRECATED],
+            VersionStatus.ARCHIVED: [VersionStatus.DEVELOPMENT],
+            VersionStatus.DEPRECATED: [],
+            VersionStatus.FAILED: [VersionStatus.ARCHIVED],
+            VersionStatus.AB_TESTING: [VersionStatus.PRODUCTION, VersionStatus.STAGING, VersionStatus.ARCHIVED]
+        }
+        
+        # Vérification des métriques minimales pour production
+        if target_status == VersionStatus.PRODUCTION:
+            if not model_version.metrics:
+                logger.warning("Pas de métriques disponibles pour promotion en production")
+                return False
+            
+            # Seuils minimaux selon le type de modèle
+            if model_version.model_type == "classification":
+                min_accuracy = self.config.min_accuracy
+                if model_version.metrics.get('accuracy', 0) < min_accuracy:
+                    logger.warning(f"Accuracy ({model_version.metrics.get('accuracy')}) < seuil minimum ({min_accuracy})")
+                    return False
+            else:  # regression
+                min_r2 = self.config.min_r2
+                if model_version.metrics.get('r2', -float('inf')) < min_r2:
+                    logger.warning(f"R2 ({model_version.metrics.get('r2')}) < seuil minimum ({min_r2})")
+                    return False
+        
+        return target_status in allowed_transitions.get(model_version.status, [])
+    
+    def _manual_promotion(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
+        """Promotion manuelle avec validation basique"""
+        if not model_version.metrics:
+            logger.warning("Aucune métrique disponible pour la promotion")
+        
+        # Vérification optionnelle du drift
+        if config.get('check_drift', False):
+            if model_version.drift_detected:
+                logger.warning("Drift détecté sur le modèle")
+                if not config.get('force', False):
+                    return False
+        
+        return True
+    
+    def _auto_threshold_promotion(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
+        """Promotion automatique basée sur des seuils configurables"""
+        
+        # Récupération des seuils depuis config ou valeurs par défaut
+        thresholds = config.get('thresholds', {})
+        if not thresholds:
+            thresholds = {
+                VersionStatus.STAGING: {
+                    "accuracy": 0.8,
+                    "f1": 0.75,
+                    "auc": 0.75
+                },
+                VersionStatus.PRODUCTION: {
+                    "accuracy": 0.85,
+                    "f1": 0.80,
+                    "auc": 0.85
+                }
+            }
+        
+        required_metrics = thresholds.get(target_status, {})
+        
+        # Vérification des seuils
+        for metric_name, threshold in required_metrics.items():
+            if metric_name not in model_version.metrics:
+                logger.warning(f"Métrique {metric_name} manquante")
+                return False
+            
+            if model_version.metrics[metric_name] < threshold:
+                logger.warning(f"Métrique {metric_name} ({model_version.metrics[metric_name]}) "
+                             f"en dessous du seuil ({threshold})")
+                return False
+        
+        return True
+    
+    def _auto_improvement_promotion(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
+        """Promotion si amélioration significative par rapport à la version actuelle"""
+        
+        # Récupération de la version actuelle en production
+        current_prod = self._get_current_production_version(model_version.model_id, model_version.tenant_id)
+        
+        if not current_prod:
+            # Pas de version en production, promotion automatique
+            return True
+        
+        # Comparaison des versions
+        comparison = self.compare_versions(
+            model_version.model_id,
+            current_prod.version,
+            model_version.version,
+            model_version.tenant_id
         )
+        
+        # Seuil d'amélioration requis (configurable)
+        min_improvement = config.get('min_improvement', 0.05)  # 5% par défaut
+        
+        if comparison.improvement_rate < min_improvement:
+            logger.warning(f"Amélioration insuffisante: {comparison.improvement_rate:.2%} < {min_improvement:.2%}")
+            return False
+        
+        return comparison.is_significantly_better
+    
+    def _blue_green_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
+        """Déploiement blue-green avec bascule instantanée et rollback automatique"""
+        
+        if target_status != VersionStatus.PRODUCTION:
+            return self._manual_promotion(model_version, target_status, config)
+        
+        try:
+            # Préparation de l'environnement "green"
+            logger.info(f"Préparation environnement green pour {model_version.model_id}")
+            
+            # Configuration du déploiement
+            model_version.deployment_config = {
+                "strategy": "blue_green",
+                "environment": "green",
+                "ready_for_switch": False,
+                "health_check_url": config.get('health_check_url'),
+                "rollback_threshold": config.get('rollback_threshold', 0.1)
+            }
+            
+            # Déploiement en parallèle (utilise le DeploymentManager de infrastructure.py)
+            from infrastructure import DeploymentManager
+            deployment_manager = DeploymentManager(self.tenant_manager)
+            
+            if self.config.storage.backend == "local":
+                # Déploiement Docker local
+                container_id = deployment_manager.deploy_model_docker(
+                    model_version.tenant_id,
+                    model_version.model_path,
+                    port=8001  # Port green
+                )
+                model_version.container_id = container_id
+            else:
+                # Déploiement Kubernetes
+                deployment_name = deployment_manager.deploy_model_kubernetes(
+                    model_version.tenant_id,
+                    model_version.model_path,
+                    replicas=config.get('replicas', 3)
+                )
+                model_version.container_id = deployment_name
+            
+            # Tests de santé et monitoring initial
+            if self._health_check(model_version):
+                # Monitoring pendant la période de test
+                test_duration = config.get('test_duration_seconds', 300)  # 5 minutes par défaut
+                time.sleep(test_duration)
+                
+                # Vérification des métriques pendant le test
+                if self._check_deployment_metrics(model_version, config):
+                    # Bascule blue -> green
+                    model_version.deployment_config["ready_for_switch"] = True
+                    model_version.deployment_config["environment"] = "blue"  # Maintenant en production
+                    logger.info("Bascule blue -> green effectuée avec succès")
+                    return True
+                else:
+                    # Rollback automatique
+                    logger.warning("Métriques dégradées, rollback automatique")
+                    self._cleanup_deployment(model_version)
+                    return False
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Erreur déploiement blue-green: {e}")
+            self._cleanup_deployment(model_version)
+            return False
+    
+    def _canary_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
+        """Déploiement progressif canary avec monitoring continu"""
+        
+        if target_status != VersionStatus.PRODUCTION:
+            return self._manual_promotion(model_version, target_status, config)
+        
+        try:
+            # Configuration canary
+            canary_config = {
+                "strategy": "canary",
+                "initial_traffic": config.get('initial_traffic', 5),  # 5% du trafic initial
+                "increment": config.get('increment', 10),  # Augmentation de 10% à chaque étape
+                "error_threshold": config.get('error_threshold', 0.01),  # 1% d'erreurs max
+                "rollback_on_error": config.get('rollback_on_error', True),
+                "monitoring_interval": config.get('monitoring_interval', 60)  # secondes
+            }
+            
+            model_version.deployment_config = canary_config
+            
+            # Déploiement initial avec trafic minimal
+            from infrastructure import DeploymentManager
+            deployment_manager = DeploymentManager(self.tenant_manager)
+            
+            if self.config.storage.backend == "local":
+                container_id = deployment_manager.deploy_model_docker(
+                    model_version.tenant_id,
+                    model_version.model_path,
+                    port=8002
+                )
+                model_version.container_id = container_id
+            else:
+                deployment_name = deployment_manager.deploy_model_kubernetes(
+                    model_version.tenant_id,
+                    model_version.model_path,
+                    replicas=1  # Commence avec peu de replicas
+                )
+                model_version.container_id = deployment_name
+            
+            # Déploiement progressif
+            current_traffic = canary_config["initial_traffic"]
+            
+            while current_traffic <= 100:
+                logger.info(f"Canary: {current_traffic}% du trafic")
+                
+                # Mise à jour de la configuration de trafic
+                model_version.deployment_config["current_traffic"] = current_traffic
+                
+                # Attente et monitoring
+                time.sleep(canary_config["monitoring_interval"])
+                
+                # Vérification des métriques
+                metrics = self._monitor_canary_metrics(model_version, current_traffic)
+                
+                if not metrics['healthy']:
+                    if canary_config["rollback_on_error"]:
+                        logger.warning(f"Métriques canary dégradées à {current_traffic}%, rollback")
+                        self._cleanup_deployment(model_version)
+                        return False
+                    else:
+                        logger.warning(f"Métriques dégradées mais rollback désactivé")
+                
+                # Augmentation du trafic
+                if current_traffic < 100:
+                    current_traffic = min(100, current_traffic + canary_config["increment"])
+                else:
+                    break
+            
+            logger.info("Déploiement canary réussi - 100% du trafic")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur déploiement canary: {e}")
+            self._cleanup_deployment(model_version)
+            return False
+    
+    def _shadow_deployment(self, model_version: ModelVersion, target_status: VersionStatus, config: Dict) -> bool:
+        """Déploiement shadow pour comparaison sans impact sur la production"""
+        
+        if target_status != VersionStatus.PRODUCTION:
+            return self._manual_promotion(model_version, target_status, config)
+        
+        try:
+            # Configuration shadow
+            model_version.deployment_config = {
+                "strategy": "shadow",
+                "shadow_duration_hours": config.get('shadow_duration_hours', 24),
+                "comparison_metrics": config.get('comparison_metrics', ["latency", "accuracy", "error_rate"]),
+                "async_processing": True
+            }
+            
+            logger.info(f"Déploiement shadow de {model_version.model_id} v{model_version.version}")
+            
+            # Déploiement en mode shadow (pas de trafic réel)
+            from infrastructure import DeploymentManager
+            deployment_manager = DeploymentManager(self.tenant_manager)
+            
+            container_id = deployment_manager.deploy_model_docker(
+                model_version.tenant_id,
+                model_version.model_path,
+                port=8003  # Port shadow
+            )
+            model_version.container_id = container_id
+            
+            # Simulation de la période shadow avec collecte de métriques
+            shadow_start = time.time()
+            shadow_duration_seconds = model_version.deployment_config["shadow_duration_hours"] * 3600
+            
+            shadow_results = {
+                "predictions_count": 0,
+                "latency_samples": [],
+                "accuracy_samples": [],
+                "errors": 0
+            }
+            
+            # Monitoring pendant la période shadow
+            while (time.time() - shadow_start) < shadow_duration_seconds:
+                # Collecte des métriques shadow (en production, les requêtes seraient dupliquées)
+                metrics = self._collect_shadow_metrics(model_version)
+                
+                shadow_results["predictions_count"] += metrics.get("count", 0)
+                shadow_results["latency_samples"].append(metrics.get("latency", 0))
+                if "accuracy" in metrics:
+                    shadow_results["accuracy_samples"].append(metrics["accuracy"])
+                shadow_results["errors"] += metrics.get("errors", 0)
+                
+                # Vérification périodique
+                time.sleep(60)  # Check toutes les minutes
+            
+            # Analyse des résultats shadow
+            analysis = self._analyze_shadow_results(model_version, shadow_results)
+            
+            if analysis.get("performance_acceptable", False):
+                logger.info("Résultats shadow acceptables, promotion confirmée")
+                self._cleanup_deployment(model_version)  # Nettoyer le déploiement shadow
+                return True
+            else:
+                logger.warning(f"Résultats shadow insuffisants: {analysis.get('reason')}")
+                self._cleanup_deployment(model_version)
+                return False
+            
+        except Exception as e:
+            logger.error(f"Erreur déploiement shadow: {e}")
+            self._cleanup_deployment(model_version)
+            return False
     
     def get_deployment_status(self, model_id: str, version_number: str,
                              tenant_id: str = "default") -> Dict:
@@ -1889,6 +2046,76 @@ class ModelVersionManager:
             status['monitoring'] = monitor.get_performance_summary(last_n_days=1)
         
         return status
+    
+    def get_version_history(self,
+                           model_id: str,
+                           tenant_id: str = "default",
+                           days_back: int = 30) -> pd.DataFrame:
+        """Récupère l'historique avec métriques de billing"""
+        
+        conn = sqlite3.connect(str(self.db_path))
+        
+        query = """
+            SELECT 
+                version,
+                status,
+                created_at,
+                created_by,
+                JSON_EXTRACT(metrics, '$.accuracy') as accuracy,
+                JSON_EXTRACT(metrics, '$.f1') as f1,
+                JSON_EXTRACT(metrics, '$.auc') as auc,
+                compute_hours_used,
+                predictions_count,
+                storage_mb_used,
+                estimated_cost
+            FROM model_versions
+            WHERE model_id = ? 
+                AND tenant_id = ?
+                AND created_at > datetime('now', ?)
+            ORDER BY created_at DESC
+        """
+        
+        df = pd.read_sql_query(
+            query,
+            conn,
+            params=(model_id, tenant_id, f'-{days_back} days')
+        )
+        
+        conn.close()
+        
+        # Ajout de colonnes calculées
+        if not df.empty:
+            df['cost_per_prediction'] = df['estimated_cost'] / df['predictions_count'].replace(0, 1)
+            df['efficiency_score'] = df['accuracy'] / df['estimated_cost'].replace(0, 1)
+        
+        return df
+    
+    def export_version_to_docker(self, model_id: str, version_number: str, 
+                                tenant_id: str = "default") -> str:
+        """Export une version spécifique vers Docker"""
+        model_version = self.get_version(model_id, version_number, tenant_id)
+        if not model_version:
+            raise ValueError(f"Version {version_number} non trouvée")
+        
+        # Utilise la méthode du StorageManager
+        return self.storage.export_model_to_docker(
+            model_id, 
+            version_number, 
+            tenant_id
+        )
+    
+    def export_version_to_onnx(self, model_id: str, version_number: str,
+                              tenant_id: str = "default") -> str:
+        """Export une version vers ONNX"""
+        model_version = self.get_version(model_id, version_number, tenant_id)
+        if not model_version:
+            raise ValueError(f"Version {version_number} non trouvée")
+        
+        return self.storage.export_model_to_onnx(
+            model_id,
+            version_number,
+            tenant_id
+        )
 
 
 # Export des classes principales
