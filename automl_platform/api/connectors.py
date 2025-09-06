@@ -18,40 +18,48 @@ import time
 from contextlib import contextmanager
 
 # Métriques Prometheus
-from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
 
 logger = logging.getLogger(__name__)
 
-# Déclaration des métriques Prometheus
+# Créer un registre local pour les métriques des connecteurs
+connector_registry = CollectorRegistry()
+
+# Déclaration des métriques Prometheus avec le registre local
 ml_connectors_requests_total = Counter(
     'ml_connectors_requests_total',
     'Total number of connector requests',
-    ['tenant_id', 'connector_type', 'operation']  # operation: query, read_table, write_table
+    ['tenant_id', 'connector_type', 'operation'],  # operation: query, read_table, write_table
+    registry=connector_registry
 )
 
 ml_connectors_latency_seconds = Histogram(
     'ml_connectors_latency_seconds',
     'Connector operation latency in seconds',
     ['tenant_id', 'connector_type', 'operation'],
-    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
+    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+    registry=connector_registry
 )
 
 ml_connectors_errors_total = Counter(
     'ml_connectors_errors_total',
     'Total number of connector errors',
-    ['tenant_id', 'connector_type', 'error_type']
+    ['tenant_id', 'connector_type', 'error_type'],
+    registry=connector_registry
 )
 
 ml_connectors_active_connections = Gauge(
     'ml_connectors_active_connections',
     'Number of active database connections',
-    ['connector_type']
+    ['connector_type'],
+    registry=connector_registry
 )
 
 ml_connectors_data_volume_bytes = Counter(
     'ml_connectors_data_volume_bytes',
     'Total data volume transferred in bytes',
-    ['tenant_id', 'connector_type', 'direction']  # direction: read, write
+    ['tenant_id', 'connector_type', 'direction'],  # direction: read, write
+    registry=connector_registry
 )
 
 
@@ -402,7 +410,6 @@ class SnowflakeConnector(BaseConnector):
         }
 
 
-# Exemple pour PostgreSQL avec métriques similaires
 class PostgreSQLConnector(BaseConnector):
     """PostgreSQL database connector with metrics."""
     
@@ -559,39 +566,49 @@ class ConnectorFactory:
         return list(cls.CONNECTORS.keys())
 
 
-# Exemple d'utilisation avec métriques
-def main():
-    """Example usage of connectors with metrics."""
-    
-    # Configuration avec tenant_id pour métriques
-    snowflake_config = ConnectionConfig(
-        connection_type='snowflake',
-        account='my_account',
-        username='user',
-        password='password',
-        warehouse='my_warehouse',
-        database='my_database',
-        schema='my_schema',
-        tenant_id='production'  # Important pour les métriques
-    )
-    
-    # Créer et utiliser le connecteur
-    connector = ConnectorFactory.create_connector(snowflake_config)
-    
+# FastAPI router for connectors
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from typing import Optional
+
+connector_router = APIRouter(prefix="/connectors", tags=["connectors"])
+
+class ConnectorRequest(BaseModel):
+    connection_type: str
+    config: Dict[str, Any]
+    query: Optional[str] = None
+    table_name: Optional[str] = None
+    schema: Optional[str] = None
+
+@connector_router.post("/query")
+async def execute_query(request: ConnectorRequest):
+    """Execute a query through a connector."""
     try:
-        # Les métriques seront automatiquement collectées
-        tables = connector.list_tables()
-        print(f"Tables: {tables}")
+        config = ConnectionConfig(**request.config, connection_type=request.connection_type)
+        connector = ConnectorFactory.create_connector(config)
         
-        if tables:
-            df = connector.read_table(tables[0])
-            print(f"Data shape: {df.shape}")
-            
+        if request.query:
+            result = connector.query(request.query)
+            return {"data": result.to_dict('records'), "rows": len(result)}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Query not provided"
+            )
     except Exception as e:
-        print(f"Error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
     finally:
-        connector.disconnect()
+        if 'connector' in locals():
+            connector.disconnect()
+
+@connector_router.get("/types")
+async def list_connector_types():
+    """List supported connector types."""
+    return {"connectors": ConnectorFactory.list_supported_connectors()}
 
 
-if __name__ == "__main__":
-    main()
+# Export the registry so it can be imported by api.py
+__all__ = ['connector_registry', 'ConnectorFactory', 'ConnectionConfig', 'connector_router']
