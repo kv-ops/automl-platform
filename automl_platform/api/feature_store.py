@@ -1,6 +1,6 @@
 """
 Feature Store for AutoML Platform
-Persistent storage with versioning, caching, and time-travel capabilities
+WITH PROMETHEUS METRICS INTEGRATION
 Place in: automl_platform/api/feature_store.py
 """
 
@@ -19,6 +19,10 @@ from collections import defaultdict
 import sqlite3
 import pyarrow as pa
 import pyarrow.parquet as pq
+import time
+
+# Métriques Prometheus
+from prometheus_client import Counter, Histogram, Gauge
 
 # Storage backends
 try:
@@ -41,6 +45,38 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Déclaration des métriques Prometheus pour Feature Store
+ml_feature_store_operations_total = Counter(
+    'ml_feature_store_operations_total',
+    'Total number of feature store operations',
+    ['tenant_id', 'operation', 'feature_set']  # operation: read, write, compute
+)
+
+ml_feature_store_latency_seconds = Histogram(
+    'ml_feature_store_latency_seconds',
+    'Feature store operation latency in seconds',
+    ['tenant_id', 'operation', 'backend'],  # backend: local, redis, s3, minio
+    buckets=(0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0)
+)
+
+ml_feature_store_size_bytes = Gauge(
+    'ml_feature_store_size_bytes',
+    'Total size of feature store in bytes',
+    ['tenant_id', 'feature_set']
+)
+
+ml_feature_store_cache_hits = Counter(
+    'ml_feature_store_cache_hits',
+    'Number of cache hits',
+    ['tenant_id', 'feature_set']
+)
+
+ml_feature_store_cache_misses = Counter(
+    'ml_feature_store_cache_misses',
+    'Number of cache misses',
+    ['tenant_id', 'feature_set']
+)
+
 
 @dataclass
 class FeatureDefinition:
@@ -55,7 +91,7 @@ class FeatureDefinition:
     
     # Computation
     source_table: str = ""
-    computation: str = ""  # SQL or Python expression
+    computation: str = ""
     dependencies: List[str] = field(default_factory=list)
     
     # Versioning
@@ -77,7 +113,7 @@ class FeatureSet:
     name: str
     description: str = ""
     features: List[FeatureDefinition] = field(default_factory=list)
-    entity_key: str = "entity_id"  # Primary key for joining
+    entity_key: str = "entity_id"
     timestamp_key: str = "timestamp"
     
     # Metadata
@@ -88,8 +124,8 @@ class FeatureSet:
     version: int = 1
     
     # Storage
-    storage_format: str = "parquet"  # parquet, csv, delta
-    partitioning: List[str] = field(default_factory=list)  # Partition columns
+    storage_format: str = "parquet"
+    partitioning: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -109,8 +145,7 @@ class FeatureSet:
 
 class FeatureStore:
     """
-    Centralized feature store with versioning and caching.
-    Supports offline and online serving.
+    Centralized feature store with versioning, caching and Prometheus metrics.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -121,9 +156,10 @@ class FeatureStore:
             config: Configuration dictionary
         """
         self.config = config
-        self.backend = config.get("backend", "local")  # local, s3, minio, redis
+        self.backend = config.get("backend", "local")
         self.cache_enabled = config.get("cache_enabled", True)
         self.cache_ttl = config.get("cache_ttl", 3600)
+        self.tenant_id = config.get("tenant_id", "default")
         
         # Storage paths
         self.base_path = Path(config.get("base_path", "./feature_store"))
@@ -227,7 +263,7 @@ class FeatureStore:
                 host=redis_config.get("host", "localhost"),
                 port=redis_config.get("port", 6379),
                 db=redis_config.get("db", 0),
-                decode_responses=False  # Store binary data
+                decode_responses=False
             )
             self.redis_client.ping()
             logger.info("Connected to Redis for online feature serving")
@@ -246,7 +282,6 @@ class FeatureStore:
             )
             self.bucket_name = config.get("bucket", "feature-store")
             
-            # Create bucket if doesn't exist
             if not self.object_client.bucket_exists(self.bucket_name):
                 self.object_client.make_bucket(self.bucket_name)
                 
@@ -261,16 +296,19 @@ class FeatureStore:
     
     def register_feature_set(self, feature_set: FeatureSet) -> bool:
         """
-        Register a new feature set.
-        
-        Args:
-            feature_set: FeatureSet to register
-            
-        Returns:
-            Success status
+        Register a new feature set with metrics.
         """
+        start_time = time.time()
+        
         with self.lock:
             try:
+                # Increment operation counter
+                ml_feature_store_operations_total.labels(
+                    tenant_id=self.tenant_id,
+                    operation='register',
+                    feature_set=feature_set.name
+                ).inc()
+                
                 # Store in registry
                 self.feature_sets[feature_set.name] = feature_set
                 
@@ -332,22 +370,23 @@ class FeatureStore:
             except Exception as e:
                 logger.error(f"Failed to register feature set: {e}")
                 return False
+            finally:
+                # Record latency
+                ml_feature_store_latency_seconds.labels(
+                    tenant_id=self.tenant_id,
+                    operation='register',
+                    backend=self.backend
+                ).observe(time.time() - start_time)
     
     def write_features(self, 
                       feature_set_name: str,
                       data: pd.DataFrame,
                       timestamp: Optional[datetime] = None) -> bool:
         """
-        Write features to store.
-        
-        Args:
-            feature_set_name: Name of feature set
-            data: DataFrame with features
-            timestamp: Timestamp for versioning
-            
-        Returns:
-            Success status
+        Write features to store with metrics.
         """
+        start_time = time.time()
+        
         if feature_set_name not in self.feature_sets:
             logger.error(f"Feature set {feature_set_name} not found")
             return False
@@ -356,13 +395,22 @@ class FeatureStore:
         timestamp = timestamp or datetime.now()
         
         try:
+            # Increment operation counter
+            ml_feature_store_operations_total.labels(
+                tenant_id=self.tenant_id,
+                operation='write',
+                feature_set=feature_set_name
+            ).inc()
+            
             # Add timestamp if not present
             if feature_set.timestamp_key not in data.columns:
                 data[feature_set.timestamp_key] = timestamp
             
+            # Calculate data size for metrics
+            data_size = data.memory_usage(deep=True).sum()
+            
             # Store based on backend
             if self.backend == "local":
-                # Store as parquet file
                 file_path = self.base_path / feature_set_name / f"{timestamp.isoformat()}.parquet"
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 
@@ -370,7 +418,6 @@ class FeatureStore:
                 pq.write_table(table, file_path)
                 
             elif self.backend in ["s3", "minio"] and self.object_client:
-                # Store in object storage
                 buffer = data.to_parquet()
                 object_name = f"{feature_set_name}/{timestamp.isoformat()}.parquet"
                 
@@ -389,6 +436,12 @@ class FeatureStore:
                         Body=buffer
                     )
             
+            # Update size metrics
+            ml_feature_store_size_bytes.labels(
+                tenant_id=self.tenant_id,
+                feature_set=feature_set_name
+            ).set(data_size)
+            
             # Update online store if available
             if self.redis_client:
                 self._update_online_store(feature_set_name, data)
@@ -402,30 +455,50 @@ class FeatureStore:
         except Exception as e:
             logger.error(f"Failed to write features: {e}")
             return False
+        finally:
+            # Record latency
+            ml_feature_store_latency_seconds.labels(
+                tenant_id=self.tenant_id,
+                operation='write',
+                backend=self.backend
+            ).observe(time.time() - start_time)
     
     def read_features(self,
                      feature_names: List[str],
                      entity_ids: List[str],
                      timestamp: Optional[datetime] = None) -> pd.DataFrame:
         """
-        Read features from store.
-        
-        Args:
-            feature_names: List of feature names
-            entity_ids: List of entity IDs
-            timestamp: Point-in-time for time travel
-            
-        Returns:
-            DataFrame with requested features
+        Read features from store with cache metrics.
         """
-        # Check cache first
-        cache_key = self._get_cache_key(feature_names, entity_ids, timestamp)
-        if self.cache_enabled:
-            cached_data = self._get_from_cache(cache_key)
-            if cached_data is not None:
-                return cached_data
+        start_time = time.time()
         
         try:
+            # Increment operation counter
+            ml_feature_store_operations_total.labels(
+                tenant_id=self.tenant_id,
+                operation='read',
+                feature_set='mixed'  # Multiple feature sets possible
+            ).inc()
+            
+            # Check cache first
+            cache_key = self._get_cache_key(feature_names, entity_ids, timestamp)
+            
+            if self.cache_enabled:
+                cached_data = self._get_from_cache(cache_key)
+                if cached_data is not None:
+                    # Cache hit
+                    ml_feature_store_cache_hits.labels(
+                        tenant_id=self.tenant_id,
+                        feature_set='mixed'
+                    ).inc()
+                    return cached_data
+                else:
+                    # Cache miss
+                    ml_feature_store_cache_misses.labels(
+                        tenant_id=self.tenant_id,
+                        feature_set='mixed'
+                    ).inc()
+            
             # Try online store first for latest features
             if self.redis_client and not timestamp:
                 data = self._read_from_online_store(feature_names, entity_ids)
@@ -444,6 +517,13 @@ class FeatureStore:
         except Exception as e:
             logger.error(f"Failed to read features: {e}")
             return pd.DataFrame()
+        finally:
+            # Record latency
+            ml_feature_store_latency_seconds.labels(
+                tenant_id=self.tenant_id,
+                operation='read',
+                backend=self.backend
+            ).observe(time.time() - start_time)
     
     def _update_online_store(self, feature_set_name: str, data: pd.DataFrame):
         """Update online store with latest features."""
@@ -570,7 +650,6 @@ class FeatureStore:
         if dfs:
             result = dfs[0]
             for df in dfs[1:]:
-                # Determine common key
                 common_cols = list(set(result.columns) & set(df.columns))
                 if common_cols:
                     result = result.merge(df, on=common_cols[0], how="outer")
@@ -580,46 +659,64 @@ class FeatureStore:
         return pd.DataFrame()
     
     def compute_statistics(self, feature_set_name: str) -> Dict[str, Any]:
-        """Compute statistics for a feature set."""
-        if feature_set_name not in self.feature_sets:
-            return {}
+        """Compute statistics for a feature set with metrics."""
+        start_time = time.time()
         
-        # Read latest data
-        if self.backend == "local":
-            files = list((self.base_path / feature_set_name).glob("*.parquet"))
-            if not files:
+        try:
+            # Increment operation counter
+            ml_feature_store_operations_total.labels(
+                tenant_id=self.tenant_id,
+                operation='compute',
+                feature_set=feature_set_name
+            ).inc()
+            
+            if feature_set_name not in self.feature_sets:
                 return {}
             
-            df = pd.read_parquet(max(files))
-        else:
-            return {}
-        
-        stats = {}
-        
-        for col in df.columns:
-            col_stats = {
-                "count": len(df[col]),
-                "null_count": df[col].isna().sum(),
-                "null_ratio": df[col].isna().mean(),
-                "unique_count": df[col].nunique(),
-                "dtype": str(df[col].dtype)
-            }
+            # Read latest data
+            if self.backend == "local":
+                files = list((self.base_path / feature_set_name).glob("*.parquet"))
+                if not files:
+                    return {}
+                
+                df = pd.read_parquet(max(files))
+            else:
+                return {}
             
-            # Numeric statistics
-            if pd.api.types.is_numeric_dtype(df[col]):
-                col_stats.update({
-                    "mean": df[col].mean(),
-                    "std": df[col].std(),
-                    "min": df[col].min(),
-                    "max": df[col].max(),
-                    "median": df[col].median(),
-                    "q25": df[col].quantile(0.25),
-                    "q75": df[col].quantile(0.75)
-                })
+            stats = {}
             
-            stats[col] = col_stats
-        
-        return stats
+            for col in df.columns:
+                col_stats = {
+                    "count": len(df[col]),
+                    "null_count": df[col].isna().sum(),
+                    "null_ratio": df[col].isna().mean(),
+                    "unique_count": df[col].nunique(),
+                    "dtype": str(df[col].dtype)
+                }
+                
+                # Numeric statistics
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    col_stats.update({
+                        "mean": df[col].mean(),
+                        "std": df[col].std(),
+                        "min": df[col].min(),
+                        "max": df[col].max(),
+                        "median": df[col].median(),
+                        "q25": df[col].quantile(0.25),
+                        "q75": df[col].quantile(0.75)
+                    })
+                
+                stats[col] = col_stats
+            
+            return stats
+            
+        finally:
+            # Record latency
+            ml_feature_store_latency_seconds.labels(
+                tenant_id=self.tenant_id,
+                operation='compute',
+                backend=self.backend
+            ).observe(time.time() - start_time)
     
     def _get_cache_key(self, feature_names: List[str], entity_ids: List[str], timestamp: Optional[datetime]) -> str:
         """Generate cache key."""
@@ -643,7 +740,6 @@ class FeatureStore:
         """Invalidate cache for a feature set."""
         keys_to_remove = []
         for key in self.cache:
-            # Simple check - in production use proper indexing
             if feature_set_name in str(key):
                 keys_to_remove.append(key)
         
@@ -676,52 +772,23 @@ class FeatureStore:
         
         conn.close()
         return result
-    
-    def get_feature_history(self, feature_name: str, entity_id: str, 
-                          start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        """Get historical values of a feature."""
-        conn = sqlite3.connect(str(self.metadata_db))
-        
-        query = """
-            SELECT timestamp, value, version
-            FROM feature_values
-            WHERE feature_name = ? AND entity_id = ?
-            AND timestamp BETWEEN ? AND ?
-            ORDER BY timestamp
-        """
-        
-        df = pd.read_sql_query(
-            query, 
-            conn,
-            params=(feature_name, entity_id, start_time, end_time)
-        )
-        
-        conn.close()
-        
-        # Deserialize values
-        if not df.empty:
-            df['value'] = df['value'].apply(lambda x: pickle.loads(x))
-        
-        return df
 
 
-# Example usage
+# Example usage with metrics
 def main():
-    """Example feature store usage."""
+    """Example feature store usage with metrics."""
     
-    # Configure feature store
     config = {
         "backend": "local",
         "base_path": "./feature_store",
         "cache_enabled": True,
         "cache_ttl": 3600,
-        "redis_enabled": False
+        "redis_enabled": False,
+        "tenant_id": "production"  # Important pour les métriques
     }
     
-    # Create feature store
     store = FeatureStore(config)
     
-    # Define features
     user_features = FeatureSet(
         name="user_features",
         description="User demographic and behavioral features",
@@ -735,18 +802,13 @@ def main():
                 name="total_purchases",
                 dtype="float",
                 description="Total purchase amount"
-            ),
-            FeatureDefinition(
-                name="days_since_signup",
-                dtype="int",
-                description="Days since user signup"
             )
         ],
         entity_key="user_id",
         timestamp_key="timestamp"
     )
     
-    # Register feature set
+    # Register feature set (métrique recorded)
     store.register_feature_set(user_features)
     
     # Create sample data
@@ -754,14 +816,13 @@ def main():
         "user_id": ["u1", "u2", "u3"],
         "age": [25, 30, 35],
         "total_purchases": [100.0, 250.0, 500.0],
-        "days_since_signup": [30, 60, 90],
         "timestamp": [datetime.now()] * 3
     })
     
-    # Write features
+    # Write features (métriques recorded)
     store.write_features("user_features", data)
     
-    # Read features
+    # Read features (cache metrics recorded)
     features = store.read_features(
         feature_names=["age", "total_purchases"],
         entity_ids=["u1", "u2"]
@@ -770,7 +831,7 @@ def main():
     print("Retrieved features:")
     print(features)
     
-    # Compute statistics
+    # Compute statistics (métriques recorded)
     stats = store.compute_statistics("user_features")
     print("\nFeature statistics:")
     print(json.dumps(stats, indent=2, default=str))
