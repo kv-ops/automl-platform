@@ -137,7 +137,6 @@
   },
   "panels": [
     {
-      "__comment": "Core Monitoring Section - Always Available",
       "collapsed": false,
       "datasource": null,
       "gridPos": {
@@ -284,7 +283,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "avg(ml_model_accuracy{model_id=~\"$model_id\"})",
+          "expr": "avg(ml_model_accuracy{tenant_id=~\"$tenant_id\", model_id=~\"$model_id\"})",
           "refId": "A"
         }
       ],
@@ -292,7 +291,6 @@
       "type": "gauge"
     },
     {
-      "__comment": "Connectors Section",
       "collapsed": false,
       "datasource": null,
       "gridPos": {
@@ -480,7 +478,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(ml_connectors_active_connections)",
+          "expr": "sum(ml_connectors_active_connections{connector_type=~\"$connector_type\"})",
           "refId": "A"
         }
       ],
@@ -552,7 +550,6 @@
       "type": "timeseries"
     },
     {
-      "__comment": "Feature Store Section",
       "collapsed": false,
       "datasource": null,
       "gridPos": {
@@ -642,16 +639,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
                 "color": "yellow",
-                "value": 0.8
+                "value": 0.5
               },
               {
-                "color": "red",
-                "value": 0.95
+                "color": "green",
+                "value": 0.8
               }
             ]
           },
@@ -824,7 +821,6 @@
       "type": "timeseries"
     },
     {
-      "__comment": "Streaming Section",
       "collapsed": false,
       "datasource": null,
       "gridPos": {
@@ -1084,7 +1080,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(ml_streaming_active_consumers)",
+          "expr": "sum(ml_streaming_active_consumers{platform=~\"$streaming_platform\"})",
           "refId": "A"
         }
       ],
@@ -1149,7 +1145,6 @@
       "type": "stat"
     },
     {
-      "__comment": "UI Metrics Section",
       "collapsed": false,
       "datasource": null,
       "gridPos": {
@@ -1638,7 +1633,7 @@
   "refresh": "10s",
   "schemaVersion": 27,
   "style": "dark",
-  "tags": ["automl", "monitoring", "ml"],
+  "tags": ["automl", "monitoring", "ml", "complete"],
   "time": {
     "from": "now-6h",
     "to": "now"
