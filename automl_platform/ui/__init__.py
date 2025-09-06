@@ -15,6 +15,80 @@ __version__ = "1.0.0"
 __author__ = "AutoML Platform Team"
 
 # ============================================================================
+# Metrics imports and initialization
+# ============================================================================
+
+try:
+    from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
+    import time
+    METRICS_AVAILABLE = True
+    
+    # Create a registry for UI metrics
+    ui_registry = CollectorRegistry()
+    
+    # Define UI metrics
+    ml_ui_sessions_total = Counter(
+        'ml_ui_sessions_total',
+        'Total number of UI sessions started',
+        ['page', 'user_type'],
+        registry=ui_registry
+    )
+    
+    ml_ui_response_time_seconds = Histogram(
+        'ml_ui_response_time_seconds',
+        'UI response time in seconds',
+        ['component', 'action'],
+        buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+        registry=ui_registry
+    )
+    
+    ml_ui_page_views_total = Counter(
+        'ml_ui_page_views_total',
+        'Total number of page views',
+        ['page', 'source'],
+        registry=ui_registry
+    )
+    
+    ml_ui_api_calls_total = Counter(
+        'ml_ui_api_calls_total',
+        'Total number of API calls from UI',
+        ['endpoint', 'method', 'status'],
+        registry=ui_registry
+    )
+    
+    ml_ui_active_users = Gauge(
+        'ml_ui_active_users',
+        'Number of active UI users',
+        ['page'],
+        registry=ui_registry
+    )
+    
+    ml_ui_component_renders_total = Counter(
+        'ml_ui_component_renders_total',
+        'Total number of component renders',
+        ['component', 'status'],
+        registry=ui_registry
+    )
+    
+    ml_ui_errors_total = Counter(
+        'ml_ui_errors_total',
+        'Total number of UI errors',
+        ['component', 'error_type'],
+        registry=ui_registry
+    )
+    
+except ImportError:
+    METRICS_AVAILABLE = False
+    ui_registry = None
+    ml_ui_sessions_total = None
+    ml_ui_response_time_seconds = None
+    ml_ui_page_views_total = None
+    ml_ui_api_calls_total = None
+    ml_ui_active_users = None
+    ml_ui_component_renders_total = None
+    ml_ui_errors_total = None
+
+# ============================================================================
 # Conditional imports to handle optional dependencies
 # ============================================================================
 
@@ -118,6 +192,70 @@ else:
     AutoMLDashboard = None
 
 # ============================================================================
+# Metrics tracking decorators and functions
+# ============================================================================
+
+def track_ui_response_time(component, action):
+    """Decorator to track UI response time."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if METRICS_AVAILABLE and ml_ui_response_time_seconds:
+                start_time = time.time()
+                try:
+                    result = func(*args, **kwargs)
+                    ml_ui_response_time_seconds.labels(
+                        component=component,
+                        action=action
+                    ).observe(time.time() - start_time)
+                    return result
+                except Exception as e:
+                    if ml_ui_errors_total:
+                        ml_ui_errors_total.labels(
+                            component=component,
+                            error_type=type(e).__name__
+                        ).inc()
+                    raise
+            else:
+                return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+def track_page_view(page, source="direct"):
+    """Track a page view in the UI."""
+    if METRICS_AVAILABLE and ml_ui_page_views_total:
+        ml_ui_page_views_total.labels(page=page, source=source).inc()
+
+def track_api_call(endpoint, method, status):
+    """Track an API call from the UI."""
+    if METRICS_AVAILABLE and ml_ui_api_calls_total:
+        ml_ui_api_calls_total.labels(
+            endpoint=endpoint,
+            method=method,
+            status=status
+        ).inc()
+
+def track_component_render(component, status="success"):
+    """Track a component render."""
+    if METRICS_AVAILABLE and ml_ui_component_renders_total:
+        ml_ui_component_renders_total.labels(
+            component=component,
+            status=status
+        ).inc()
+
+def start_ui_session(page="main", user_type="standard"):
+    """Track the start of a UI session."""
+    if METRICS_AVAILABLE:
+        if ml_ui_sessions_total:
+            ml_ui_sessions_total.labels(page=page, user_type=user_type).inc()
+        if ml_ui_active_users:
+            ml_ui_active_users.labels(page=page).inc()
+
+def end_ui_session(page="main"):
+    """Track the end of a UI session."""
+    if METRICS_AVAILABLE and ml_ui_active_users:
+        ml_ui_active_users.labels(page=page).dec()
+
+# ============================================================================
 # Dynamically build __all__ based on available components
 # ============================================================================
 
@@ -130,8 +268,28 @@ def _build_all_list():
         "STREAMLIT_AVAILABLE",
         "PLOTLY_AVAILABLE", 
         "COMPONENTS_AVAILABLE",
-        "DASHBOARD_AVAILABLE"
+        "DASHBOARD_AVAILABLE",
+        "METRICS_AVAILABLE"
     ])
+    
+    # Include metrics if available
+    if METRICS_AVAILABLE:
+        all_list.extend([
+            "ui_registry",
+            "ml_ui_sessions_total",
+            "ml_ui_response_time_seconds",
+            "ml_ui_page_views_total",
+            "ml_ui_api_calls_total",
+            "ml_ui_active_users",
+            "ml_ui_component_renders_total",
+            "ml_ui_errors_total",
+            "track_ui_response_time",
+            "track_page_view",
+            "track_api_call",
+            "track_component_render",
+            "start_ui_session",
+            "end_ui_session"
+        ])
     
     # Always include helper functions (they handle unavailability gracefully)
     all_list.extend([
@@ -212,7 +370,8 @@ def check_ui_dependencies():
         "streamlit": STREAMLIT_AVAILABLE,
         "plotly": PLOTLY_AVAILABLE,
         "components": COMPONENTS_AVAILABLE,
-        "dashboard": DASHBOARD_AVAILABLE
+        "dashboard": DASHBOARD_AVAILABLE,
+        "metrics": METRICS_AVAILABLE
     }
     
     # Check for additional optional dependencies
@@ -261,7 +420,8 @@ def get_ui_status():
             "deployment_ui": ModelDeploymentUI is not None,
             "custom_metrics": CustomMetrics is not None
         },
-        "dashboard_available": DASHBOARD_AVAILABLE
+        "dashboard_available": DASHBOARD_AVAILABLE,
+        "metrics_enabled": METRICS_AVAILABLE
     }
     
     # Calculate overall readiness
@@ -272,6 +432,7 @@ def get_ui_status():
     return status
 
 
+@track_ui_response_time("dashboard", "launch")
 def launch_dashboard(config=None, **kwargs):
     """
     Launch the Streamlit dashboard application.
@@ -303,6 +464,10 @@ def launch_dashboard(config=None, **kwargs):
             "Dashboard components are not available. "
             "Please check that all required files are present."
         )
+    
+    # Track dashboard launch
+    start_ui_session(page="dashboard", user_type="admin")
+    track_page_view("dashboard", "launch")
     
     # Import here to avoid issues if streamlit is not installed
     import sys
@@ -343,15 +508,22 @@ def launch_dashboard(config=None, **kwargs):
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error launching dashboard: {e}")
+        if METRICS_AVAILABLE and ml_ui_errors_total:
+            ml_ui_errors_total.labels(
+                component="dashboard",
+                error_type="LaunchError"
+            ).inc()
         raise
     except KeyboardInterrupt:
         print("\nDashboard stopped by user")
+        end_ui_session(page="dashboard")
 
 
 # ============================================================================
-# Component Factory Functions
+# Component Factory Functions with Metrics
 # ============================================================================
 
+@track_ui_response_time("data_quality_visualizer", "create")
 def create_data_quality_visualizer():
     """
     Factory function to create a DataQualityVisualizer instance.
@@ -362,9 +534,11 @@ def create_data_quality_visualizer():
     if not COMPONENTS_AVAILABLE:
         raise ImportError("UI components are not available. Install required dependencies.")
     
+    track_component_render("data_quality_visualizer")
     return DataQualityVisualizer()
 
 
+@track_ui_response_time("model_leaderboard", "create")
 def create_model_leaderboard():
     """
     Factory function to create a ModelLeaderboard instance.
@@ -375,9 +549,11 @@ def create_model_leaderboard():
     if not COMPONENTS_AVAILABLE:
         raise ImportError("UI components are not available. Install required dependencies.")
     
+    track_component_render("model_leaderboard")
     return ModelLeaderboard()
 
 
+@track_ui_response_time("chat_interface", "create")
 def create_chat_interface():
     """
     Factory function to create a ChatInterface instance.
@@ -388,6 +564,7 @@ def create_chat_interface():
     if not COMPONENTS_AVAILABLE:
         raise ImportError("UI components are not available. Install required dependencies.")
     
+    track_component_render("chat_interface")
     return ChatInterface()
 
 
@@ -402,6 +579,8 @@ logger = logging.getLogger(__name__)
 if STREAMLIT_AVAILABLE and PLOTLY_AVAILABLE:
     if COMPONENTS_AVAILABLE:
         logger.info(f"AutoML UI module v{__version__} loaded successfully with all components")
+        if METRICS_AVAILABLE:
+            logger.info("UI metrics collection enabled")
     else:
         logger.warning("AutoML UI module loaded but some components are unavailable")
 else:
@@ -435,6 +614,9 @@ if __name__ == "__main__":
         print(f"  {status} {component}")
     
     print(f"\nOverall: {ui_status['readiness']}")
+    
+    if METRICS_AVAILABLE:
+        print("\nMetrics collection: Enabled")
     
     if DASHBOARD_AVAILABLE:
         print("\nTo launch the dashboard, run:")
