@@ -5,12 +5,17 @@ Test Suite for AutoML Platform
 Comprehensive test coverage for all AutoML platform modules including:
 - A/B testing and model comparison
 - API endpoints and services
+- Authentication and authorization
+- Billing and subscription management
 - Data preparation and quality assessment
 - Model training and ensemble methods
 - Model export and deployment
 - Incremental and streaming ML
 - Monitoring and retraining
 - Job scheduling and orchestration
+- Storage and feature store
+- Prompts and LLM integration
+- UI components (Streamlit dashboard)
 """
 
 import sys
@@ -25,11 +30,13 @@ MODULES_STATUS = {
     # Core modules
     'ab_testing': False,
     'api': False,
+    'auth': False,
     'billing': False,
     'streaming': False,
     'config': False,
     'orchestrator': False,
     'scheduler': False,
+    'storage': False,
     
     # Data modules
     'data_prep': False,
@@ -44,12 +51,17 @@ MODULES_STATUS = {
     
     # MLOps modules
     'mlflow_registry': False,
+    'mlops_service': False,
+    'mlops_endpoints': False,
     'monitoring': False,
     'retraining_service': False,
     'export_service': False,
     
     # LLM modules
     'prompts': False,
+    
+    # UI modules
+    'ui_streamlit': False,
 }
 
 # Check module availability
@@ -63,9 +75,25 @@ def check_module_availability():
         pass
     
     try:
-        from automl_platform.api import api, billing, streaming
+        from automl_platform.api import api
         MODULES_STATUS['api'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform import auth
+        MODULES_STATUS['auth'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.api import billing
         MODULES_STATUS['billing'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.api import streaming
         MODULES_STATUS['streaming'] = True
     except ImportError:
         pass
@@ -85,6 +113,12 @@ def check_module_availability():
     try:
         from automl_platform import scheduler
         MODULES_STATUS['scheduler'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform import storage
+        MODULES_STATUS['storage'] = True
     except ImportError:
         pass
     
@@ -140,6 +174,18 @@ def check_module_availability():
         pass
     
     try:
+        from automl_platform import mlops_service
+        MODULES_STATUS['mlops_service'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.api import mlops_endpoints
+        MODULES_STATUS['mlops_endpoints'] = True
+    except ImportError:
+        pass
+    
+    try:
         from automl_platform import monitoring
         MODULES_STATUS['monitoring'] = True
     except ImportError:
@@ -164,30 +210,43 @@ def check_module_availability():
     except ImportError:
         pass
     
+    # UI modules
+    try:
+        from automl_platform.ui import streamlit_app
+        MODULES_STATUS['ui_streamlit'] = True
+    except ImportError:
+        pass
+    
     return MODULES_STATUS
 
 # Test discovery helpers
 def get_test_modules():
-    """Get list of all test modules."""
+    """Get list of all test modules that exist in the tests directory."""
+    # List of all test files that actually exist
     test_modules = [
-        'test_ab_testing',
-        'test_api',
-        'test_billing',
-        'test_data_prep',
-        'test_data_quality_agent',
-        'test_ensemble',
-        'test_export_service',
-        'test_incremental_learning',
-        'test_metrics',
-        'test_mlflow_registry',
-        'test_model_selection',
-        'test_monitoring',
-        'test_orchestrator',
-        'test_prompts',
-        'test_retraining_service',
-        'test_scheduler',
-        'test_streaming',
-        'test_tabnet_sklearn',
+        'test_ab_testing',           # A/B testing framework
+        'test_api',                  # API endpoints
+        'test_auth',                 # Authentication and authorization
+        'test_billing',              # Billing and subscription management
+        'test_data_prep',            # Data preparation
+        'test_data_quality_agent',   # Data quality agent with LLM
+        'test_ensemble',             # Ensemble methods
+        'test_export_service',       # Model export service
+        'test_incremental_learning', # Incremental/online learning
+        'test_metrics',              # Metrics calculation
+        'test_mlflow_registry',      # MLflow registry integration
+        'test_mlops_endpoints',      # MLOps API endpoints
+        'test_mlops_service',        # MLOps service layer
+        'test_model_selection',      # Model selection and tuning
+        'test_monitoring',           # Model monitoring
+        'test_orchestrator',         # AutoML orchestrator
+        'test_prompts',              # LLM prompts
+        'test_retraining_service',   # Automated retraining
+        'test_scheduler',            # Job scheduler
+        'test_storage',              # Storage backends
+        'test_streaming',            # Streaming ML
+        'test_tabnet_sklearn',       # TabNet implementation
+        'test_ui_streamlit',         # Streamlit UI dashboard
     ]
     return test_modules
 
@@ -220,7 +279,18 @@ def run_all_tests(verbose=False, coverage=False):
     print("-" * 40)
     for module, available in MODULES_STATUS.items():
         status = "✓" if available else "✗"
-        print(f"{status} {module:20} {'Available' if available else 'Not Available'}")
+        print(f"{status} {module:25} {'Available' if available else 'Not Available'}")
+    print("-" * 40)
+    
+    # Print test files status
+    print("\nTest Files Status:")
+    print("-" * 40)
+    test_dir = Path(__file__).parent
+    for test_module in get_test_modules():
+        test_file = test_dir / f"{test_module}.py"
+        exists = test_file.exists()
+        status = "✓" if exists else "✗"
+        print(f"{status} {test_module:25} {'Found' if exists else 'Not Found'}")
     print("-" * 40)
     
     # Run tests
@@ -248,6 +318,88 @@ def run_specific_tests(test_module, verbose=False):
     
     if verbose:
         args.append('-v')
+    
+    return pytest.main(args)
+
+def run_test_category(category, verbose=False):
+    """
+    Run tests for a specific category.
+    
+    Args:
+        category: Category of tests to run
+                 Options: 'core', 'data', 'models', 'mlops', 'api', 'ui'
+        verbose: Enable verbose output
+    
+    Returns:
+        Test results
+    """
+    import pytest
+    
+    category_tests = {
+        'core': [
+            'test_config',
+            'test_orchestrator',
+            'test_scheduler',
+            'test_storage',
+        ],
+        'data': [
+            'test_data_prep',
+            'test_data_quality_agent',
+            'test_metrics',
+        ],
+        'models': [
+            'test_model_selection',
+            'test_ensemble',
+            'test_tabnet_sklearn',
+            'test_incremental_learning',
+        ],
+        'mlops': [
+            'test_mlflow_registry',
+            'test_mlops_service',
+            'test_mlops_endpoints',
+            'test_monitoring',
+            'test_retraining_service',
+            'test_export_service',
+            'test_ab_testing',
+        ],
+        'api': [
+            'test_api',
+            'test_auth',
+            'test_billing',
+            'test_streaming',
+        ],
+        'ui': [
+            'test_ui_streamlit',
+        ],
+        'llm': [
+            'test_prompts',
+            'test_data_quality_agent',
+        ]
+    }
+    
+    if category not in category_tests:
+        raise ValueError(f"Unknown category: {category}. Options: {list(category_tests.keys())}")
+    
+    test_dir = Path(__file__).parent
+    test_files = []
+    
+    for test_module in category_tests[category]:
+        test_file = test_dir / f"{test_module}.py"
+        if test_file.exists():
+            test_files.append(str(test_file))
+    
+    if not test_files:
+        raise FileNotFoundError(f"No test files found for category: {category}")
+    
+    args = test_files
+    if verbose:
+        args.append('-v')
+    
+    print(f"\nRunning {category} tests:")
+    print("-" * 40)
+    for test_file in test_files:
+        print(f"  • {Path(test_file).name}")
+    print("-" * 40)
     
     return pytest.main(args)
 
@@ -289,6 +441,7 @@ __all__ = [
     'get_test_modules',
     'run_all_tests',
     'run_specific_tests',
+    'run_test_category',
     'create_test_data',
 ]
 
