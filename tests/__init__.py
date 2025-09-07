@@ -5,7 +5,7 @@ Test Suite for AutoML Platform
 Comprehensive test coverage for all AutoML platform modules including:
 - A/B testing and model comparison
 - API endpoints and services
-- Authentication and authorization
+- Authentication and authorization (including SSO and RGPD endpoints)
 - Billing and subscription management
 - Data preparation and quality assessment
 - Model training and ensemble methods
@@ -31,6 +31,7 @@ MODULES_STATUS = {
     'ab_testing': False,
     'api': False,
     'auth': False,
+    'auth_endpoints': False,  # Added for SSO and RGPD endpoints
     'billing': False,
     'streaming': False,
     'config': False,
@@ -62,6 +63,11 @@ MODULES_STATUS = {
     
     # UI modules
     'ui_streamlit': False,
+    
+    # Security and compliance modules
+    'sso_service': False,
+    'audit_service': False,
+    'rgpd_compliance_service': False,
 }
 
 # Check module availability
@@ -83,6 +89,12 @@ def check_module_availability():
     try:
         from automl_platform import auth
         MODULES_STATUS['auth'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.api import auth_endpoints
+        MODULES_STATUS['auth_endpoints'] = True
     except ImportError:
         pass
     
@@ -217,6 +229,25 @@ def check_module_availability():
     except ImportError:
         pass
     
+    # Security and compliance modules
+    try:
+        from automl_platform import sso_service
+        MODULES_STATUS['sso_service'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform import audit_service
+        MODULES_STATUS['audit_service'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform import rgpd_compliance_service
+        MODULES_STATUS['rgpd_compliance_service'] = True
+    except ImportError:
+        pass
+    
     return MODULES_STATUS
 
 # Test discovery helpers
@@ -227,6 +258,7 @@ def get_test_modules():
         'test_ab_testing',           # A/B testing framework
         'test_api',                  # API endpoints
         'test_auth',                 # Authentication and authorization
+        'test_auth_endpoints',       # SSO and RGPD API endpoints
         'test_billing',              # Billing and subscription management
         'test_data_prep',            # Data preparation
         'test_data_quality_agent',   # Data quality agent with LLM
@@ -327,7 +359,7 @@ def run_test_category(category, verbose=False):
     
     Args:
         category: Category of tests to run
-                 Options: 'core', 'data', 'models', 'mlops', 'api', 'ui'
+                 Options: 'core', 'data', 'models', 'mlops', 'api', 'ui', 'auth', 'compliance'
         verbose: Enable verbose output
     
     Returns:
@@ -364,9 +396,15 @@ def run_test_category(category, verbose=False):
         ],
         'api': [
             'test_api',
-            'test_auth',
             'test_billing',
             'test_streaming',
+        ],
+        'auth': [
+            'test_auth',
+            'test_auth_endpoints',
+        ],
+        'compliance': [
+            'test_auth_endpoints',  # Includes RGPD tests
         ],
         'ui': [
             'test_ui_streamlit',
@@ -434,6 +472,74 @@ def create_test_data(task='classification', n_samples=100, n_features=10):
             random_state=42
         )
 
+def create_mock_user(plan_type='PRO', is_admin=False):
+    """
+    Create a mock user for testing.
+    
+    Args:
+        plan_type: User's subscription plan
+        is_admin: Whether user has admin role
+    
+    Returns:
+        Mock user object
+    """
+    from unittest.mock import Mock
+    import uuid
+    
+    user = Mock()
+    user.id = uuid.uuid4()
+    user.username = "admin" if is_admin else "testuser"
+    user.email = f"{user.username}@example.com"
+    user.tenant_id = uuid.uuid4()
+    user.plan_type = plan_type
+    user.is_active = True
+    
+    if is_admin:
+        user.roles = [Mock(name="admin")]
+    else:
+        user.roles = [Mock(name="user")]
+    
+    return user
+
+def create_test_token(user_id=None, tenant_id=None, roles=None, expired=False):
+    """
+    Create a test JWT token.
+    
+    Args:
+        user_id: User ID to include in token
+        tenant_id: Tenant ID to include in token
+        roles: List of roles
+        expired: Whether token should be expired
+    
+    Returns:
+        JWT token string
+    """
+    import jwt
+    from datetime import datetime, timedelta
+    import uuid
+    
+    if user_id is None:
+        user_id = str(uuid.uuid4())
+    if tenant_id is None:
+        tenant_id = str(uuid.uuid4())
+    if roles is None:
+        roles = ["user"]
+    
+    payload = {
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "roles": roles,
+        "iat": datetime.utcnow(),
+        "jti": str(uuid.uuid4())
+    }
+    
+    if expired:
+        payload["exp"] = datetime.utcnow() - timedelta(hours=1)
+    else:
+        payload["exp"] = datetime.utcnow() + timedelta(hours=1)
+    
+    return jwt.encode(payload, "test_secret", algorithm="HS256")
+
 # Export key items
 __all__ = [
     'MODULES_STATUS',
@@ -443,6 +549,8 @@ __all__ = [
     'run_specific_tests',
     'run_test_category',
     'create_test_data',
+    'create_mock_user',
+    'create_test_token',
 ]
 
 # Run module check on import
