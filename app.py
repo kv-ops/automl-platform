@@ -1,10 +1,10 @@
 """
 Enhanced FastAPI application for AutoML Platform
 Production-ready with rate limiting, monitoring, and comprehensive endpoints
-Version: 3.0.0 - Full Enterprise Features with Autoscaling
+Version: 3.1.0 - Full Enterprise Features with SSO, Audit, and RGPD
 """
 
-from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, BackgroundTasks, WebSocket, Request, status
+from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, BackgroundTasks, WebSocket, Request, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -68,7 +68,7 @@ from automl_platform.api.billing import BillingManager, UsageTracker, PlanType, 
 # Data connectors
 from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
 
-# Streaming - CORRECTED IMPORT
+# Streaming
 from automl_platform.api.streaming import (
     StreamingOrchestrator, 
     StreamConfig, 
@@ -83,9 +83,15 @@ from automl_platform.export_service import ModelExporter as EnhancedModelExporte
 from automl_platform.ab_testing import ABTestingService, MetricsComparator
 
 # Authentication
-from automl_platform.auth import TokenService, RBACService, QuotaService, AuditService, auth_router
+from automl_platform.auth import TokenService, RBACService, QuotaService, AuditService as BasicAuditService, auth_router
+from automl_platform.auth import get_current_user, require_permission, require_plan
 
-# Scheduler - CORRECTED IMPORT
+# SSO, Advanced Audit, and RGPD imports
+from automl_platform.sso_service import SSOService, SSOProvider
+from automl_platform.audit_service import AuditService, AuditEventType, AuditSeverity
+from automl_platform.rgpd_compliance_service import RGPDComplianceService, GDPRRequestType, ConsentType
+
+# Scheduler
 from automl_platform.scheduler import (
     SchedulerFactory,
     JobRequest,
@@ -195,6 +201,21 @@ streaming_messages = Counter(
     registry=metrics_registry
 )
 
+# New metrics for SSO and RGPD
+automl_sso_requests_total = Counter(
+    'automl_sso_requests_total',
+    'Total SSO authentication requests',
+    ['provider', 'status', 'tenant'],
+    registry=metrics_registry
+)
+
+automl_rgpd_requests_total = Counter(
+    'automl_rgpd_requests_total',
+    'Total RGPD compliance requests',
+    ['request_type', 'status', 'tenant'],
+    registry=metrics_registry
+)
+
 # ============================================================================
 # Lifespan Management
 # ============================================================================
@@ -203,7 +224,7 @@ streaming_messages = Counter(
 async def lifespan(app: FastAPI):
     """Manage application lifecycle"""
     # Startup
-    logger.info("Starting AutoML API v3.0.0...")
+    logger.info("Starting AutoML API v3.1.0...")
     
     # Initialize storage
     if config.storage.backend == "local":
@@ -236,7 +257,7 @@ async def lifespan(app: FastAPI):
     # Initialize deployment manager
     app.state.deployment_manager = DeploymentManager(app.state.tenant_manager)
     
-    # Initialize scheduler using SchedulerFactory - CORRECTED
+    # Initialize scheduler using SchedulerFactory
     app.state.scheduler = SchedulerFactory.create_scheduler(config, app.state.billing_manager)
     
     # Initialize streaming if configured
@@ -255,7 +276,30 @@ async def lifespan(app: FastAPI):
         app.state.tenant_manager.Session(), 
         app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None
     )
-    app.state.audit_service = AuditService(app.state.tenant_manager.Session())
+    app.state.basic_audit_service = BasicAuditService(app.state.tenant_manager.Session())
+    
+    # Initialize SSO Service
+    logger.info("Initializing SSO Service...")
+    app.state.sso_service = SSOService(
+        redis_client=app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None
+    )
+    
+    # Initialize Advanced Audit Service
+    logger.info("Initializing Advanced Audit Service...")
+    app.state.audit_service = AuditService(
+        database_url=getattr(config, 'audit_database_url', None) or getattr(config, 'database_url', 'postgresql://user:pass@localhost/audit'),
+        redis_client=app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None,
+        encryption_key=getattr(config, 'audit_encryption_key', None)
+    )
+    
+    # Initialize RGPD Compliance Service
+    logger.info("Initializing RGPD Compliance Service...")
+    app.state.rgpd_service = RGPDComplianceService(
+        database_url=getattr(config, 'rgpd_database_url', None) or getattr(config, 'database_url', 'postgresql://user:pass@localhost/rgpd'),
+        redis_client=app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None,
+        audit_service=app.state.audit_service,
+        encryption_key=getattr(config, 'rgpd_encryption_key', None)
+    )
     
     # Initialize LLM assistant if configured
     if hasattr(config, 'llm') and config.llm.enabled:
@@ -290,12 +334,16 @@ async def lifespan(app: FastAPI):
     # Initialize cache for model pipelines
     app.state.pipeline_cache = {}
     
-    logger.info("AutoML API v3.0.0 started successfully")
+    logger.info("AutoML API v3.1.0 started successfully")
     
     yield
     
     # Shutdown
     logger.info("Shutting down AutoML API...")
+    
+    # Flush audit logs
+    if app.state.audit_service:
+        app.state.audit_service.flush()
     
     # Clean up resources
     if app.state.monitoring:
@@ -315,13 +363,14 @@ async def lifespan(app: FastAPI):
     if app.state.dask_client:
         await app.state.dask_client.close()
     
-    # Flush audit logs
-    app.state.audit_service.log_action(
-        user_id=None,
-        tenant_id=None,
+    # Final audit log
+    app.state.audit_service.log_event(
+        event_type=AuditEventType.SECURITY_ALERT,
         action="system_shutdown",
-        response_status=200
+        severity=AuditSeverity.INFO,
+        description="AutoML API shutdown complete"
     )
+    app.state.audit_service.flush()
     
     logger.info("AutoML API shutdown complete")
 
@@ -369,8 +418,8 @@ class WebSocketManager:
 
 app = FastAPI(
     title="AutoML Platform API",
-    description="Enterprise AutoML platform with MLOps, distributed training, and comprehensive monitoring",
-    version="3.0.0",
+    description="Enterprise AutoML platform with MLOps, distributed training, SSO, Audit, and RGPD compliance",
+    version="3.1.0",
     docs_url="/docs" if getattr(config.api, 'enable_docs', True) else None,
     redoc_url="/redoc" if getattr(config.api, 'enable_docs', True) else None,
     lifespan=lifespan
@@ -378,6 +427,262 @@ app = FastAPI(
 
 # Include auth router
 app.include_router(auth_router)
+
+# ============================================================================
+# SSO Router
+# ============================================================================
+
+sso_router = APIRouter(prefix="/auth/sso", tags=["authentication"])
+
+class SSOLoginRequest(BaseModel):
+    provider: str = Field(..., description="SSO provider (keycloak, auth0, okta, azure_ad)")
+    redirect_uri: str = Field(..., description="Redirect URI after authentication")
+
+class SSOCallbackRequest(BaseModel):
+    provider: str
+    code: str
+    state: str
+    redirect_uri: str
+
+@sso_router.post("/login")
+async def sso_login(
+    request: SSOLoginRequest,
+    req: Request
+):
+    """Initiate SSO login"""
+    try:
+        result = await app.state.sso_service.get_authorization_url(
+            provider=request.provider,
+            redirect_uri=request.redirect_uri
+        )
+        
+        # Track metrics
+        automl_sso_requests_total.labels(
+            provider=request.provider,
+            status="initiated",
+            tenant="unknown"
+        ).inc()
+        
+        return result
+    except Exception as e:
+        automl_sso_requests_total.labels(
+            provider=request.provider,
+            status="failed",
+            tenant="unknown"
+        ).inc()
+        raise HTTPException(status_code=400, detail=str(e))
+
+@sso_router.post("/callback")
+async def sso_callback(
+    request: SSOCallbackRequest,
+    req: Request
+):
+    """Handle SSO callback"""
+    try:
+        result = await app.state.sso_service.handle_callback(
+            provider=request.provider,
+            code=request.code,
+            state=request.state,
+            redirect_uri=request.redirect_uri
+        )
+        
+        # Log audit event
+        app.state.audit_service.log_event(
+            event_type=AuditEventType.LOGIN,
+            action="sso_login_success",
+            user_id=result["user"]["sub"],
+            metadata={"provider": request.provider},
+            ip_address=req.client.host if req.client else None
+        )
+        
+        automl_sso_requests_total.labels(
+            provider=request.provider,
+            status="success",
+            tenant=result["user"].get("tenant_id", "unknown")
+        ).inc()
+        
+        return result
+    except Exception as e:
+        automl_sso_requests_total.labels(
+            provider=request.provider,
+            status="failed",
+            tenant="unknown"
+        ).inc()
+        raise HTTPException(status_code=400, detail=str(e))
+
+@sso_router.post("/logout")
+async def sso_logout(
+    session_id: str,
+    provider: str,
+    redirect_uri: Optional[str] = None,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Logout from SSO provider"""
+    logout_url = await app.state.sso_service.logout(
+        provider=provider,
+        session_id=session_id,
+        redirect_uri=redirect_uri
+    )
+    
+    # Log audit event
+    app.state.audit_service.log_event(
+        event_type=AuditEventType.LOGOUT,
+        action="sso_logout",
+        user_id=current_user["user_id"]
+    )
+    
+    return {"logout_url": logout_url}
+
+app.include_router(sso_router)
+
+# ============================================================================
+# RGPD Router
+# ============================================================================
+
+rgpd_router = APIRouter(prefix="/compliance/rgpd", tags=["compliance"])
+
+class RGPDRequestCreate(BaseModel):
+    request_type: str = Field(..., description="Type of GDPR request (access, rectification, erasure, portability, restriction, objection)")
+    reason: Optional[str] = Field(None, description="Reason for the request")
+    requested_data: Optional[Dict] = Field(None, description="Specific data requested")
+
+class ConsentUpdate(BaseModel):
+    consent_type: str = Field(..., description="Type of consent (marketing, analytics, cookies, data_processing, third_party, profiling, automated_decision)")
+    granted: bool = Field(..., description="Whether consent is granted")
+    purpose: Optional[str] = Field(None, description="Purpose of data processing")
+    data_categories: Optional[List[str]] = Field(None, description="Categories of data")
+    expires_in_days: Optional[int] = Field(365, description="Consent expiration in days")
+
+@rgpd_router.post("/requests", dependencies=[Depends(require_permission("rgpd:create"))])
+async def create_rgpd_request(
+    request: RGPDRequestCreate,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Create a GDPR data subject request"""
+    try:
+        request_type = GDPRRequestType[request.request_type.upper()]
+        
+        request_id = app.state.rgpd_service.create_data_request(
+            user_id=current_user["user_id"],
+            request_type=request_type,
+            tenant_id=current_user.get("tenant_id"),
+            reason=request.reason,
+            requested_data=request.requested_data
+        )
+        
+        # Track metrics
+        automl_rgpd_requests_total.labels(
+            request_type=request.request_type,
+            status="created",
+            tenant=current_user.get("tenant_id", "unknown")
+        ).inc()
+        
+        # Log audit event
+        app.state.audit_service.log_event(
+            event_type=AuditEventType.GDPR_REQUEST,
+            action=f"gdpr_request_created",
+            user_id=current_user["user_id"],
+            tenant_id=current_user.get("tenant_id"),
+            resource_type="gdpr_request",
+            resource_id=request_id,
+            gdpr_relevant=True
+        )
+        
+        return {"request_id": request_id, "status": "pending"}
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Invalid request type")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@rgpd_router.get("/requests/{request_id}")
+async def get_rgpd_request_status(
+    request_id: str,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Get status of a GDPR request"""
+    # Implementation would check the request status
+    # For now, return a mock response
+    return {
+        "request_id": request_id,
+        "status": "processing",
+        "created_at": datetime.utcnow().isoformat(),
+        "deadline": (datetime.utcnow() + timedelta(days=30)).isoformat()
+    }
+
+@rgpd_router.post("/consent", dependencies=[Depends(require_permission("rgpd:consent"))])
+async def update_consent(
+    consent: ConsentUpdate,
+    req: Request,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Update user consent"""
+    try:
+        consent_type = ConsentType[consent.consent_type.upper()]
+        
+        consent_id = app.state.rgpd_service.record_consent(
+            user_id=current_user["user_id"],
+            consent_type=consent_type,
+            granted=consent.granted,
+            tenant_id=current_user.get("tenant_id"),
+            purpose=consent.purpose,
+            data_categories=consent.data_categories,
+            expires_in_days=consent.expires_in_days,
+            ip_address=req.client.host if req.client else None,
+            user_agent=req.headers.get("user-agent")
+        )
+        
+        # Log audit event
+        app.state.audit_service.log_event(
+            event_type=AuditEventType.CONSENT_UPDATE,
+            action=f"consent_{'granted' if consent.granted else 'revoked'}",
+            user_id=current_user["user_id"],
+            tenant_id=current_user.get("tenant_id"),
+            resource_type="consent",
+            resource_id=str(consent_id),
+            gdpr_relevant=True
+        )
+        
+        return {"consent_id": str(consent_id), "status": "updated"}
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Invalid consent type")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@rgpd_router.get("/consent")
+async def get_user_consents(
+    current_user: Dict = Depends(get_current_user)
+):
+    """Get all consents for current user"""
+    consents = app.state.rgpd_service.get_user_consents(current_user["user_id"])
+    return {"consents": consents}
+
+@rgpd_router.get("/data-mapping", dependencies=[Depends(require_permission("rgpd:admin"))])
+async def get_data_mapping(
+    tenant_id: Optional[str] = None,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Get data mapping for personal data (admin only)"""
+    if not tenant_id:
+        tenant_id = current_user.get("tenant_id")
+    
+    mapping = app.state.rgpd_service.get_data_mapping(tenant_id)
+    return {"data_mapping": mapping}
+
+@rgpd_router.get("/compliance-report", dependencies=[Depends(require_permission("rgpd:admin"))])
+async def get_compliance_report(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Generate GDPR compliance report (admin only)"""
+    report = app.state.rgpd_service.generate_compliance_report(
+        tenant_id=current_user.get("tenant_id"),
+        start_date=start_date,
+        end_date=end_date
+    )
+    return report
+
+app.include_router(rgpd_router)
 
 # Rate limiter with plan-based limits
 def get_rate_limit_key(request: Request):
@@ -504,13 +809,34 @@ async def audit_middleware(request: Request, call_next):
     # Process request
     response = await call_next(request)
     
-    # Log to audit
+    # Log to advanced audit service
     duration = time.time() - start_time
-    app.state.audit_service.log_action(
+    
+    # Determine event type based on path
+    event_type = AuditEventType.DATA_READ  # Default
+    if request.method == "POST":
+        if "/train" in request.url.path:
+            event_type = AuditEventType.MODEL_TRAIN
+        elif "/predict" in request.url.path:
+            event_type = AuditEventType.MODEL_PREDICT
+        elif "/export" in request.url.path:
+            event_type = AuditEventType.MODEL_EXPORT
+        else:
+            event_type = AuditEventType.DATA_CREATE
+    elif request.method == "DELETE":
+        event_type = AuditEventType.DATA_DELETE
+    elif request.method == "PUT" or request.method == "PATCH":
+        event_type = AuditEventType.DATA_UPDATE
+    
+    app.state.audit_service.log_event(
+        event_type=event_type,
+        action=f"{request.method} {request.url.path}",
         user_id=tenant_info["user_id"],
         tenant_id=tenant_info["tenant_id"],
-        action=f"{request.method} {request.url.path}",
+        request_method=request.method,
+        request_path=request.url.path,
         response_status=response.status_code,
+        response_time_ms=duration * 1000,
         ip_address=request.client.host if request.client else "unknown"
     )
     
@@ -585,7 +911,7 @@ async def health_check():
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "3.0.0",
+        "version": "3.1.0",
         "environment": getattr(config, 'environment', 'development'),
         "components": {
             "storage": "healthy" if app.state.storage else "not configured",
@@ -594,7 +920,10 @@ async def health_check():
             "celery": "healthy" if config.worker.enabled else "disabled",
             "ray": "healthy" if hasattr(config, 'distributed') and config.distributed.enabled else "disabled",
             "scheduler": "healthy" if app.state.scheduler else "disabled",
-            "streaming": f"{len(app.state.streaming_orchestrators)} active" if app.state.streaming_orchestrators else "none"
+            "streaming": f"{len(app.state.streaming_orchestrators)} active" if app.state.streaming_orchestrators else "none",
+            "sso": "healthy" if app.state.sso_service else "disabled",
+            "audit": "healthy" if app.state.audit_service else "disabled",
+            "rgpd": "healthy" if app.state.rgpd_service else "disabled"
         }
     }
     
@@ -619,7 +948,7 @@ async def get_metrics():
     )
 
 # ============================================================================
-# Training Endpoints with Scheduler
+# Training Endpoints with Scheduler and Audit
 # ============================================================================
 
 @app.post("/api/v1/train")
@@ -631,7 +960,7 @@ async def start_training(
     train_request: TrainRequest,
     tenant: Dict = Depends(get_current_tenant)
 ):
-    """Start training job with scheduler"""
+    """Start training job with scheduler and audit logging"""
     
     # Check concurrent job limits
     if app.state.scheduler and hasattr(app.state.scheduler, 'get_queue_stats'):
@@ -666,6 +995,22 @@ async def start_training(
     
     # Create experiment with MLflow tracking
     experiment_id = train_request.experiment_name or f"exp_{uuid.uuid4().hex[:8]}"
+    
+    # Log audit event for training start
+    app.state.audit_service.log_event(
+        event_type=AuditEventType.MODEL_TRAIN,
+        action="training_started",
+        user_id=tenant["user_id"],
+        tenant_id=tenant["tenant_id"],
+        resource_type="model",
+        resource_id=experiment_id,
+        metadata={
+            "dataset_id": dataset_id,
+            "target_column": target_column,
+            "algorithms": train_request.algorithms,
+            "use_gpu": train_request.use_gpu
+        }
+    )
     
     # Create job request for scheduler
     job = JobRequest(
@@ -712,6 +1057,126 @@ async def start_training(
         "queue_type": job.queue_type.queue_name,
         "estimated_wait_time": f"{job.estimated_time_minutes} minutes"
     }
+
+@app.post("/api/v1/predict")
+async def predict(
+    request: Request,
+    predict_request: PredictRequest,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Make prediction with audit logging"""
+    
+    # Log audit event
+    app.state.audit_service.log_event(
+        event_type=AuditEventType.MODEL_PREDICT,
+        action="prediction_requested",
+        user_id=tenant["user_id"],
+        tenant_id=tenant["tenant_id"],
+        resource_type="model",
+        resource_id=predict_request.model_id,
+        metadata={"track": predict_request.track}
+    )
+    
+    # Load model
+    try:
+        pipeline = load_pipeline(predict_request.model_id)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Model {predict_request.model_id} not found")
+    
+    # Make prediction
+    try:
+        prediction = predict(pipeline, predict_request.data)
+        
+        # Track prediction if requested
+        if predict_request.track and app.state.monitoring:
+            app.state.monitoring.track_prediction(
+                model_id=predict_request.model_id,
+                input_data=predict_request.data,
+                prediction=prediction,
+                timestamp=datetime.utcnow()
+            )
+        
+        return {"prediction": prediction}
+        
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        raise HTTPException(500, f"Prediction failed: {str(e)}")
+
+@app.post("/api/v1/export")
+async def export_model(
+    request: Request,
+    export_request: ExportRequest,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Export model with audit logging"""
+    
+    # Log audit event
+    app.state.audit_service.log_event(
+        event_type=AuditEventType.MODEL_EXPORT,
+        action="model_export_requested",
+        user_id=tenant["user_id"],
+        tenant_id=tenant["tenant_id"],
+        resource_type="model",
+        resource_id=export_request.model_id,
+        metadata={
+            "format": export_request.format,
+            "optimize_for_edge": export_request.optimize_for_edge,
+            "quantize": export_request.quantize
+        }
+    )
+    
+    try:
+        # Export model
+        exported_path = app.state.enhanced_exporter.export(
+            model_id=export_request.model_id,
+            format=export_request.format,
+            optimize_for_edge=export_request.optimize_for_edge,
+            quantize=export_request.quantize,
+            target_device=export_request.target_device
+        )
+        
+        return FileResponse(
+            path=exported_path,
+            media_type="application/octet-stream",
+            filename=f"{export_request.model_id}.{export_request.format}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
+        raise HTTPException(500, f"Export failed: {str(e)}")
+
+@app.delete("/api/v1/models/{model_id}")
+async def delete_model(
+    request: Request,
+    model_id: str,
+    tenant: Dict = Depends(get_current_tenant)
+):
+    """Delete model with audit logging"""
+    
+    # Log audit event
+    app.state.audit_service.log_event(
+        event_type=AuditEventType.MODEL_DELETE,
+        action="model_deleted",
+        user_id=tenant["user_id"],
+        tenant_id=tenant["tenant_id"],
+        resource_type="model",
+        resource_id=model_id
+    )
+    
+    try:
+        # Delete from MLflow registry
+        if app.state.mlflow_registry:
+            app.state.mlflow_registry.delete_model(model_id)
+        
+        # Delete from storage
+        if app.state.storage:
+            app.state.storage.delete_model(model_id, tenant_id=tenant["tenant_id"])
+        
+        return {"status": "deleted", "model_id": model_id}
+        
+    except Exception as e:
+        logger.error(f"Delete failed: {e}")
+        raise HTTPException(500, f"Delete failed: {str(e)}")
 
 @app.get("/api/v1/jobs/{job_id}/status")
 async def get_job_status(
@@ -809,3 +1274,17 @@ async def start_streaming(
     # Create orchestrator
     orchestrator = StreamingOrchestrator(stream_config)
     orchestrator.set_processor(processor)
+    
+    # Start streaming
+    orchestrator.start()
+    
+    # Store orchestrator
+    orchestrator_id = f"stream_{uuid.uuid4().hex[:8]}"
+    app.state.streaming_orchestrators[orchestrator_id] = orchestrator
+    
+    return {
+        "orchestrator_id": orchestrator_id,
+        "status": "running",
+        "platform": config.platform,
+        "topic": config.topic
+    }
