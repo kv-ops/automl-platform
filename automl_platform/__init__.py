@@ -26,10 +26,10 @@ A comprehensive platform for automated machine learning with advanced features i
 - Job scheduling with CPU/GPU queue management
 - Interactive UI with Streamlit dashboard
 
-Version: 3.0.1
+Version: 3.1.0
 """
 
-__version__ = "3.0.1"
+__version__ = "3.1.0"
 __author__ = "AutoML Platform Team"
 __email__ = "support@automl-platform.com"
 
