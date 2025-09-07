@@ -1,649 +1,298 @@
 """
-Test Suite for AutoML Platform
-===============================
-
-Comprehensive test coverage for all AutoML platform modules including:
-- Core infrastructure services (health monitoring, service registry, configuration)
-- A/B testing and model comparison
-- API endpoints and services
-- Authentication and authorization (including SSO and RGPD endpoints)
-- Billing and subscription management
-- Data preparation and quality assessment
-- Model training and ensemble methods
-- Model export and deployment
-- Incremental and streaming ML
-- Monitoring and retraining
-- Job scheduling and orchestration
-- Storage and feature store
-- Prompts and LLM integration
-- UI components (Streamlit dashboard)
+Module de tests pour l'API Gateway
 """
 
 import sys
 import os
-from pathlib import Path
+import unittest
+from typing import List, Optional
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ajouter le répertoire parent au path pour l'import des modules
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Test module imports for availability checking
-MODULES_STATUS = {
-    # Core infrastructure modules
-    'core': False,
-    'health_monitor': False,
-    'service_registry': False,
-    'config_manager': False,
-    
-    # Core modules
-    'ab_testing': False,
-    'api': False,
-    'auth': False,
-    'auth_endpoints': False,  # Added for SSO and RGPD endpoints
-    'billing': False,
-    'streaming': False,
-    'config': False,
-    'orchestrator': False,
-    'scheduler': False,
-    'storage': False,
-    
-    # Data modules
-    'data_prep': False,
-    'data_quality_agent': False,
-    'metrics': False,
-    
-    # Model modules
-    'model_selection': False,
-    'ensemble': False,
-    'tabnet_sklearn': False,
-    'incremental_learning': False,
-    
-    # MLOps modules
-    'mlflow_registry': False,
-    'mlops_service': False,
-    'mlops_endpoints': False,
-    'monitoring': False,
-    'retraining_service': False,
-    'export_service': False,
-    
-    # LLM modules
-    'prompts': False,
-    
-    # UI modules
-    'ui_streamlit': False,
-    
-    # Security and compliance modules
-    'sso_service': False,
-    'audit_service': False,
-    'rgpd_compliance_service': False,
-}
 
-# Check module availability
-def check_module_availability():
-    """Check which AutoML platform modules are available."""
-    # Core infrastructure modules
-    try:
-        from automl_platform import core
-        MODULES_STATUS['core'] = True
-    except ImportError:
-        pass
+def get_test_modules() -> List[str]:
+    """
+    Retourne la liste de tous les modules de test disponibles
     
-    try:
-        from automl_platform.core import health_monitor
-        MODULES_STATUS['health_monitor'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.core import service_registry
-        MODULES_STATUS['service_registry'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.core import config_manager
-        MODULES_STATUS['config_manager'] = True
-    except ImportError:
-        pass
-    
-    # Core modules
-    try:
-        from automl_platform import ab_testing
-        MODULES_STATUS['ab_testing'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.api import api
-        MODULES_STATUS['api'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import auth
-        MODULES_STATUS['auth'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.api import auth_endpoints
-        MODULES_STATUS['auth_endpoints'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.api import billing
-        MODULES_STATUS['billing'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.api import streaming
-        MODULES_STATUS['streaming'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import config
-        MODULES_STATUS['config'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import orchestrator
-        MODULES_STATUS['orchestrator'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import scheduler
-        MODULES_STATUS['scheduler'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import storage
-        MODULES_STATUS['storage'] = True
-    except ImportError:
-        pass
-    
-    # Data modules
-    try:
-        from automl_platform import data_prep
-        MODULES_STATUS['data_prep'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import data_quality_agent
-        MODULES_STATUS['data_quality_agent'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import metrics
-        MODULES_STATUS['metrics'] = True
-    except ImportError:
-        pass
-    
-    # Model modules
-    try:
-        from automl_platform import model_selection
-        MODULES_STATUS['model_selection'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import ensemble
-        MODULES_STATUS['ensemble'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import tabnet_sklearn
-        MODULES_STATUS['tabnet_sklearn'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import incremental_learning
-        MODULES_STATUS['incremental_learning'] = True
-    except ImportError:
-        pass
-    
-    # MLOps modules
-    try:
-        from automl_platform import mlflow_registry
-        MODULES_STATUS['mlflow_registry'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import mlops_service
-        MODULES_STATUS['mlops_service'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform.api import mlops_endpoints
-        MODULES_STATUS['mlops_endpoints'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import monitoring
-        MODULES_STATUS['monitoring'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import retraining_service
-        MODULES_STATUS['retraining_service'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import export_service
-        MODULES_STATUS['export_service'] = True
-    except ImportError:
-        pass
-    
-    # LLM modules
-    try:
-        from automl_platform import prompts
-        MODULES_STATUS['prompts'] = True
-    except ImportError:
-        pass
-    
-    # UI modules
-    try:
-        from automl_platform.ui import streamlit_app
-        MODULES_STATUS['ui_streamlit'] = True
-    except ImportError:
-        pass
-    
-    # Security and compliance modules
-    try:
-        from automl_platform import sso_service
-        MODULES_STATUS['sso_service'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import audit_service
-        MODULES_STATUS['audit_service'] = True
-    except ImportError:
-        pass
-    
-    try:
-        from automl_platform import rgpd_compliance_service
-        MODULES_STATUS['rgpd_compliance_service'] = True
-    except ImportError:
-        pass
-    
-    return MODULES_STATUS
-
-# Test discovery helpers
-def get_test_modules():
-    """Get list of all test modules that exist in the tests directory."""
-    # List of all test files that actually exist (in alphabetical order)
-    test_modules = [
-        'test_ab_testing',           # A/B testing framework
-        'test_api',                  # API endpoints
-        'test_auth',                 # Authentication and authorization
-        'test_auth_endpoints',       # SSO and RGPD API endpoints
-        'test_billing',              # Billing and subscription management
-        'test_config',               # Configuration management (legacy)
-        'test_config_manager',       # Core configuration manager
-        'test_data_prep',            # Data preparation
-        'test_data_quality_agent',   # Data quality agent with LLM
-        'test_ensemble',             # Ensemble methods
-        'test_export_service',       # Model export service
-        'test_health_monitor',       # Core health monitoring
-        'test_incremental_learning', # Incremental/online learning
-        'test_metrics',              # Metrics calculation
-        'test_mlflow_registry',      # MLflow registry integration
-        'test_mlops_endpoints',      # MLOps API endpoints
-        'test_mlops_service',        # MLOps service layer
-        'test_model_selection',      # Model selection and tuning
-        'test_monitoring',           # Model monitoring
-        'test_orchestrator',         # AutoML orchestrator
-        'test_prompts',              # LLM prompts
-        'test_retraining_service',   # Automated retraining
-        'test_scheduler',            # Job scheduler
-        'test_service_registry',     # Core service registry
-        'test_storage',              # Storage backends
-        'test_streaming',            # Streaming ML
-        'test_tabnet_sklearn',       # TabNet implementation
-        'test_ui_streamlit',         # Streamlit UI dashboard
+    Returns:
+        List[str]: Liste des noms de modules de test
+    """
+    return [
+        'test_api_gateway',
+        'test_audit_service',
+        'test_auth_middleware',
+        'test_cache_manager',
+        'test_circuit_breaker',
+        'test_config_manager',
+        'test_database_service',
+        'test_health_monitor',
+        'test_load_balancer',
+        'test_monitoring_service',
+        'test_rate_limiter',
+        'test_request_validator',
+        'test_response_transformer',
+        'test_rgpd_compliance_service',
+        'test_route_manager',
+        'test_security_headers',
+        'test_service_discovery',
+        'test_service_registry',
+        'test_sso_service',
+        'test_websocket_handler'
     ]
-    return test_modules
 
-def run_all_tests(verbose=False, coverage=False):
+
+def run_all_tests(verbosity: int = 2) -> unittest.TestResult:
     """
-    Run all available tests.
+    Exécute tous les tests disponibles
     
     Args:
-        verbose: Enable verbose output
-        coverage: Enable coverage reporting
-    
+        verbosity: Niveau de détail des résultats (0, 1 ou 2)
+        
     Returns:
-        Test results summary
+        unittest.TestResult: Résultats des tests
     """
-    import pytest
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
     
-    args = [__file__.replace('__init__.py', '')]
+    # Charger tous les modules de test
+    for module_name in get_test_modules():
+        try:
+            module = __import__(f'tests.{module_name}', fromlist=[module_name])
+            suite.addTests(loader.loadTestsFromModule(module))
+            print(f"✓ Module {module_name} chargé")
+        except ImportError as e:
+            print(f"✗ Impossible de charger {module_name}: {e}")
     
-    if verbose:
-        args.append('-v')
-    
-    if coverage:
-        args.extend(['--cov=automl_platform', '--cov-report=term-missing'])
-    
-    # Check module availability first
-    check_module_availability()
-    
-    # Print module status
-    print("\nAutoML Platform Module Status:")
-    print("-" * 40)
-    for module, available in MODULES_STATUS.items():
-        status = "✓" if available else "✗"
-        print(f"{status} {module:25} {'Available' if available else 'Not Available'}")
-    print("-" * 40)
-    
-    # Print test files status
-    print("\nTest Files Status:")
-    print("-" * 40)
-    test_dir = Path(__file__).parent
-    for test_module in get_test_modules():
-        test_file = test_dir / f"{test_module}.py"
-        exists = test_file.exists()
-        status = "✓" if exists else "✗"
-        print(f"{status} {test_module:25} {'Found' if exists else 'Not Found'}")
-    print("-" * 40)
-    
-    # Run tests
-    return pytest.main(args)
+    # Exécuter les tests
+    runner = unittest.TextTestRunner(verbosity=verbosity)
+    return runner.run(suite)
 
-def run_specific_tests(test_module, verbose=False):
+
+def run_test_module(module_name: str, verbosity: int = 2) -> Optional[unittest.TestResult]:
     """
-    Run tests for a specific module.
+    Exécute les tests d'un module spécifique
     
     Args:
-        test_module: Name of the test module (e.g., 'test_api')
-        verbose: Enable verbose output
-    
+        module_name: Nom du module de test à exécuter
+        verbosity: Niveau de détail des résultats
+        
     Returns:
-        Test results
+        Optional[unittest.TestResult]: Résultats des tests ou None si le module n'existe pas
     """
-    import pytest
+    if module_name not in get_test_modules():
+        print(f"Module de test '{module_name}' non trouvé")
+        print(f"Modules disponibles: {', '.join(get_test_modules())}")
+        return None
     
-    test_file = Path(__file__).parent / f"{test_module}.py"
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
     
-    if not test_file.exists():
-        raise FileNotFoundError(f"Test file {test_module}.py not found")
-    
-    args = [str(test_file)]
-    
-    if verbose:
-        args.append('-v')
-    
-    return pytest.main(args)
+    try:
+        module = __import__(f'tests.{module_name}', fromlist=[module_name])
+        suite.addTests(loader.loadTestsFromModule(module))
+        print(f"Exécution des tests du module {module_name}...")
+        
+        runner = unittest.TextTestRunner(verbosity=verbosity)
+        return runner.run(suite)
+    except ImportError as e:
+        print(f"Erreur lors du chargement du module {module_name}: {e}")
+        return None
 
-def run_test_category(category, verbose=False):
+
+def run_test_category(category: str, verbosity: int = 2) -> Optional[unittest.TestResult]:
     """
-    Run tests for a specific category.
+    Exécute les tests d'une catégorie spécifique
     
     Args:
-        category: Category of tests to run
-                 Options: 'core', 'infrastructure', 'data', 'models', 'mlops', 'api', 'ui', 'auth', 'compliance'
-        verbose: Enable verbose output
-    
+        category: Catégorie de tests à exécuter
+        verbosity: Niveau de détail des résultats
+        
     Returns:
-        Test results
+        Optional[unittest.TestResult]: Résultats des tests
     """
-    import pytest
-    
-    category_tests = {
+    categories = {
         'core': [
-            'test_config',
-            'test_orchestrator',
-            'test_scheduler',
-            'test_storage',
+            'test_api_gateway',
+            'test_database_service',
+            'test_route_manager',
+            'test_websocket_handler'
         ],
-        'infrastructure': [
-            'test_health_monitor',
+        'core_health': [
+            'test_health_monitor'
+        ],
+        'core_registry': [
             'test_service_registry',
-            'test_config_manager',
+            'test_service_discovery'
         ],
-        'data': [
-            'test_data_prep',
-            'test_data_quality_agent',
-            'test_metrics',
+        'core_config': [
+            'test_config_manager'
         ],
-        'models': [
-            'test_model_selection',
-            'test_ensemble',
-            'test_tabnet_sklearn',
-            'test_incremental_learning',
+        'middleware': [
+            'test_auth_middleware',
+            'test_rate_limiter',
+            'test_security_headers',
+            'test_request_validator',
+            'test_response_transformer'
         ],
-        'mlops': [
-            'test_mlflow_registry',
-            'test_mlops_service',
-            'test_mlops_endpoints',
-            'test_monitoring',
-            'test_retraining_service',
-            'test_export_service',
-            'test_ab_testing',
+        'services': [
+            'test_monitoring_service',
+            'test_cache_manager',
+            'test_load_balancer',
+            'test_circuit_breaker'
         ],
-        'api': [
-            'test_api',
-            'test_auth_endpoints',  # Added SSO and RGPD endpoints tests
-            'test_billing',
-            'test_streaming',
-        ],
-        'auth': [
-            'test_auth',
-            'test_auth_endpoints',
+        'sso': [
+            'test_sso_service'
         ],
         'compliance': [
-            'test_auth_endpoints',  # Includes RGPD tests
+            'test_audit_service',
+            'test_rgpd_compliance_service'
         ],
-        'ui': [
-            'test_ui_streamlit',
+        'reliability': [
+            'test_circuit_breaker',
+            'test_health_monitor',
+            'test_load_balancer'
         ],
-        'llm': [
-            'test_prompts',
-            'test_data_quality_agent',
+        'security': [
+            'test_auth_middleware',
+            'test_security_headers',
+            'test_sso_service',
+            'test_audit_service'
+        ],
+        'performance': [
+            'test_cache_manager',
+            'test_rate_limiter',
+            'test_load_balancer'
         ]
     }
     
-    if category not in category_tests:
-        raise ValueError(f"Unknown category: {category}. Options: {list(category_tests.keys())}")
+    if category not in categories:
+        print(f"Catégorie '{category}' non trouvée")
+        print(f"Catégories disponibles: {', '.join(categories.keys())}")
+        return None
     
-    test_dir = Path(__file__).parent
-    test_files = []
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
     
-    for test_module in category_tests[category]:
-        test_file = test_dir / f"{test_module}.py"
-        if test_file.exists():
-            test_files.append(str(test_file))
+    modules_to_run = categories[category]
+    print(f"Exécution des tests de la catégorie '{category}'...")
+    print(f"Modules: {', '.join(modules_to_run)}")
     
-    if not test_files:
-        raise FileNotFoundError(f"No test files found for category: {category}")
+    for module_name in modules_to_run:
+        try:
+            module = __import__(f'tests.{module_name}', fromlist=[module_name])
+            suite.addTests(loader.loadTestsFromModule(module))
+            print(f"✓ Module {module_name} chargé")
+        except ImportError as e:
+            print(f"✗ Impossible de charger {module_name}: {e}")
     
-    args = test_files
-    if verbose:
-        args.append('-v')
-    
-    print(f"\nRunning {category} tests:")
-    print("-" * 40)
-    for test_file in test_files:
-        print(f"  • {Path(test_file).name}")
-    print("-" * 40)
-    
-    return pytest.main(args)
+    runner = unittest.TextTestRunner(verbosity=verbosity)
+    return runner.run(suite)
 
-# Test fixtures and utilities
-def create_test_data(task='classification', n_samples=100, n_features=10):
+
+def get_test_statistics() -> dict:
     """
-    Create synthetic test data.
-    
-    Args:
-        task: 'classification' or 'regression'
-        n_samples: Number of samples
-        n_features: Number of features
+    Obtient des statistiques sur les tests disponibles
     
     Returns:
-        X, y arrays
+        dict: Statistiques des tests
     """
-    from sklearn.datasets import make_classification, make_regression
-    
-    if task == 'classification':
-        return make_classification(
-            n_samples=n_samples,
-            n_features=n_features,
-            n_informative=n_features - 2,
-            n_redundant=2,
-            random_state=42
-        )
-    else:
-        return make_regression(
-            n_samples=n_samples,
-            n_features=n_features,
-            noise=0.1,
-            random_state=42
-        )
-
-def create_mock_user(plan_type='PRO', is_admin=False):
-    """
-    Create a mock user for testing.
-    
-    Args:
-        plan_type: User's subscription plan
-        is_admin: Whether user has admin role
-    
-    Returns:
-        Mock user object
-    """
-    from unittest.mock import Mock
-    import uuid
-    
-    user = Mock()
-    user.id = uuid.uuid4()
-    user.username = "admin" if is_admin else "testuser"
-    user.email = f"{user.username}@example.com"
-    user.tenant_id = uuid.uuid4()
-    user.plan_type = plan_type
-    user.is_active = True
-    
-    if is_admin:
-        user.roles = [Mock(name="admin")]
-    else:
-        user.roles = [Mock(name="user")]
-    
-    return user
-
-def create_test_token(user_id=None, tenant_id=None, roles=None, expired=False):
-    """
-    Create a test JWT token.
-    
-    Args:
-        user_id: User ID to include in token
-        tenant_id: Tenant ID to include in token
-        roles: List of roles
-        expired: Whether token should be expired
-    
-    Returns:
-        JWT token string
-    """
-    import jwt
-    from datetime import datetime, timedelta
-    import uuid
-    
-    if user_id is None:
-        user_id = str(uuid.uuid4())
-    if tenant_id is None:
-        tenant_id = str(uuid.uuid4())
-    if roles is None:
-        roles = ["user"]
-    
-    payload = {
-        "sub": user_id,
-        "tenant_id": tenant_id,
-        "roles": roles,
-        "iat": datetime.utcnow(),
-        "jti": str(uuid.uuid4())
+    stats = {
+        'total_modules': len(get_test_modules()),
+        'modules': {},
+        'categories': {
+            'core': 4,
+            'core_health': 1,
+            'core_registry': 2,
+            'core_config': 1,
+            'middleware': 5,
+            'services': 4,
+            'sso': 1,
+            'compliance': 2,
+            'reliability': 3,
+            'security': 4,
+            'performance': 3
+        }
     }
     
-    if expired:
-        payload["exp"] = datetime.utcnow() - timedelta(hours=1)
+    # Compter les tests par module
+    loader = unittest.TestLoader()
+    for module_name in get_test_modules():
+        try:
+            module = __import__(f'tests.{module_name}', fromlist=[module_name])
+            suite = loader.loadTestsFromModule(module)
+            test_count = suite.countTestCases()
+            stats['modules'][module_name] = test_count
+        except ImportError:
+            stats['modules'][module_name] = 0
+    
+    stats['total_tests'] = sum(stats['modules'].values())
+    
+    return stats
+
+
+def print_test_summary():
+    """
+    Affiche un résumé des tests disponibles
+    """
+    stats = get_test_statistics()
+    
+    print("\n" + "="*60)
+    print("RÉSUMÉ DES TESTS")
+    print("="*60)
+    print(f"Total de modules: {stats['total_modules']}")
+    print(f"Total de tests: {stats['total_tests']}")
+    
+    print("\n📦 MODULES DE TEST:")
+    print("-"*40)
+    for module, count in sorted(stats['modules'].items()):
+        status = "✓" if count > 0 else "✗"
+        print(f"{status} {module:<35} ({count} tests)")
+    
+    print("\n📁 CATÉGORIES:")
+    print("-"*40)
+    for category, count in sorted(stats['categories'].items()):
+        print(f"  • {category:<20} ({count} modules)")
+    
+    print("\n💡 UTILISATION:")
+    print("-"*40)
+    print("  • Tous les tests:        python -m tests")
+    print("  • Module spécifique:     python -m tests test_api_gateway")
+    print("  • Catégorie spécifique:  python -m tests --category core")
+    print("  • Afficher ce résumé:    python -m tests --summary")
+    print("="*60 + "\n")
+
+
+if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Exécuter les tests de l\'API Gateway')
+    parser.add_argument('module', nargs='?', help='Module de test spécifique à exécuter')
+    parser.add_argument('--category', '-c', help='Catégorie de tests à exécuter')
+    parser.add_argument('--all', '-a', action='store_true', help='Exécuter tous les tests')
+    parser.add_argument('--summary', '-s', action='store_true', help='Afficher le résumé des tests')
+    parser.add_argument('--verbose', '-v', type=int, default=2, choices=[0, 1, 2],
+                       help='Niveau de verbosité (0=minimal, 1=normal, 2=détaillé)')
+    
+    args = parser.parse_args()
+    
+    if args.summary:
+        print_test_summary()
+    elif args.all:
+        print("Exécution de tous les tests...")
+        result = run_all_tests(verbosity=args.verbose)
+        sys.exit(0 if result.wasSuccessful() else 1)
+    elif args.category:
+        result = run_test_category(args.category, verbosity=args.verbose)
+        if result:
+            sys.exit(0 if result.wasSuccessful() else 1)
+        else:
+            sys.exit(1)
+    elif args.module:
+        result = run_test_module(args.module, verbosity=args.verbose)
+        if result:
+            sys.exit(0 if result.wasSuccessful() else 1)
+        else:
+            sys.exit(1)
     else:
-        payload["exp"] = datetime.utcnow() + timedelta(hours=1)
-    
-    return jwt.encode(payload, "test_secret", algorithm="HS256")
-
-def create_mock_config(environment='test'):
-    """
-    Create a mock configuration for testing.
-    
-    Args:
-        environment: Environment name (test, development, staging, production)
-    
-    Returns:
-        Mock AutoMLConfig object
-    """
-    from unittest.mock import Mock
-    
-    config = Mock()
-    config.environment = environment
-    config.storage = Mock(backend='local', max_versions_per_model=3)
-    config.worker = Mock(enabled=True, max_workers=4, gpu_workers=0)
-    config.billing = Mock(enabled=True, plan_type='professional')
-    config.monitoring = Mock(enabled=True)
-    config.streaming = Mock(enabled=False)
-    config.llm = Mock(enabled=False)
-    config.api = Mock(host='localhost', port=8000)
-    
-    return config
-
-def create_mock_health_check(service_name, status='healthy'):
-    """
-    Create a mock health check result.
-    
-    Args:
-        service_name: Name of the service
-        status: Health status (healthy, degraded, unhealthy, unknown)
-    
-    Returns:
-        Mock HealthCheck object
-    """
-    from unittest.mock import Mock
-    from datetime import datetime
-    
-    check = Mock()
-    check.service = service_name
-    check.status = Mock(value=status)
-    check.message = f"{service_name} is {status}"
-    check.latency_ms = 10.5
-    check.timestamp = datetime.utcnow()
-    check.details = {}
-    
-    return check
-
-# Export key items
-__all__ = [
-    'MODULES_STATUS',
-    'check_module_availability',
-    'get_test_modules',
-    'run_all_tests',
-    'run_specific_tests',
-    'run_test_category',
-    'create_test_data',
-    'create_mock_user',
-    'create_test_token',
-    'create_mock_config',
-    'create_mock_health_check',
-]
-
-# Run module check on import
-check_module_availability()
+        print_test_summary()
