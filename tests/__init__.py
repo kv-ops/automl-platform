@@ -55,8 +55,6 @@ MODULES_STATUS = {
 # Check module availability
 def check_module_availability():
     """Check which AutoML platform modules are available."""
-    global MODULES_STATUS
-    
     # Core modules
     try:
         from automl_platform import ab_testing
