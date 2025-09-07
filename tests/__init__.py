@@ -3,6 +3,7 @@ Test Suite for AutoML Platform
 ===============================
 
 Comprehensive test coverage for all AutoML platform modules including:
+- Core infrastructure services (health monitoring, service registry, configuration)
 - A/B testing and model comparison
 - API endpoints and services
 - Authentication and authorization (including SSO and RGPD endpoints)
@@ -27,6 +28,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Test module imports for availability checking
 MODULES_STATUS = {
+    # Core infrastructure modules
+    'core': False,
+    'health_monitor': False,
+    'service_registry': False,
+    'config_manager': False,
+    
     # Core modules
     'ab_testing': False,
     'api': False,
@@ -73,6 +80,31 @@ MODULES_STATUS = {
 # Check module availability
 def check_module_availability():
     """Check which AutoML platform modules are available."""
+    # Core infrastructure modules
+    try:
+        from automl_platform import core
+        MODULES_STATUS['core'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.core import health_monitor
+        MODULES_STATUS['health_monitor'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.core import service_registry
+        MODULES_STATUS['service_registry'] = True
+    except ImportError:
+        pass
+    
+    try:
+        from automl_platform.core import config_manager
+        MODULES_STATUS['config_manager'] = True
+    except ImportError:
+        pass
+    
     # Core modules
     try:
         from automl_platform import ab_testing
@@ -260,10 +292,13 @@ def get_test_modules():
         'test_auth',                 # Authentication and authorization
         'test_auth_endpoints',       # SSO and RGPD API endpoints
         'test_billing',              # Billing and subscription management
+        'test_config',               # Configuration management (legacy)
+        'test_config_manager',       # Core configuration manager
         'test_data_prep',            # Data preparation
         'test_data_quality_agent',   # Data quality agent with LLM
         'test_ensemble',             # Ensemble methods
         'test_export_service',       # Model export service
+        'test_health_monitor',       # Core health monitoring
         'test_incremental_learning', # Incremental/online learning
         'test_metrics',              # Metrics calculation
         'test_mlflow_registry',      # MLflow registry integration
@@ -275,6 +310,7 @@ def get_test_modules():
         'test_prompts',              # LLM prompts
         'test_retraining_service',   # Automated retraining
         'test_scheduler',            # Job scheduler
+        'test_service_registry',     # Core service registry
         'test_storage',              # Storage backends
         'test_streaming',            # Streaming ML
         'test_tabnet_sklearn',       # TabNet implementation
@@ -359,7 +395,7 @@ def run_test_category(category, verbose=False):
     
     Args:
         category: Category of tests to run
-                 Options: 'core', 'data', 'models', 'mlops', 'api', 'ui', 'auth', 'compliance'
+                 Options: 'core', 'infrastructure', 'data', 'models', 'mlops', 'api', 'ui', 'auth', 'compliance'
         verbose: Enable verbose output
     
     Returns:
@@ -373,6 +409,11 @@ def run_test_category(category, verbose=False):
             'test_orchestrator',
             'test_scheduler',
             'test_storage',
+        ],
+        'infrastructure': [
+            'test_health_monitor',
+            'test_service_registry',
+            'test_config_manager',
         ],
         'data': [
             'test_data_prep',
@@ -541,6 +582,54 @@ def create_test_token(user_id=None, tenant_id=None, roles=None, expired=False):
     
     return jwt.encode(payload, "test_secret", algorithm="HS256")
 
+def create_mock_config(environment='test'):
+    """
+    Create a mock configuration for testing.
+    
+    Args:
+        environment: Environment name (test, development, staging, production)
+    
+    Returns:
+        Mock AutoMLConfig object
+    """
+    from unittest.mock import Mock
+    
+    config = Mock()
+    config.environment = environment
+    config.storage = Mock(backend='local', max_versions_per_model=3)
+    config.worker = Mock(enabled=True, max_workers=4, gpu_workers=0)
+    config.billing = Mock(enabled=True, plan_type='professional')
+    config.monitoring = Mock(enabled=True)
+    config.streaming = Mock(enabled=False)
+    config.llm = Mock(enabled=False)
+    config.api = Mock(host='localhost', port=8000)
+    
+    return config
+
+def create_mock_health_check(service_name, status='healthy'):
+    """
+    Create a mock health check result.
+    
+    Args:
+        service_name: Name of the service
+        status: Health status (healthy, degraded, unhealthy, unknown)
+    
+    Returns:
+        Mock HealthCheck object
+    """
+    from unittest.mock import Mock
+    from datetime import datetime
+    
+    check = Mock()
+    check.service = service_name
+    check.status = Mock(value=status)
+    check.message = f"{service_name} is {status}"
+    check.latency_ms = 10.5
+    check.timestamp = datetime.utcnow()
+    check.details = {}
+    
+    return check
+
 # Export key items
 __all__ = [
     'MODULES_STATUS',
@@ -552,6 +641,8 @@ __all__ = [
     'create_test_data',
     'create_mock_user',
     'create_test_token',
+    'create_mock_config',
+    'create_mock_health_check',
 ]
 
 # Run module check on import
