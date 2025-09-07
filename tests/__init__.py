@@ -253,7 +253,7 @@ def check_module_availability():
 # Test discovery helpers
 def get_test_modules():
     """Get list of all test modules that exist in the tests directory."""
-    # List of all test files that actually exist
+    # List of all test files that actually exist (in alphabetical order)
     test_modules = [
         'test_ab_testing',           # A/B testing framework
         'test_api',                  # API endpoints
@@ -396,6 +396,7 @@ def run_test_category(category, verbose=False):
         ],
         'api': [
             'test_api',
+            'test_auth_endpoints',  # Added SSO and RGPD endpoints tests
             'test_billing',
             'test_streaming',
         ],
