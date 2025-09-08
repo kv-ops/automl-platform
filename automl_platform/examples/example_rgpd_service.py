@@ -1,7 +1,7 @@
 """
 RGPD/GDPR Compliance Example
 ============================
-Place in: automl_platform/examples/example_rgpd_service.py
+Place in: examples/example_rgpd_service.py
 
 Demonstrates comprehensive GDPR compliance features including consent management,
 data subject requests, data protection, anonymization, and regulatory reporting.
