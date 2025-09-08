@@ -745,6 +745,10 @@ def initialize_platform(config_path: str = None, environment: str = "production"
     Returns:
         Dictionary with initialized services
     """
+    # Import logging here, at the beginning of the function
+    import logging
+    logger = logging.getLogger(__name__)
+    
     # Load configuration
     config = load_config(config_path, environment)
     
@@ -893,8 +897,6 @@ def initialize_platform(config_path: str = None, environment: str = "production"
                 max_memory_mb=config.incremental.max_memory_mb
             )
     
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"AutoML Platform v{__version__} initialized in {environment} mode")
     logger.info(f"Features enabled: {check_all_features()}")
     
