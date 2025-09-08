@@ -1,7 +1,7 @@
 """
 SSO Authentication Example
 ==========================
-Place in: automl_platform/examples/example_sso_service.py
+Place in: automl_platform/examples/example_sso_auth.py
 
 Demonstrates SSO integration with multiple providers (Keycloak, Auth0, Okta, Azure AD),
 session management, token handling, and multi-tenant support.
