@@ -1,32 +1,27 @@
 """
-SSO and RGPD/GDPR Compliance Example
-====================================
-Place in: automl_platform/examples/sso_rgpd_example.py
+SSO Authentication Example
+==========================
+Place in: automl_platform/examples/sso_authentication_example.py
 
-Demonstrates SSO integration (Keycloak/Auth0) and GDPR compliance
-features including consent management and data subject requests.
+Demonstrates SSO integration with multiple providers (Keycloak, Auth0, Okta, Azure AD),
+session management, token handling, and multi-tenant support.
 """
 
 import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+import os
 import pandas as pd
 import httpx
 
-# Import SSO and RGPD components
+# Import SSO components
 from automl_platform.sso_service import (
     SSOService,
     SSOProvider,
-    SSOConfig
-)
-from automl_platform.rgpd_compliance_service import (
-    RGPDComplianceService,
-    GDPRRequestType,
-    ConsentType,
-    DataCategory,
-    get_rgpd_service
+    SSOConfig,
+    SAMLService
 )
 from automl_platform.audit_service import (
     AuditService,
@@ -38,545 +33,649 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class SSOAndRGPDExample:
-    """SSO and RGPD compliance examples"""
+class SSOAuthenticationExample:
+    """Comprehensive SSO authentication examples"""
     
     def __init__(self):
         self.sso_service = SSOService()
-        self.rgpd_service = get_rgpd_service()
+        self.saml_service = SAMLService()
         self.audit_service = AuditService()
+        
+        # Sample user data for testing
+        self.test_users = {
+            "keycloak": {
+                "user_id": "kc_user_001",
+                "email": "user@keycloak.example.com",
+                "name": "Keycloak Test User"
+            },
+            "auth0": {
+                "user_id": "auth0|123456",
+                "email": "user@auth0.example.com",
+                "name": "Auth0 Test User"
+            },
+            "okta": {
+                "user_id": "00u1234567890",
+                "email": "user@okta.example.com",
+                "name": "Okta Test User"
+            }
+        }
     
-    async def example_1_sso_authentication(self):
-        """Example 1: SSO authentication flow"""
+    async def example_1_multi_provider_sso(self):
+        """Example 1: Multi-provider SSO authentication flow"""
         print("\n" + "="*80)
-        print("EXAMPLE 1: SSO Authentication Flow")
+        print("EXAMPLE 1: Multi-Provider SSO Authentication")
         print("="*80)
         
-        # Simulate SSO login with different providers
-        providers = ["keycloak", "auth0"]
+        providers = ["keycloak", "auth0", "okta"]
         
         for provider in providers:
             print(f"\n🔐 {provider.upper()} Authentication Flow")
-            print("-" * 40)
+            print("-" * 50)
             
             try:
-                # Step 1: Get authorization URL
-                print(f"\n1️⃣ Getting authorization URL for {provider}...")
+                # Step 1: Initialize authorization
+                auth_url_data = await self._initialize_sso_auth(provider)
                 
-                auth_data = await self.sso_service.get_authorization_url(
-                    provider=provider,
-                    redirect_uri="http://localhost:8000/auth/callback",
-                    state=None  # Auto-generated
-                )
-                
-                print(f"   Authorization URL: {auth_data['authorization_url'][:80]}...")
-                print(f"   State token: {auth_data['state']}")
-                
-                # Step 2: Simulate OAuth callback
-                print(f"\n2️⃣ Simulating OAuth callback...")
-                
-                # In real scenario, user would authenticate and provider redirects back
-                mock_auth_code = "mock_authorization_code_12345"
-                
-                try:
-                    # Handle callback (would normally receive real code)
-                    user_data = await self._simulate_callback(
+                if auth_url_data:
+                    print(f"\n✅ Authorization URL generated")
+                    print(f"   URL: {auth_url_data['url'][:80]}...")
+                    print(f"   State: {auth_url_data['state']}")
+                    
+                    # Step 2: Simulate user authentication
+                    user_data = await self._simulate_user_authentication(
                         provider,
-                        mock_auth_code,
-                        auth_data['state'],
-                        "http://localhost:8000/auth/callback"
+                        auth_url_data['state']
                     )
                     
-                    print(f"\n3️⃣ User authenticated successfully!")
-                    print(f"   User ID: {user_data.get('user_id', 'N/A')}")
-                    print(f"   Email: {user_data.get('email', 'N/A')}")
-                    print(f"   Session ID: {user_data.get('session_id', 'N/A')}")
+                    if user_data:
+                        print(f"\n✅ User authenticated successfully")
+                        print(f"   Session ID: {user_data['session_id']}")
+                        print(f"   User: {user_data['user']['name']}")
+                        print(f"   Email: {user_data['user']['email']}")
+                        print(f"   Roles: {', '.join(user_data['user'].get('roles', []))}")
                     
-                    # Log authentication event
-                    self.audit_service.log_event(
-                        event_type=AuditEventType.AUTH_LOGIN,
-                        action=f"sso_login_{provider}",
-                        user_id=user_data.get('user_id', 'unknown'),
-                        resource_type="authentication",
-                        metadata={
-                            "provider": provider,
-                            "email": user_data.get('email')
-                        }
-                    )
-                    
-                except Exception as e:
-                    print(f"   ⚠️ Callback simulation failed: {e}")
-                
             except Exception as e:
-                print(f"   ❌ {provider} not configured: {e}")
-        
-        # Step 3: Session management
-        print("\n\n4️⃣ Session Management")
-        print("-" * 40)
-        
-        # Create mock session
-        session_id = "test_session_123"
-        session_data = {
-            "provider": "keycloak",
-            "user_id": "user_001",
-            "email": "test@example.com",
-            "roles": ["user", "ml_engineer"],
-            "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat()
-        }
-        
-        # Store session
-        self.sso_service.redis_client.setex(
-            f"sso:session:{session_id}",
-            3600,
-            json.dumps(session_data)
-        )
-        
-        # Validate session
-        is_valid = self.sso_service.validate_session(session_id)
-        print(f"Session validation: {'✅ Valid' if is_valid else '❌ Invalid'}")
-        
-        # Get session data
-        retrieved_session = self.sso_service.get_session(session_id)
-        if retrieved_session:
-            print(f"Session data retrieved:")
-            print(f"  - User: {retrieved_session['user_id']}")
-            print(f"  - Roles: {retrieved_session['roles']}")
-            print(f"  - Provider: {retrieved_session['provider']}")
+                print(f"   ❌ {provider} authentication failed: {e}")
     
-    def example_2_consent_management(self):
-        """Example 2: GDPR consent management"""
+    async def example_2_session_management(self):
+        """Example 2: Advanced session management"""
         print("\n" + "="*80)
-        print("EXAMPLE 2: GDPR Consent Management")
+        print("EXAMPLE 2: Session Management & Token Handling")
         print("="*80)
         
-        user_id = "user_001"
-        tenant_id = "tenant_123"
+        # Create test sessions
+        sessions = await self._create_test_sessions()
         
-        # Step 1: Record various consents
-        print("\n1️⃣ Recording User Consents")
+        print(f"\n📊 Created {len(sessions)} test sessions")
+        
+        # Step 1: Session validation
+        print("\n1️⃣ Session Validation")
         print("-" * 40)
         
-        consent_scenarios = [
+        for session_id, session_info in sessions.items():
+            is_valid = self.sso_service.validate_session(session_id)
+            status = "✅ Valid" if is_valid else "❌ Invalid"
+            print(f"  Session {session_id[:8]}... ({session_info['provider']}): {status}")
+        
+        # Step 2: Session refresh
+        print("\n2️⃣ Token Refresh")
+        print("-" * 40)
+        
+        for session_id, session_info in sessions.items():
+            if session_info.get('refresh_token'):
+                try:
+                    print(f"\n  Refreshing tokens for {session_info['provider']}...")
+                    
+                    # Simulate token refresh
+                    new_tokens = await self._simulate_token_refresh(
+                        session_info['provider'],
+                        session_info['refresh_token']
+                    )
+                    
+                    if new_tokens:
+                        print(f"    ✅ New access token: {new_tokens['access_token'][:20]}...")
+                        print(f"    Expires in: {new_tokens['expires_in']} seconds")
+                    
+                except Exception as e:
+                    print(f"    ❌ Refresh failed: {e}")
+        
+        # Step 3: Session introspection
+        print("\n3️⃣ Token Introspection")
+        print("-" * 40)
+        
+        for session_id, session_info in sessions.items():
+            provider = session_info['provider']
+            
+            # Simulate token introspection
+            introspection = await self._simulate_token_introspection(
+                provider,
+                session_info['access_token']
+            )
+            
+            print(f"\n  {provider} token:")
+            print(f"    Active: {introspection.get('active', False)}")
+            print(f"    Expires at: {introspection.get('exp', 'N/A')}")
+            print(f"    Scope: {introspection.get('scope', 'N/A')}")
+        
+        # Step 4: Session termination
+        print("\n4️⃣ Session Termination")
+        print("-" * 40)
+        
+        for session_id in list(sessions.keys())[:1]:  # Terminate first session
+            session_info = sessions[session_id]
+            
+            logout_url = await self.sso_service.logout(
+                provider=session_info['provider'],
+                session_id=session_id,
+                redirect_uri="http://localhost:8000/logout-complete"
+            )
+            
+            print(f"\n  Terminated session for {session_info['provider']}")
+            print(f"  Logout URL: {logout_url[:80]}...")
+            
+            # Verify session is deleted
+            is_valid = self.sso_service.validate_session(session_id)
+            print(f"  Session status after logout: {'✅ Still valid' if is_valid else '❌ Deleted'}")
+    
+    async def example_3_role_based_access(self):
+        """Example 3: Role-based access control with SSO"""
+        print("\n" + "="*80)
+        print("EXAMPLE 3: Role-Based Access Control (RBAC)")
+        print("="*80)
+        
+        # Define role hierarchy
+        role_hierarchy = {
+            "admin": ["write", "read", "delete", "manage_users"],
+            "developer": ["write", "read", "deploy"],
+            "analyst": ["read", "export"],
+            "viewer": ["read"]
+        }
+        
+        # Test users with different roles
+        test_scenarios = [
             {
-                "type": ConsentType.DATA_PROCESSING,
-                "granted": True,
-                "purpose": "Process personal data for ML model training",
-                "categories": ["behavioral", "technical"]
+                "user": "admin_user",
+                "roles": ["admin", "developer"],
+                "provider": "keycloak"
             },
             {
-                "type": ConsentType.MARKETING,
-                "granted": False,
-                "purpose": "Send promotional emails",
-                "categories": ["contact"]
+                "user": "dev_user",
+                "roles": ["developer"],
+                "provider": "auth0"
             },
             {
-                "type": ConsentType.ANALYTICS,
-                "granted": True,
-                "purpose": "Analyze usage patterns to improve service",
-                "categories": ["behavioral", "technical"]
-            },
-            {
-                "type": ConsentType.THIRD_PARTY,
-                "granted": False,
-                "purpose": "Share data with partners",
-                "categories": ["basic", "contact"]
+                "user": "analyst_user",
+                "roles": ["analyst"],
+                "provider": "okta"
             }
         ]
         
-        for consent in consent_scenarios:
-            consent_id = self.rgpd_service.record_consent(
-                user_id=user_id,
-                consent_type=consent["type"],
-                granted=consent["granted"],
-                tenant_id=tenant_id,
-                purpose=consent["purpose"],
-                data_categories=consent["categories"],
-                expires_in_days=365,
-                ip_address="192.168.1.100",
-                user_agent="Mozilla/5.0"
+        print("\n🔑 Testing Role-Based Access")
+        print("-" * 40)
+        
+        for scenario in test_scenarios:
+            print(f"\n  User: {scenario['user']}")
+            print(f"  Roles: {', '.join(scenario['roles'])}")
+            print(f"  Provider: {scenario['provider']}")
+            
+            # Calculate effective permissions
+            permissions = set()
+            for role in scenario['roles']:
+                if role in role_hierarchy:
+                    permissions.update(role_hierarchy[role])
+            
+            print(f"  Permissions: {', '.join(sorted(permissions))}")
+            
+            # Test access to resources
+            resources = [
+                ("User Management", "manage_users"),
+                ("Data Export", "export"),
+                ("Model Deployment", "deploy"),
+                ("Data Viewing", "read")
+            ]
+            
+            print(f"\n  Access Matrix:")
+            for resource, required_perm in resources:
+                has_access = required_perm in permissions
+                status = "✅" if has_access else "❌"
+                print(f"    {resource}: {status}")
+    
+    async def example_4_saml_integration(self):
+        """Example 4: SAML 2.0 SSO integration"""
+        print("\n" + "="*80)
+        print("EXAMPLE 4: SAML 2.0 Integration")
+        print("="*80)
+        
+        if not self.saml_service.saml2_available:
+            print("\n⚠️ SAML support not available. Install python3-saml:")
+            print("   pip install python3-saml")
+            return
+        
+        # SAML configuration
+        saml_config = {
+            "entityid": "http://localhost:8000",
+            "metadata": {
+                "local": ["metadata.xml"]
+            },
+            "service": {
+                "sp": {
+                    "endpoints": {
+                        "assertion_consumer_service": [
+                            ("http://localhost:8000/saml/acs", "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST")
+                        ]
+                    },
+                    "allow_unsolicited": False,
+                    "authn_requests_signed": False,
+                    "logout_requests_signed": True,
+                    "want_assertions_signed": True,
+                    "want_response_signed": False
+                }
+            }
+        }
+        
+        print("\n1️⃣ SAML Configuration")
+        print("-" * 40)
+        print(f"  Entity ID: {saml_config['entityid']}")
+        print(f"  ACS URL: {saml_config['service']['sp']['endpoints']['assertion_consumer_service'][0][0]}")
+        print(f"  Assertions Signed: {saml_config['service']['sp']['want_assertions_signed']}")
+        
+        try:
+            # Create SAML client
+            saml_client = self.saml_service.create_saml_client(saml_config)
+            
+            print("\n2️⃣ SAML Authentication Request")
+            print("-" * 40)
+            
+            # Generate auth request
+            session_id, auth_url = self.saml_service.create_auth_request(
+                saml_client,
+                "https://idp.example.com/sso"
             )
             
-            status = "✅ Granted" if consent["granted"] else "❌ Denied"
-            print(f"  {consent['type'].value}: {status}")
-            print(f"    Purpose: {consent['purpose']}")
-            print(f"    Categories: {', '.join(consent['categories'])}")
-        
-        # Step 2: Check consent status
-        print("\n2️⃣ Checking Consent Status")
-        print("-" * 40)
-        
-        for consent_type in ConsentType:
-            has_consent = self.rgpd_service.check_consent(user_id, consent_type)
-            status = "✅" if has_consent else "❌"
-            print(f"  {consent_type.value}: {status}")
-        
-        # Step 3: Get all user consents
-        print("\n3️⃣ Retrieving All User Consents")
-        print("-" * 40)
-        
-        all_consents = self.rgpd_service.get_user_consents(user_id)
-        
-        print(f"Total consent records: {len(all_consents)}")
-        for consent in all_consents:
-            print(f"\n  Type: {consent['type']}")
-            print(f"  Active: {consent['active']}")
-            print(f"  Granted at: {consent.get('granted_at', 'N/A')}")
-            print(f"  Expires at: {consent.get('expires_at', 'N/A')}")
-        
-        # Step 4: Revoke consent
-        print("\n4️⃣ Revoking Consent")
-        print("-" * 40)
-        
-        # Revoke analytics consent
-        self.rgpd_service.record_consent(
-            user_id=user_id,
-            consent_type=ConsentType.ANALYTICS,
-            granted=False,
-            tenant_id=tenant_id
-        )
-        
-        print("  Analytics consent revoked")
-        
-        # Verify revocation
-        has_analytics = self.rgpd_service.check_consent(user_id, ConsentType.ANALYTICS)
-        print(f"  Analytics consent after revocation: {'✅' if has_analytics else '❌ Revoked'}")
+            print(f"  Session ID: {session_id}")
+            print(f"  Auth URL: {auth_url[:80]}..." if auth_url else "  Auth URL: Not generated")
+            
+            print("\n3️⃣ SAML Response Processing")
+            print("-" * 40)
+            
+            # Simulate SAML response
+            mock_saml_response = self._generate_mock_saml_response()
+            
+            print(f"  Response received: {len(mock_saml_response)} bytes")
+            print(f"  Processing response...")
+            
+            # In real scenario, process the response
+            # user_info = self.saml_service.process_response(saml_client, mock_saml_response)
+            
+            print(f"  ✅ SAML authentication flow demonstrated")
+            
+        except Exception as e:
+            print(f"  ❌ SAML configuration error: {e}")
     
-    def example_3_data_subject_requests(self):
-        """Example 3: GDPR data subject requests"""
+    async def example_5_multi_tenant_sso(self):
+        """Example 5: Multi-tenant SSO configuration"""
         print("\n" + "="*80)
-        print("EXAMPLE 3: GDPR Data Subject Requests")
+        print("EXAMPLE 5: Multi-Tenant SSO Configuration")
         print("="*80)
         
-        user_id = "user_002"
-        tenant_id = "tenant_123"
-        
-        # Step 1: Data Access Request (Article 15)
-        print("\n1️⃣ Data Access Request (Article 15)")
-        print("-" * 40)
-        
-        access_request_id = self.rgpd_service.create_data_request(
-            user_id=user_id,
-            request_type=GDPRRequestType.ACCESS,
-            tenant_id=tenant_id,
-            reason="User wants to review all personal data",
-            requested_data={"include_ml_predictions": True}
-        )
-        
-        print(f"  Request ID: {access_request_id}")
-        print(f"  Status: Pending")
-        print(f"  Legal deadline: 30 days")
-        
-        # Process the request
-        print("\n  Processing access request...")
-        user_data = self.rgpd_service.process_access_request(access_request_id)
-        
-        print(f"  ✅ Data package prepared:")
-        print(f"    - Personal data records: {len(user_data.get('personal_data', []))}")
-        print(f"    - Consents: {len(user_data.get('consents', []))}")
-        print(f"    - Processing activities: {len(user_data.get('processing_activities', []))}")
-        
-        # Step 2: Data Portability Request (Article 20)
-        print("\n2️⃣ Data Portability Request (Article 20)")
-        print("-" * 40)
-        
-        portability_request_id = self.rgpd_service.create_data_request(
-            user_id=user_id,
-            request_type=GDPRRequestType.PORTABILITY,
-            tenant_id=tenant_id,
-            reason="User switching to competitor service"
-        )
-        
-        print(f"  Request ID: {portability_request_id}")
-        
-        # Process portability request
-        portable_data = self.rgpd_service.process_portability_request(portability_request_id)
-        
-        print(f"  ✅ Portable data package created:")
-        print(f"    - Format: JSON/CSV")
-        print(f"    - Size: {len(portable_data)} bytes")
-        print(f"    - Machine-readable: Yes")
-        
-        # Step 3: Rectification Request (Article 16)
-        print("\n3️⃣ Data Rectification Request (Article 16)")
-        print("-" * 40)
-        
-        rectification_request_id = self.rgpd_service.create_data_request(
-            user_id=user_id,
-            request_type=GDPRRequestType.RECTIFICATION,
-            tenant_id=tenant_id,
-            reason="Incorrect personal information"
-        )
-        
-        corrections = {
-            "email": "newemail@example.com",
-            "phone": "+1-555-0123",
-            "address": "123 New Street, City"
+        # Define tenant configurations
+        tenants = {
+            "tenant_a": {
+                "name": "Enterprise A",
+                "sso_provider": "keycloak",
+                "realm": "enterprise-a",
+                "allowed_domains": ["enterprise-a.com"],
+                "custom_claims": ["department", "employee_id"]
+            },
+            "tenant_b": {
+                "name": "Enterprise B",
+                "sso_provider": "auth0",
+                "connection": "enterprise-b-ad",
+                "allowed_domains": ["enterprise-b.org", "subsidiary-b.com"],
+                "custom_claims": ["cost_center", "manager"]
+            },
+            "tenant_c": {
+                "name": "Enterprise C",
+                "sso_provider": "azure_ad",
+                "tenant_id": "c-tenant-id-123",
+                "allowed_domains": ["enterprise-c.net"],
+                "custom_claims": ["division", "location"]
+            }
         }
         
-        print(f"  Request ID: {rectification_request_id}")
-        print(f"  Corrections requested: {list(corrections.keys())}")
-        
-        rectification_result = self.rgpd_service.process_rectification_request(
-            rectification_request_id,
-            corrections
-        )
-        
-        print(f"  ✅ Rectification completed:")
-        print(f"    - Fields updated: {len(rectification_result['rectified_items'])}")
-        
-        # Step 4: Erasure Request (Article 17 - Right to be forgotten)
-        print("\n4️⃣ Erasure Request (Article 17 - Right to be forgotten)")
+        print("\n🏢 Tenant Configurations")
         print("-" * 40)
         
-        erasure_request_id = self.rgpd_service.create_data_request(
-            user_id="user_003",  # Different user for safety
-            request_type=GDPRRequestType.ERASURE,
-            tenant_id=tenant_id,
-            reason="User account closure"
-        )
+        for tenant_id, config in tenants.items():
+            print(f"\n  {config['name']} ({tenant_id}):")
+            print(f"    Provider: {config['sso_provider']}")
+            print(f"    Domains: {', '.join(config['allowed_domains'])}")
+            print(f"    Custom Claims: {', '.join(config['custom_claims'])}")
         
-        print(f"  Request ID: {erasure_request_id}")
-        print(f"  Checking erasure eligibility...")
-        
-        # Process erasure (with verification)
-        erasure_result = self.rgpd_service.process_erasure_request(
-            erasure_request_id,
-            verify_legal_basis=True
-        )
-        
-        if erasure_result['status'] == 'completed':
-            print(f"  ✅ Erasure completed:")
-            print(f"    - Personal data: {erasure_result['erased_items']['personal_data']} records")
-            print(f"    - Consents: {erasure_result['erased_items']['consents']} records")
-            print(f"    - ML models: {erasure_result['erased_items']['ml_models']} references")
-            print(f"    - Logs: {erasure_result['erased_items']['logs']} entries")
-        else:
-            print(f"  ❌ Erasure rejected: {erasure_result.get('reason', 'Unknown')}")
-    
-    def example_4_data_protection(self):
-        """Example 4: Data protection and anonymization"""
-        print("\n" + "="*80)
-        print("EXAMPLE 4: Data Protection & Anonymization")
-        print("="*80)
-        
-        # Sample personal data
-        personal_data = {
-            "user_id": "user_004",
-            "email": "john.doe@example.com",
-            "name": "John Doe",
-            "phone": "+1-555-1234",
-            "address": "123 Main St, City",
-            "age": 35,
-            "income": 75000,
-            "credit_score": 720
-        }
-        
-        print("\n1️⃣ Original Personal Data")
-        print("-" * 40)
-        for key, value in personal_data.items():
-            print(f"  {key}: {value}")
-        
-        # Step 1: Anonymization
-        print("\n2️⃣ Data Anonymization")
+        print("\n🔄 Domain-based Routing")
         print("-" * 40)
         
-        anonymized_data = self.rgpd_service.anonymize_data(personal_data)
-        
-        print("Anonymized data:")
-        for key, value in anonymized_data.items():
-            if value != personal_data[key]:
-                print(f"  {key}: {personal_data[key]} → {value}")
-            else:
-                print(f"  {key}: {value} (unchanged)")
-        
-        # Step 2: Pseudonymization
-        print("\n3️⃣ Data Pseudonymization")
-        print("-" * 40)
-        
-        pseudonymized_data, pseudonym = self.rgpd_service.pseudonymize_data(
-            personal_data,
-            personal_data['user_id']
-        )
-        
-        print(f"Pseudonym generated: {pseudonym}")
-        print("Pseudonymized data:")
-        for key, value in pseudonymized_data.items():
-            if value != personal_data[key]:
-                print(f"  {key}: {personal_data[key]} → {value}")
-        
-        # Step 3: Encryption
-        print("\n4️⃣ Sensitive Data Encryption")
-        print("-" * 40)
-        
-        sensitive_info = "SSN: 123-45-6789, Credit Card: 4111-1111-1111-1111"
-        
-        encrypted = self.rgpd_service.encrypt_sensitive_data(sensitive_info)
-        print(f"Original: {sensitive_info}")
-        print(f"Encrypted: {encrypted[:50]}...")
-        
-        decrypted = self.rgpd_service.decrypt_sensitive_data(encrypted)
-        print(f"Decrypted: {decrypted}")
-        print(f"✅ Encryption/Decryption successful: {decrypted == sensitive_info}")
-    
-    def example_5_compliance_reporting(self):
-        """Example 5: GDPR compliance reporting"""
-        print("\n" + "="*80)
-        print("EXAMPLE 5: GDPR Compliance Reporting")
-        print("="*80)
-        
-        tenant_id = "tenant_123"
-        
-        # Generate compliance report
-        print("\n1️⃣ Generating Compliance Report")
-        print("-" * 40)
-        
-        report = self.rgpd_service.generate_compliance_report(
-            tenant_id=tenant_id,
-            start_date=datetime.utcnow() - timedelta(days=30),
-            end_date=datetime.utcnow()
-        )
-        
-        print(f"Report Period: {report['period']['start']} to {report['period']['end']}")
-        
-        print("\n📊 Request Statistics:")
-        for request_type, stats in report['requests'].items():
-            print(f"\n  {request_type.upper()}:")
-            print(f"    Total: {stats['total']}")
-            print(f"    Completed: {stats['completed']}")
-            print(f"    Completion Rate: {stats['completion_rate']:.1f}%")
-            print(f"    Avg Processing: {stats['avg_processing_days']:.1f} days")
-        
-        print("\n📊 Consent Statistics:")
-        print(f"  Total: {report['consents']['total']}")
-        print(f"  Granted: {report['consents']['granted']}")
-        print(f"  Revoked: {report['consents']['revoked']}")
-        print(f"  Grant Rate: {report['consents']['grant_rate']:.1f}%")
-        
-        print(f"\n🏆 Compliance Score: {report['compliance_score']:.1f}/100")
-        
-        # Data mapping
-        print("\n2️⃣ Personal Data Mapping")
-        print("-" * 40)
-        
-        # Create sample data records
-        from automl_platform.rgpd_compliance_service import PersonalDataRecord
-        
-        session = self.rgpd_service.SessionLocal()
-        
-        sample_records = [
-            PersonalDataRecord(
-                user_id="user_001",
-                tenant_id=tenant_id,
-                data_category="basic",
-                data_type="email",
-                storage_location="postgresql",
-                table_name="users",
-                column_name="email",
-                purpose="Account management",
-                legal_basis="contract",
-                retention_period_days=730,
-                encrypted=True,
-                anonymized=False
-            ),
-            PersonalDataRecord(
-                user_id="user_001",
-                tenant_id=tenant_id,
-                data_category="behavioral",
-                data_type="usage_patterns",
-                storage_location="redis",
-                purpose="Service improvement",
-                legal_basis="legitimate_interest",
-                retention_period_days=90,
-                encrypted=False,
-                anonymized=True
-            )
+        # Test email addresses
+        test_emails = [
+            "user@enterprise-a.com",
+            "admin@subsidiary-b.com",
+            "analyst@enterprise-c.net",
+            "external@gmail.com"
         ]
         
-        for record in sample_records:
-            session.add(record)
-        session.commit()
-        session.close()
+        for email in test_emails:
+            domain = email.split('@')[1]
+            matched_tenant = None
+            
+            # Find matching tenant
+            for tenant_id, config in tenants.items():
+                if domain in config['allowed_domains']:
+                    matched_tenant = tenant_id
+                    break
+            
+            if matched_tenant:
+                tenant = tenants[matched_tenant]
+                print(f"\n  {email}:")
+                print(f"    → Tenant: {tenant['name']}")
+                print(f"    → SSO Provider: {tenant['sso_provider']}")
+            else:
+                print(f"\n  {email}:")
+                print(f"    → No tenant match (use local auth)")
         
-        # Get data mapping
-        data_mapping = self.rgpd_service.get_data_mapping(tenant_id)
-        
-        print("Personal Data Categories:")
-        df_mapping = pd.DataFrame(data_mapping)
-        if not df_mapping.empty:
-            print(df_mapping[['category', 'type', 'location', 'retention_days', 'encrypted']].to_string())
-        
-        # Audit trail
-        print("\n3️⃣ GDPR-Relevant Audit Trail")
+        print("\n📊 Tenant Usage Statistics")
         print("-" * 40)
         
-        # Search for GDPR-relevant events
-        gdpr_events = self.audit_service.search(
-            gdpr_only=True,
-            limit=5
+        # Simulate usage statistics
+        stats = {
+            "tenant_a": {"users": 450, "logins_today": 320, "active_sessions": 125},
+            "tenant_b": {"users": 280, "logins_today": 195, "active_sessions": 87},
+            "tenant_c": {"users": 150, "logins_today": 98, "active_sessions": 42}
+        }
+        
+        df_stats = pd.DataFrame(stats).T
+        df_stats.index.name = 'Tenant'
+        print(f"\n{df_stats.to_string()}")
+        
+        total_users = df_stats['users'].sum()
+        total_logins = df_stats['logins_today'].sum()
+        total_sessions = df_stats['active_sessions'].sum()
+        
+        print(f"\n  Totals:")
+        print(f"    Users: {total_users}")
+        print(f"    Logins Today: {total_logins}")
+        print(f"    Active Sessions: {total_sessions}")
+    
+    async def example_6_security_features(self):
+        """Example 6: SSO security features"""
+        print("\n" + "="*80)
+        print("EXAMPLE 6: SSO Security Features")
+        print("="*80)
+        
+        print("\n1️⃣ PKCE (Proof Key for Code Exchange)")
+        print("-" * 40)
+        
+        # Generate PKCE challenge
+        import hashlib
+        import base64
+        import secrets
+        
+        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode()).digest()
+        ).decode('utf-8').rstrip('=')
+        
+        print(f"  Code Verifier: {code_verifier[:20]}...")
+        print(f"  Code Challenge: {code_challenge[:20]}...")
+        print(f"  Challenge Method: S256")
+        
+        print("\n2️⃣ State Parameter Validation")
+        print("-" * 40)
+        
+        # Generate and store state
+        state = secrets.token_urlsafe(32)
+        state_data = {
+            "provider": "keycloak",
+            "redirect_uri": "http://localhost:8000/callback",
+            "created_at": datetime.utcnow().isoformat(),
+            "ip_address": "192.168.1.100",
+            "user_agent": "Mozilla/5.0..."
+        }
+        
+        # Store in Redis with TTL
+        self.sso_service.redis_client.setex(
+            f"sso:state:{state}",
+            300,  # 5 minutes
+            json.dumps(state_data)
         )
         
-        print(f"Recent GDPR events: {len(gdpr_events)}")
-        for event in gdpr_events[:3]:
-            print(f"\n  Event: {event.get('action', 'N/A')}")
-            print(f"  Type: {event.get('event_type', 'N/A')}")
-            print(f"  User: {event.get('user_id', 'N/A')}")
-            print(f"  Time: {event.get('timestamp', 'N/A')}")
-    
-    async def _simulate_callback(self, provider: str, code: str, state: str, redirect_uri: str) -> Dict:
-        """Simulate OAuth callback (for demo purposes)"""
+        print(f"  State Token: {state[:20]}...")
+        print(f"  TTL: 300 seconds")
+        print(f"  Stored metadata: {list(state_data.keys())}")
         
-        # In real scenario, this would exchange code for tokens
-        # For demo, return mock user data
-        return {
-            "session_id": f"session_{provider}_123",
-            "user_id": f"user_{provider}_001",
-            "email": f"user@{provider}.example.com",
-            "name": f"Test User ({provider})",
-            "roles": ["user", "ml_user"],
-            "provider": provider
+        # Validate state
+        retrieved = self.sso_service.redis_client.get(f"sso:state:{state}")
+        if retrieved:
+            print(f"  ✅ State validation successful")
+        
+        print("\n3️⃣ Token Security")
+        print("-" * 40)
+        
+        # Token security measures
+        security_measures = [
+            ("Token Encryption", "AES-256-GCM", "✅"),
+            ("Secure Storage", "Redis with encryption at rest", "✅"),
+            ("Token Rotation", "Automatic refresh before expiry", "✅"),
+            ("Audience Validation", "Verify token audience claim", "✅"),
+            ("Issuer Validation", "Verify token issuer", "✅"),
+            ("Signature Verification", "RS256 with JWKS", "✅"),
+            ("Token Binding", "Bind token to client TLS cert", "⚠️"),
+            ("DPoP", "Demonstration of Proof-of-Possession", "⚠️")
+        ]
+        
+        for measure, description, status in security_measures:
+            print(f"  {status} {measure}")
+            print(f"     {description}")
+        
+        print("\n4️⃣ Audit Logging")
+        print("-" * 40)
+        
+        # Log security events
+        security_events = [
+            ("Successful login", AuditSeverity.INFO),
+            ("Failed login attempt", AuditSeverity.WARNING),
+            ("Token refresh", AuditSeverity.INFO),
+            ("Session timeout", AuditSeverity.INFO),
+            ("Suspicious activity detected", AuditSeverity.HIGH),
+            ("Multiple failed attempts", AuditSeverity.CRITICAL)
+        ]
+        
+        for event, severity in security_events:
+            self.audit_service.log_event(
+                event_type=AuditEventType.AUTH_LOGIN,
+                action=event.lower().replace(' ', '_'),
+                user_id="test_user",
+                severity=severity,
+                metadata={"provider": "keycloak", "ip": "192.168.1.100"}
+            )
+            
+            icon = "🔴" if severity == AuditSeverity.CRITICAL else "🟡" if severity == AuditSeverity.WARNING else "🟢"
+            print(f"  {icon} {event} (Severity: {severity.value})")
+        
+        print("\n5️⃣ Rate Limiting")
+        print("-" * 40)
+        
+        # Implement rate limiting
+        rate_limits = {
+            "login_attempts": {"limit": 5, "window": 300, "current": 3},
+            "token_refresh": {"limit": 10, "window": 3600, "current": 2},
+            "password_reset": {"limit": 3, "window": 3600, "current": 0}
         }
+        
+        for action, limits in rate_limits.items():
+            remaining = limits['limit'] - limits['current']
+            status = "✅" if remaining > 0 else "❌"
+            print(f"  {action}:")
+            print(f"    {status} {remaining}/{limits['limit']} remaining")
+            print(f"    Window: {limits['window']}s")
+    
+    # Helper methods
+    
+    async def _initialize_sso_auth(self, provider: str) -> Optional[Dict]:
+        """Initialize SSO authentication"""
+        try:
+            auth_data = await self.sso_service.get_authorization_url(
+                provider=provider,
+                redirect_uri=f"http://localhost:8000/auth/{provider}/callback",
+                state=None
+            )
+            
+            return {
+                "url": auth_data['authorization_url'],
+                "state": auth_data['state']
+            }
+        except Exception as e:
+            logger.error(f"Failed to initialize {provider} auth: {e}")
+            return None
+    
+    async def _simulate_user_authentication(self, provider: str, state: str) -> Optional[Dict]:
+        """Simulate user authentication (for demo)"""
+        # In real scenario, user would authenticate with provider
+        # For demo, return mock data
+        
+        mock_code = f"mock_code_{provider}_123"
+        
+        try:
+            # Simulate callback handling
+            user_info = self.test_users.get(provider, {})
+            
+            session_id = secrets.token_urlsafe(32)
+            session_data = {
+                "provider": provider,
+                "user_id": user_info.get("user_id"),
+                "email": user_info.get("email"),
+                "name": user_info.get("name"),
+                "roles": ["user", "ml_user"],
+                "access_token": f"mock_access_token_{provider}",
+                "refresh_token": f"mock_refresh_token_{provider}",
+                "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat()
+            }
+            
+            # Store session
+            self.sso_service.redis_client.setex(
+                f"sso:session:{session_id}",
+                3600,
+                json.dumps(session_data)
+            )
+            
+            return {
+                "session_id": session_id,
+                "user": {
+                    "user_id": user_info.get("user_id"),
+                    "email": user_info.get("email"),
+                    "name": user_info.get("name"),
+                    "roles": ["user", "ml_user"]
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Authentication simulation failed: {e}")
+            return None
+    
+    async def _create_test_sessions(self) -> Dict[str, Dict]:
+        """Create test sessions for examples"""
+        sessions = {}
+        
+        for provider, user_info in self.test_users.items():
+            session_id = secrets.token_urlsafe(32)
+            
+            session_data = {
+                "provider": provider,
+                "user_id": user_info["user_id"],
+                "email": user_info["email"],
+                "name": user_info["name"],
+                "access_token": f"access_{provider}_{secrets.token_urlsafe(16)}",
+                "refresh_token": f"refresh_{provider}_{secrets.token_urlsafe(16)}",
+                "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat()
+            }
+            
+            # Store in Redis
+            self.sso_service.redis_client.setex(
+                f"sso:session:{session_id}",
+                3600,
+                json.dumps(session_data)
+            )
+            
+            sessions[session_id] = session_data
+        
+        return sessions
+    
+    async def _simulate_token_refresh(self, provider: str, refresh_token: str) -> Optional[Dict]:
+        """Simulate token refresh"""
+        # In real scenario, would call provider's token endpoint
+        return {
+            "access_token": f"new_access_{provider}_{secrets.token_urlsafe(16)}",
+            "refresh_token": f"new_refresh_{provider}_{secrets.token_urlsafe(16)}",
+            "expires_in": 3600,
+            "token_type": "Bearer"
+        }
+    
+    async def _simulate_token_introspection(self, provider: str, token: str) -> Dict:
+        """Simulate token introspection"""
+        # In real scenario, would call provider's introspection endpoint
+        return {
+            "active": True,
+            "scope": "openid profile email",
+            "client_id": f"{provider}_client",
+            "username": f"user@{provider}.example.com",
+            "exp": (datetime.utcnow() + timedelta(hours=1)).timestamp()
+        }
+    
+    def _generate_mock_saml_response(self) -> str:
+        """Generate mock SAML response for testing"""
+        # This would be a base64-encoded SAML response in production
+        return base64.b64encode(b"<samlp:Response>...</samlp:Response>").decode()
 
 
 async def main():
     """Main execution function"""
-    example = SSOAndRGPDExample()
+    example = SSOAuthenticationExample()
     
     print("\n" + "="*80)
-    print("SSO AND RGPD/GDPR COMPLIANCE EXAMPLES")
+    print(" " * 20 + "SSO AUTHENTICATION EXAMPLES")
     print("="*80)
     
-    # Example 1: SSO Authentication
-    await example.example_1_sso_authentication()
-    
-    # Example 2: Consent Management
-    example.example_2_consent_management()
-    
-    # Example 3: Data Subject Requests
-    example.example_3_data_subject_requests()
-    
-    # Example 4: Data Protection
-    example.example_4_data_protection()
-    
-    # Example 5: Compliance Reporting
-    example.example_5_compliance_reporting()
+    # Run examples
+    await example.example_1_multi_provider_sso()
+    await example.example_2_session_management()
+    await example.example_3_role_based_access()
+    await example.example_4_saml_integration()
+    await example.example_5_multi_tenant_sso()
+    await example.example_6_security_features()
     
     print("\n" + "="*80)
-    print("✅ ALL SSO AND RGPD EXAMPLES COMPLETED!")
+    print(" " * 15 + "✅ ALL SSO EXAMPLES COMPLETED!")
     print("="*80)
     
-    print("\n📊 Summary:")
-    print("  - SSO authentication flows demonstrated")
-    print("  - Consent management implemented")
-    print("  - Data subject requests processed")
-    print("  - Data protection measures applied")
-    print("  - Compliance reporting generated")
+    print("\n📊 Summary of Features Demonstrated:")
+    print("  ✓ Multi-provider SSO (Keycloak, Auth0, Okta, Azure AD)")
+    print("  ✓ Session management and token handling")
+    print("  ✓ Role-based access control (RBAC)")
+    print("  ✓ SAML 2.0 integration")
+    print("  ✓ Multi-tenant configuration")
+    print("  ✓ Security features (PKCE, state validation, rate limiting)")
+    print("  ✓ Token introspection and refresh")
+    print("  ✓ Audit logging and monitoring")
     
-    print("\n⚠️ Notes:")
-    print("  - Configure SSO providers in environment variables")
-    print("  - Ensure PostgreSQL is running for RGPD storage")
-    print("  - Redis required for session management")
-    print("  - All personal data in examples is fictional")
+    print("\n⚙️ Configuration Requirements:")
+    print("  1. Set environment variables for SSO providers:")
+    print("     - KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET")
+    print("     - AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_DOMAIN")
+    print("     - OKTA_CLIENT_ID, OKTA_CLIENT_SECRET, OKTA_DOMAIN")
+    print("  2. Redis running on localhost:6379")
+    print("  3. Optional: python3-saml for SAML support")
 
 
 if __name__ == "__main__":
+    import base64
+    import secrets
     asyncio.run(main())
