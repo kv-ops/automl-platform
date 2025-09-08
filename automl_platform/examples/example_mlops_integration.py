@@ -1,7 +1,7 @@
 """
 Example Integration - Complete MLOps Workflow
 ==============================================
-Place in: automl_platform/examples/mlops_integration.py
+Place in: automl_platform/examples/example_mlops_integration.py
 
 Demonstrates complete MLOps workflow with model training, registration,
 A/B testing, retraining, and export.
