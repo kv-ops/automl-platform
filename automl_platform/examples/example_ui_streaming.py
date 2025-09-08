@@ -1,4 +1,333 @@
-"""
+# User input
+        user_question = st.text_input(
+            "Ask the AI Assistant:",
+            placeholder="e.g., How can I handle class imbalance?",
+            key="ai_question"
+        )
+        
+        if user_question:
+            st.chat_message("user").write(user_question)
+            
+            # Simulate AI response
+            with st.spinner("AI is thinking..."):
+                time.sleep(1)
+            
+            response = self._generate_ai_response(user_question)
+            st.chat_message("assistant").write(response)
+        
+        # AI capabilities
+        st.subheader("🎯 AI Assistant Capabilities")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            **Data & Feature Engineering:**
+            - Quality assessment recommendations
+            - Feature engineering suggestions
+            - Data cleaning strategies
+            - Handling missing values
+            """)
+        
+        with col2:
+            st.markdown("""
+            **Model & Performance:**
+            - Algorithm selection guidance
+            - Hyperparameter recommendations
+            - Performance improvement tips
+            - Deployment considerations
+            """)
+        
+        # Tips for using AI
+        st.markdown("""
+        <div class="highlight-box">
+        <h4>💡 Tips for Using AI Assistant</h4>
+        <ul>
+        <li>Be specific in your questions for better answers</li>
+        <li>Ask for code examples when needed</li>
+        <li>Request explanations for complex concepts</li>
+        <li>Use for debugging model issues</li>
+        <li>Get recommendations based on your specific data</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Mark as completed
+        if 5 not in st.session_state.tutorial_completed:
+            st.session_state.tutorial_completed.append(5)
+    
+    def step_6_reports(self):
+        """Step 6: Reports and export"""
+        st.header("📋 Step 6: Reports & Export")
+        
+        st.markdown("""
+        <div class="tutorial-box">
+        <h4>📝 Learning Objectives</h4>
+        Generate comprehensive reports and export models for deployment.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Report generation
+        st.subheader("📄 Generate Reports")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            report_type = st.selectbox(
+                "Report Type",
+                ["Executive Summary", "Technical Report", "Model Card", 
+                 "Compliance Report", "Performance Report"]
+            )
+            
+            format_type = st.selectbox(
+                "Output Format",
+                ["PDF", "HTML", "Markdown", "PowerPoint", "Word"]
+            )
+        
+        with col2:
+            st.markdown("**Report Options:**")
+            include_viz = st.checkbox("Include Visualizations", value=True)
+            include_code = st.checkbox("Include Code Snippets", value=False)
+            include_data = st.checkbox("Include Data Summary", value=True)
+            include_recommendations = st.checkbox("Include AI Recommendations", value=True)
+        
+        # Generate report button
+        if st.button("📥 Generate Report", type="primary", use_container_width=True):
+            with st.spinner(f"Generating {report_type}..."):
+                time.sleep(2)
+            
+            st.success(f"✅ {report_type} generated successfully!")
+            
+            # Report preview
+            with st.expander("📄 Report Preview"):
+                st.markdown(f"""
+                # {report_type}
+                ## AutoML Model Training Report
+                
+                **Date:** {datetime.now().strftime('%Y-%m-%d')}
+                **Project:** Loan Approval Prediction
+                
+                ### Executive Summary
+                Successfully trained and evaluated 5 machine learning models for loan approval prediction.
+                The ensemble model achieved the best performance with 93.1% accuracy.
+                
+                ### Key Findings
+                - **Best Model:** Ensemble (XGBoost + LightGBM)
+                - **Accuracy:** 93.1% (±1.2%)
+                - **Key Features:** Credit score, income, loan amount
+                - **Training Time:** 2 minutes 20 seconds
+                
+                ### Model Performance
+                | Model | CV Score | Std Dev | Training Time |
+                |-------|----------|---------|---------------|
+                | Ensemble | 0.931 | 0.012 | 140s |
+                | XGBoost | 0.924 | 0.015 | 45s |
+                | LightGBM | 0.918 | 0.018 | 38s |
+                
+                ### Recommendations
+                1. Deploy ensemble model for production use
+                2. Monitor credit score feature for drift
+                3. Retrain monthly with new data
+                4. Implement A/B testing for model updates
+                
+                ### Next Steps
+                - Set up model monitoring dashboard
+                - Configure automated retraining pipeline
+                - Implement prediction API endpoint
+                - Create model documentation
+                """)
+            
+            # Download button
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.download_button(
+                    label=f"⬇️ Download {format_type} Report",
+                    data="Report content here...",
+                    file_name=f"automl_report.{format_type.lower()}",
+                    mime="text/plain"
+                )
+        
+        # Model export
+        st.subheader("📦 Model Export")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            export_format = st.selectbox(
+                "Export Format",
+                ["Pickle", "ONNX", "PMML", "TensorFlow", "Docker Container"]
+            )
+            
+            include_preprocessor = st.checkbox("Include Preprocessor", value=True)
+            include_metadata = st.checkbox("Include Metadata", value=True)
+        
+        with col2:
+            st.markdown("**Deployment Target:**")
+            deployment = st.radio(
+                "",
+                ["Local Server", "Cloud (AWS/GCP/Azure)", "Edge Device", "Mobile App"]
+            )
+            
+            optimize_for = st.selectbox(
+                "Optimize For",
+                ["Balanced", "Speed", "Accuracy", "Size"]
+            )
+        
+        if st.button("📦 Export Model", type="primary", use_container_width=True):
+            with st.spinner(f"Exporting model as {export_format}..."):
+                time.sleep(2)
+            
+            st.success("✅ Model exported successfully!")
+            
+            # Export details
+            st.markdown("""
+            <div class="success-message">
+            <h4>Export Complete</h4>
+            <ul>
+            <li><b>Format:</b> ONNX</li>
+            <li><b>Size:</b> 2.3 MB</li>
+            <li><b>Includes:</b> Model, Preprocessor, Metadata</li>
+            <li><b>Optimized for:</b> Speed</li>
+            <li><b>Compatible with:</b> Python 3.8+, ONNX Runtime 1.10+</li>
+            </ul>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Download exported model
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.download_button(
+                    label="⬇️ Download Model Package",
+                    data=b"Model binary data...",
+                    file_name="model_package.zip",
+                    mime="application/zip"
+                )
+        
+        # Deployment guide
+        st.subheader("🚀 Deployment Guide")
+        
+        with st.expander("View Deployment Instructions"):
+            st.markdown("""
+            ### Quick Start Deployment
+            
+            **1. Install Dependencies:**
+            ```bash
+            pip install onnxruntime numpy pandas
+            ```
+            
+            **2. Load Model:**
+            ```python
+            import onnxruntime as ort
+            import numpy as np
+            
+            # Load model
+            session = ort.InferenceSession("model.onnx")
+            
+            # Prepare input
+            input_data = np.array([[...]], dtype=np.float32)
+            
+            # Make prediction
+            output = session.run(None, {"input": input_data})
+            prediction = output[0]
+            ```
+            
+            **3. API Endpoint:**
+            ```python
+            from fastapi import FastAPI
+            
+            app = FastAPI()
+            
+            @app.post("/predict")
+            async def predict(data: dict):
+                # Process input
+                # Run model
+                # Return prediction
+                return {"prediction": prediction}
+            ```
+            
+            **4. Docker Deployment:**
+            ```dockerfile
+            FROM python:3.8-slim
+            COPY . /app
+            WORKDIR /app
+            RUN pip install -r requirements.txt
+            CMD ["uvicorn", "app:app", "--host", "0.0.0.0"]
+            ```
+            """)
+        
+        # Completion message
+        if len(st.session_state.tutorial_completed) == 7:
+            st.markdown("""
+            <div class="success-message">
+            <h3>🎉 Congratulations!</h3>
+            <p>You've completed the AutoML Platform tutorial!</p>
+            <p>You're now ready to:</p>
+            <ul>
+            <li>Upload and analyze your own datasets</li>
+            <li>Train and optimize ML models</li>
+            <li>Interpret and deploy models</li>
+            <li>Generate professional reports</li>
+            </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Mark as completed
+        if 6 not in st.session_state.tutorial_completed:
+            st.session_state.tutorial_completed.append(6)
+    
+    def _generate_ai_response(self, question: str) -> str:
+        """Generate AI response based on question"""
+        
+        responses = {
+            "imbalance": """For handling class imbalance, try these approaches:
+            
+1. **Resampling Techniques:**
+   - SMOTE (Synthetic Minority Over-sampling)
+   - Random undersampling of majority class
+   - Combination of over and undersampling
+
+2. **Algorithm-level:**
+   - Use class_weight='balanced' in scikit-learn
+   - Adjust sample_weight in XGBoost/LightGBM
+   
+3. **Evaluation Metrics:**
+   - Use F1-score, Precision-Recall AUC instead of accuracy
+   - Focus on recall for minority class detection""",
+            
+            "default": """I can help you with:
+            
+- Data preprocessing and cleaning strategies
+- Feature engineering recommendations
+- Model selection and hyperparameter tuning
+- Performance optimization techniques
+- Deployment best practices
+
+Please ask a specific question about your ML project!"""
+        }
+        
+        # Simple keyword matching
+        if "imbalance" in question.lower() or "balanced" in question.lower():
+            return responses["imbalance"]
+        
+        return responses["default"]
+    
+    def reset_tutorial(self):
+        """Reset tutorial progress"""
+        st.session_state.tutorial_step = 0
+        st.session_state.tutorial_data = None
+        st.session_state.tutorial_model = None
+        st.session_state.tutorial_completed = []
+        st.success("Tutorial reset successfully!")
+
+
+def main():
+    """Main execution"""
+    walkthrough = InteractiveWalkthrough()
+    walkthrough.run()
+
+
+if __name__ == "__main__":
+    main()"""
 Streamlit UI Walkthrough and Demo
 =================================
 Place in: automl_platform/examples/ui_walkthrough.py
