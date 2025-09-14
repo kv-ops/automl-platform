@@ -1,0 +1,161 @@
+# ==============================================================================
+# AutoML Platform - Optional Dependencies Guide
+# Version: 3.1.0
+# 
+# This file documents all optional extras available for AutoML Platform.
+# Install specific features with: pip install automl-platform[extra_name]
+# ==============================================================================
+
+# ---------- AUTHENTICATION & SECURITY ----------
+# pip install automl-platform[auth]
+# Enhanced authentication features beyond core JWT/OAuth
+# - python-keycloak>=3.7.0     # Keycloak integration
+# - python-saml>=1.15.0        # SAML 2.0 support
+# - okta>=2.9.0                # Okta integration
+# - python-jose[cryptography]>=3.3.0  # Advanced JWT features
+
+# pip install automl-platform[sso]
+# Single Sign-On providers (subset of auth for minimal SSO)
+# - python-keycloak>=3.7.0     # Keycloak SSO
+# - python-saml>=1.15.0        # SAML SSO
+# - okta>=2.9.0                # Okta SSO
+# Note: authlib and httpx are already in core dependencies
+
+# ---------- CLOUD CONNECTORS ----------
+# pip install automl-platform[cloud]
+# Connect to major cloud data sources
+# - boto3>=1.34.0              # AWS S3, Redshift, etc.
+# - s3fs>=2024.2.0             # S3 filesystem
+# - google-cloud-bigquery>=3.15.0  # Google BigQuery
+# - google-cloud-storage>=2.10.0   # Google Cloud Storage
+# - azure-storage-blob>=12.19.0    # Azure Blob Storage
+# - snowflake-connector-python>=3.7.0  # Snowflake
+# - databricks-sql-connector>=2.9.0    # Databricks
+
+# ---------- LLM INTEGRATION ----------
+# pip install automl-platform[llm]
+# AI-powered features and LLM integration
+# - openai>=1.10.0             # OpenAI GPT models
+# - anthropic>=0.8.0           # Anthropic Claude
+# - langchain>=0.1.0           # LangChain framework
+# - langchain-community>=0.0.20  # Community integrations
+# - chromadb>=0.4.22           # Vector database
+# - tiktoken>=0.6.0            # Token counting
+
+# ---------- DISTRIBUTED COMPUTING ----------
+# pip install automl-platform[distributed]
+# Scale training across multiple nodes/GPUs
+# - ray[default,train,tune]>=2.8.0  # Ray distributed computing
+# - dask[complete]>=2023.12.0  # Dask parallel computing
+# - celery[redis]>=5.3.0       # Celery task queue
+
+# ---------- DEEP LEARNING ----------
+# pip install automl-platform[deep]
+# Neural networks and deep learning models
+# - torch>=2.1.0               # PyTorch
+# - torchvision>=0.16.0        # Computer vision
+# - tensorflow>=2.15.0         # TensorFlow
+# - pytorch-tabnet>=4.1.0     # TabNet for tabular data
+
+# ---------- STREAMING ----------
+# pip install automl-platform[streaming]
+# Real-time data processing
+# - kafka-python>=2.0.2        # Apache Kafka
+# - confluent-kafka>=2.3.0     # Confluent Kafka
+# - pulsar-client>=3.4.0       # Apache Pulsar
+
+# ---------- FEATURE STORE ----------
+# pip install automl-platform[feature-store]
+# Feature management and serving
+# - feast>=0.36.0              # Open-source feature store
+# - featuretools>=1.28.0       # Automated feature engineering
+
+# ---------- MONITORING ----------
+# pip install automl-platform[monitoring]
+# Advanced monitoring and observability
+# - evidently>=0.4.0           # Data and ML monitoring
+# - datadog>=0.49.0            # Datadog integration
+# - sentry-sdk>=1.40.0         # Error tracking
+# - opentelemetry-api>=1.22.0  # Telemetry
+
+# ---------- MODEL EXPLAINABILITY ----------
+# pip install automl-platform[explain]
+# Model interpretation and explainability
+# - shap>=0.43.0               # SHAP values
+# - lime>=0.2.0                # LIME explanations
+# - eli5>=0.13.0               # ELI5 explanations
+# - interpret>=0.4.0           # Microsoft InterpretML
+
+# ---------- TIME SERIES ----------
+# pip install automl-platform[timeseries]
+# Time series forecasting
+# - statsmodels>=0.14.0        # Statistical models
+# - prophet>=1.1.5             # Facebook Prophet
+# - pmdarima>=2.0.0            # Auto ARIMA
+# - sktime>=0.24.0             # Scikit-learn for time series
+
+# ---------- API ENHANCEMENTS ----------
+# pip install automl-platform[api]
+# Enhanced API features
+# - python-multipart>=0.0.6    # File uploads
+# - aiofiles>=23.2.0           # Async file operations
+# - websockets>=12.0           # WebSocket support
+# - slowapi>=0.1.9             # Rate limiting
+# - gunicorn>=21.2.0           # Production WSGI server
+
+# ---------- VISUALIZATION ----------
+# pip install automl-platform[viz]
+# Enhanced plotting and visualization
+# - matplotlib>=3.8.0          # Base plotting
+# - seaborn>=0.13.0            # Statistical visualization
+# - altair>=5.2.0              # Grammar of graphics
+# - bokeh>=3.3.0               # Interactive plots
+
+# ---------- MODEL EXPORT ----------
+# pip install automl-platform[export]
+# Export models to various formats
+# - onnx>=1.15.0               # ONNX format
+# - onnxruntime>=1.16.0        # ONNX runtime
+# - skl2onnx>=1.16.0           # Sklearn to ONNX
+# - sklearn2pmml>=0.104.0      # PMML format
+
+# ---------- DEVELOPMENT ----------
+# pip install automl-platform[dev]
+# Development and testing tools
+# - pytest>=8.0.0             # Testing framework
+# - pytest-cov>=4.1.0         # Coverage
+# - pytest-asyncio>=0.23.0    # Async testing
+# - black>=24.0.0              # Code formatting
+# - mypy>=1.8.0                # Type checking
+
+# ---------- COMBO INSTALLATIONS ----------
+
+# Enterprise deployment (production-ready)
+# pip install automl-platform[enterprise]
+# Includes: cloud, llm, streaming, distributed, auth, sso, monitoring,
+#          feature-store, api, export
+
+# Complete installation (all features)
+# pip install automl-platform[all]
+# Includes: enterprise + deep + automl + explain + timeseries + viz + dev + docs
+
+# ---------- INSTALLATION EXAMPLES ----------
+
+# Minimal cloud setup
+# pip install automl-platform[cloud,monitoring]
+
+# ML researcher setup
+# pip install automl-platform[deep,explain,viz,dev]
+
+# Production enterprise setup
+# pip install automl-platform[enterprise]
+
+# Full development setup
+# pip install automl-platform[all]
+
+# ---------- NOTES ----------
+# 1. Core dependencies (pandas, sklearn, fastapi, etc.) are always installed
+# 2. HTTP clients (httpx, authlib) moved to core due to auth/sso requirements
+# 3. Security libraries (cryptography, pyjwt, passlib) are essential for production
+# 4. Database drivers (psycopg2-binary, redis) required for core functionality
+# 5. Use specific extras to minimize dependency bloat in production
