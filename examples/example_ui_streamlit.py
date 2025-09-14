@@ -142,7 +142,7 @@ class StreamlitUILauncher:
         # Log status
         for service, status in services.items():
             status_emoji = "✅" if status else "❌"
-            logger.info(f"  {service_emoji} {service.upper()}: {status}")
+            logger.info(f"  {status_emoji} {service.upper()}: {status}")
         
         return services
     
