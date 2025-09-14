@@ -77,6 +77,21 @@ extras_require = {
         "okta>=2.9.0",
         "python-jose[cryptography]>=3.3.0",
     ],
+
+"gpu": [
+    "torch>=2.1.0,<3.0.0",
+    "torchvision>=0.16.0,<1.0.0", 
+    "torchaudio>=2.1.0,<3.0.0",
+    "cupy-cuda11x>=12.0.0,<13.0.0",
+    "numba[cuda]>=0.58.0",
+    "gputil>=1.4.0",
+    "nvidia-ml-py3>=7.352.0",
+    "pynvml>=11.5.0",
+    "gpustat>=1.1.1",
+    "onnxruntime-gpu>=1.16.0,<2.0.0",
+    "pytorch-memlab>=0.3.0",
+    "torch-tb-profiler>=0.4.0",
+],
     
     # SSO Providers (separate from core auth)
     "sso": [
