@@ -1,5 +1,5 @@
 # ==============================================================================
-# AutoML Platform - Core Requirements
+# AutoML Platform - Core Requirements (FINAL VERSION)
 # Version: 3.1.0
 # Python: >= 3.9
 # 
@@ -38,10 +38,17 @@ fastapi>=0.104.0,<1.0.0        # REST API framework
 uvicorn[standard]>=0.24.0,<1.0.0  # ASGI server
 python-multipart>=0.0.6        # Form data parsing
 aiofiles>=23.2.0               # Async file operations
+starlette>=0.27.0              # ASGI framework (fastapi dependency)
+
+# ---------- HTTP & Authentication (Core) ----------
+httpx>=0.25.0                  # Async HTTP client (required by auth/sso)
+authlib>=1.2.0                 # OAuth/OIDC library (required by auth/sso)
+requests>=2.31.0               # HTTP library (fallback)
+aiohttp>=3.9.0                 # Async HTTP (alternative)
 
 # ---------- Basic Storage ----------
 sqlalchemy>=2.0.0              # ORM for databases
-psycopg2-binary>=2.9.0         # PostgreSQL driver
+psycopg2-binary>=2.9.0         # PostgreSQL driver (required by auth)
 redis>=5.0.0                   # Cache and message broker
 
 # ---------- Model Export ----------
@@ -56,14 +63,10 @@ mlflow>=2.9.0,<3.0.0           # Experiment tracking & model registry
 great-expectations>=0.18.0     # Data validation
 evidently>=0.4.0               # Drift detection
 
-# ---------- Web & HTTP ----------
-requests>=2.31.0               # HTTP library
-aiohttp>=3.9.0                 # Async HTTP
-
-# ---------- Security Essentials ----------
-cryptography>=41.0.0           # Encryption
-pyjwt>=2.8.0                   # JWT tokens
-passlib[bcrypt]>=1.7.4         # Password hashing
+# ---------- Security Essentials (Core) ----------
+cryptography>=41.0.0           # Encryption (required by auth)
+pyjwt>=2.8.0                   # JWT tokens (required by auth)
+passlib[bcrypt]>=1.7.4         # Password hashing (required by auth)
 
 # ---------- Monitoring ----------
 prometheus-client>=0.19.0      # Metrics export
