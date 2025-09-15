@@ -44,5 +44,5 @@ USER automl
 # Expose ports
 EXPOSE 8000 8501
 
-# Default command (can be overridden in docker-compose.yml)
+# Default command - Updated to use the correct module path
 CMD ["uvicorn", "automl_platform.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
