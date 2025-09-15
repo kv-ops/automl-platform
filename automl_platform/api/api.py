@@ -1,7 +1,7 @@
 """
 Main API Entry Point for AutoML Platform
 =========================================
-Place in: automl_platform/api/api.py
+Place in: automl_platform/api/app.py
 
 Central FastAPI application that integrates all modules.
 """
@@ -801,10 +801,6 @@ if SCHEDULER_AVAILABLE:
         }
 
 
-# [SUITE DU FICHIER INCHANGÉE - Les autres endpoints restent identiques]
-# ... (tout le reste du code reste identique jusqu'à la fin)
-
-
 # ============================================================================
 # Include Routers (only if available)
 # ============================================================================
@@ -905,16 +901,38 @@ async def shutdown_event():
 
 
 # ============================================================================
-# Main Entry Point
+# Main Entry Point Function
+# ============================================================================
+
+def main():
+    """Main entry point for running the API server via console script."""
+    import uvicorn
+    import sys
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='AutoML Platform API Server')
+    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
+    parser.add_argument('--port', type=int, default=8000, help='Port to bind to')
+    parser.add_argument('--workers', type=int, default=1, help='Number of worker processes')
+    parser.add_argument('--reload', action='store_true', help='Enable auto-reload')
+    parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error', 'critical'])
+    
+    args = parser.parse_args()
+    
+    uvicorn.run(
+        "automl_platform.api.app:app",
+        host=args.host,
+        port=args.port,
+        workers=args.workers if not args.reload else 1,
+        reload=args.reload,
+        log_level=args.log_level
+    )
+
+
+# ============================================================================
+# Development Entry Point
 # ============================================================================
 
 if __name__ == "__main__":
-    import uvicorn
-    
-    uvicorn.run(
-        "api:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    # For development: python -m automl_platform.api.app
+    main()
