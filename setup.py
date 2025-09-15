@@ -431,7 +431,7 @@ setup(
             "automl-predict=automl_platform.cli.predict:predict_cli",
             "automl-evaluate=automl_platform.cli.evaluate:evaluate_cli",
 
-            # API Server
+            # API Server - UPDATED PATH
             "automl-api=automl_platform.api.app:main",
             "automl-worker=automl_platform.worker.celery_app:main",
 
