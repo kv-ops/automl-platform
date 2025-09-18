@@ -1,7 +1,7 @@
 """
 Main API Entry Point for AutoML Platform
 =========================================
-Place in: automl_platform/api/app.py
+Place in: automl_platform/api/api.py
 
 Central FastAPI application that integrates all modules.
 """
