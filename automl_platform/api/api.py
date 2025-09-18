@@ -14,7 +14,7 @@ import asyncio
 
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, BackgroundTasks, Request, status, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fast.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import pandas as pd
 import numpy as np
@@ -920,7 +920,7 @@ def main():
     args = parser.parse_args()
     
     uvicorn.run(
-        "automl_platform.api.app:app",
+        "automl_platform.api.api:app",
         host=args.host,
         port=args.port,
         workers=args.workers if not args.reload else 1,
@@ -934,5 +934,5 @@ def main():
 # ============================================================================
 
 if __name__ == "__main__":
-    # For development: python -m automl_platform.api.app
+    # For development: python -m automl_platform.api.api
     main()
