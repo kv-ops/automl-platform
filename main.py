@@ -327,7 +327,7 @@ def api(args):
     
     try:
         import uvicorn
-        from automl_platform.api.app import app
+        from automl_platform.api.api import app
     except ImportError:
         logger.error("API dependencies not installed. Run: pip install automl-platform[api]")
         sys.exit(1)
@@ -337,7 +337,7 @@ def api(args):
     logger.info(f"Reload: {args.reload}")
     
     uvicorn.run(
-        "automl_platform.api.app:app",
+        "automl_platform.api.api:app",
         host=args.host,
         port=args.port,
         workers=args.workers if not args.reload else 1,
