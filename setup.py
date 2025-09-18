@@ -432,7 +432,7 @@ setup(
             "automl-evaluate=automl_platform.cli.evaluate:evaluate_cli",
 
             # API Server - UPDATED PATH
-            "automl-api=automl_platform.api.app:main",
+            "automl-api=automl_platform.api.api:main",
             "automl-worker=automl_platform.worker.celery_app:main",
 
             # MLOps
