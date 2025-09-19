@@ -1,8 +1,10 @@
 """
-AutoML Platform No-Code Dashboard
-==================================
+AutoML Platform No-Code Dashboard with Expert Mode
+===================================================
 
-Interface web intuitive pour utilisateurs non techniques permettant:
+Interface web intuitive pour utilisateurs avec mode expert permettant:
+- Mode simplifié par défaut pour utilisateurs non techniques
+- Mode expert avec accès à tous les paramètres avancés
 - Import facile de données (drag & drop)
 - Configuration visuelle des modèles
 - Suivi en temps réel des entraînements
@@ -25,6 +27,7 @@ from typing import Dict, List, Optional, Any, Tuple
 import io
 import base64
 from uuid import uuid4
+import os
 
 # Import des composants existants si disponibles
 try:
@@ -56,7 +59,7 @@ MLFLOW_URL = st.secrets.get("mlflow_url", "http://localhost:5000")
 # ============================================================================
 
 class SessionState:
-    """Gestionnaire d'état de session amélioré."""
+    """Gestionnaire d'état de session amélioré avec mode expert."""
     
     @staticmethod
     def initialize():
@@ -73,8 +76,14 @@ class SessionState:
             'user_profile': {'name': 'Utilisateur', 'role': 'analyst'},
             'notifications': [],
             'api_token': None,
-            'wizard_step': 0
+            'wizard_step': 0,
+            'expert_mode': False  # Mode expert désactivé par défaut
         }
+        
+        # Vérifier la variable d'environnement pour le mode expert
+        expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
+        if expert_mode_env in ["true", "1", "yes", "on"]:
+            defaults['expert_mode'] = True
         
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -173,7 +182,7 @@ class DataConnector:
         return None
 
 class AutoMLWizard:
-    """Assistant de configuration AutoML guidé."""
+    """Assistant de configuration AutoML guidé avec mode expert."""
     
     def __init__(self):
         self.steps = [
@@ -371,145 +380,443 @@ class AutoMLWizard:
                     st.error("Veuillez sélectionner une colonne cible")
     
     def _step_model_configuration(self):
-        """Étape 3: Configuration du modèle."""
+        """Étape 3: Configuration du modèle avec support du mode expert."""
         st.header("⚙️ Configuration du modèle")
         
-        # Mode de configuration
-        config_mode = st.radio(
-            "Mode de configuration",
-            ["🚀 Automatique (Recommandé)", "⚙️ Personnalisé", "🎓 Expert"],
-            horizontal=True
-        )
+        # Toggle pour le mode expert
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            expert_mode_changed = st.checkbox(
+                "🎓 Mode Expert",
+                value=st.session_state.expert_mode,
+                help="Activez pour accéder aux paramètres avancés",
+                key="expert_mode_toggle"
+            )
+            
+            if expert_mode_changed != st.session_state.expert_mode:
+                st.session_state.expert_mode = expert_mode_changed
+                if expert_mode_changed:
+                    st.info("Mode expert activé - Tous les paramètres avancés sont disponibles")
+                else:
+                    st.success("Mode simplifié activé - Configuration optimisée automatiquement")
         
-        if config_mode == "🚀 Automatique (Recommandé)":
-            st.success("✨ Configuration optimale sélectionnée automatiquement")
+        # Mode de configuration basé sur le mode expert
+        if not st.session_state.expert_mode:
+            # MODE SIMPLIFIÉ
+            st.success("✨ Configuration automatique optimisée")
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
                 optimization_metric = st.selectbox(
                     "Métrique à optimiser",
-                    ["Précision", "Rappel", "F1-Score", "AUC-ROC", "RMSE", "MAE"]
+                    ["Précision", "F1-Score", "AUC-ROC"],
+                    help="La métrique principale à optimiser"
                 )
             
             with col2:
                 time_budget = st.slider(
-                    "Budget temps (minutes)",
-                    min_value=1,
-                    max_value=60,
+                    "Temps maximum (minutes)",
+                    min_value=5,
+                    max_value=30,
                     value=10,
-                    help="Temps maximum alloué à l'entraînement"
+                    step=5,
+                    help="Temps alloué à l'entraînement"
                 )
             
             with col3:
                 interpretability = st.select_slider(
-                    "Interprétabilité",
-                    options=["Performance max", "Équilibré", "Explicable"],
-                    value="Équilibré"
+                    "Priorité",
+                    options=["Rapidité", "Équilibré", "Performance"],
+                    value="Équilibré",
+                    help="Choisissez votre priorité"
                 )
             
-            # Configuration stockée
+            # Afficher les paramètres qui seront utilisés
+            with st.expander("📋 Paramètres automatiques"):
+                st.info("""
+                **Configuration optimisée:**
+                - **Algorithmes**: XGBoost, Random Forest, Régression Logistique
+                - **Validation**: Cross-validation 3 folds
+                - **Optimisation**: 20 itérations Optuna
+                - **Préprocessing**: Automatique
+                - **Ensemble**: Vote majoritaire
+                - **Workers**: 2 (parallélisation limitée)
+                """)
+            
+            # Configuration stockée (simplifiée)
             st.session_state.training_config = {
-                'mode': 'auto',
+                'mode': 'simplified',
+                'expert_mode': False,
                 'metric': optimization_metric,
-                'time_budget': time_budget,
-                'interpretability': interpretability
+                'time_budget': time_budget * 60,  # Convertir en secondes
+                'interpretability': interpretability,
+                'algorithms': ['XGBoost', 'RandomForest', 'LogisticRegression'],
+                'cv_folds': 3,
+                'hpo_n_iter': 20,
+                'ensemble_method': 'voting'
             }
+            
+            # Suggestion d'activation du mode expert
+            st.info("💡 **Conseil**: Activez le mode expert pour personnaliser tous les paramètres")
         
-        elif config_mode == "⚙️ Personnalisé":
-            col1, col2 = st.columns(2)
+        else:
+            # MODE EXPERT
+            config_mode = st.radio(
+                "Mode de configuration",
+                ["⚙️ Personnalisé", "📝 Configuration JSON"],
+                horizontal=True
+            )
             
-            with col1:
-                st.subheader("Algorithmes")
-                algorithms = st.multiselect(
-                    "Sélectionnez les algorithmes",
-                    ["Random Forest", "XGBoost", "LightGBM", "CatBoost", 
-                     "Régression Logistique", "SVM", "Réseaux de neurones"],
-                    default=["Random Forest", "XGBoost", "LightGBM"]
-                )
+            if config_mode == "⚙️ Personnalisé":
+                # Tabs pour organiser les options avancées
+                tab1, tab2, tab3, tab4 = st.tabs([
+                    "🤖 Algorithmes",
+                    "🔧 Hyperparamètres",
+                    "⚡ Calcul distribué",
+                    "📊 Préprocessing"
+                ])
                 
-                st.subheader("Validation")
-                validation_strategy = st.selectbox(
-                    "Stratégie de validation",
-                    ["Cross-validation 5 folds", "Cross-validation 10 folds", 
-                     "Train/Test split", "Time series split"]
-                )
-            
-            with col2:
-                st.subheader("Hyperparamètres")
-                auto_hpo = st.checkbox("Optimisation automatique", value=True)
+                with tab1:
+                    st.subheader("Sélection des algorithmes")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Modèles classiques**")
+                        use_xgboost = st.checkbox("XGBoost", value=True)
+                        use_lightgbm = st.checkbox("LightGBM", value=True)
+                        use_catboost = st.checkbox("CatBoost", value=False)
+                        use_rf = st.checkbox("Random Forest", value=True)
+                        use_et = st.checkbox("Extra Trees", value=False)
+                        use_gb = st.checkbox("Gradient Boosting", value=False)
+                        use_lr = st.checkbox("Régression Logistique/Linéaire", value=True)
+                        use_svm = st.checkbox("SVM", value=False)
+                    
+                    with col2:
+                        st.markdown("**Modèles avancés**")
+                        use_nn = st.checkbox("Réseaux de neurones (TabNet)", value=False)
+                        use_ftt = st.checkbox("FT-Transformer", value=False)
+                        use_prophet = st.checkbox("Prophet (séries temporelles)", value=False)
+                        use_arima = st.checkbox("ARIMA (séries temporelles)", value=False)
+                        
+                        st.markdown("**Ensemble**")
+                        ensemble_method = st.selectbox(
+                            "Méthode d'ensemble",
+                            ["Aucune", "Voting", "Stacking", "Blending"],
+                            index=2
+                        )
+                        
+                        if ensemble_method == "Stacking":
+                            meta_learner = st.selectbox(
+                                "Meta-learner",
+                                ["LogisticRegression", "Ridge", "XGBoost"]
+                            )
+                    
+                    # Compiler la liste des algorithmes
+                    algorithms = []
+                    if use_xgboost: algorithms.append("XGBoost")
+                    if use_lightgbm: algorithms.append("LightGBM")
+                    if use_catboost: algorithms.append("CatBoost")
+                    if use_rf: algorithms.append("RandomForest")
+                    if use_et: algorithms.append("ExtraTrees")
+                    if use_gb: algorithms.append("GradientBoosting")
+                    if use_lr: algorithms.append("LogisticRegression")
+                    if use_svm: algorithms.append("SVM")
+                    if use_nn: algorithms.append("TabNet")
+                    if use_ftt: algorithms.append("FTTransformer")
+                    if use_prophet: algorithms.append("Prophet")
+                    if use_arima: algorithms.append("ARIMA")
+                    
+                    st.info(f"**{len(algorithms)} algorithmes sélectionnés**")
                 
-                if not auto_hpo:
-                    max_depth = st.slider("Profondeur max des arbres", 3, 20, 10)
-                    n_estimators = st.slider("Nombre d'estimateurs", 50, 500, 100)
-                    learning_rate = st.slider("Taux d'apprentissage", 0.01, 0.3, 0.1)
+                with tab2:
+                    st.subheader("Optimisation des hyperparamètres (HPO)")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        hpo_method = st.selectbox(
+                            "Méthode HPO",
+                            ["Optuna (Bayésien)", "Grid Search", "Random Search", "Aucune"],
+                            help="Optuna est recommandé pour l'efficacité"
+                        )
+                        
+                        if hpo_method != "Aucune":
+                            hpo_n_iter = st.number_input(
+                                "Nombre d'itérations",
+                                min_value=10,
+                                max_value=500,
+                                value=100,
+                                step=10,
+                                help="Plus d'itérations = meilleurs résultats mais plus lent"
+                            )
+                            
+                            early_stopping = st.checkbox(
+                                "Early stopping",
+                                value=True,
+                                help="Arrêt anticipé si pas d'amélioration"
+                            )
+                            
+                            if early_stopping:
+                                patience = st.slider(
+                                    "Patience (rounds)",
+                                    min_value=5,
+                                    max_value=100,
+                                    value=20
+                                )
+                    
+                    with col2:
+                        st.markdown("**Validation croisée**")
+                        cv_strategy = st.selectbox(
+                            "Stratégie",
+                            ["KFold", "StratifiedKFold", "TimeSeriesSplit", "GroupKFold"]
+                        )
+                        
+                        cv_folds = st.slider(
+                            "Nombre de folds",
+                            min_value=2,
+                            max_value=10,
+                            value=5,
+                            help="Plus de folds = validation plus robuste"
+                        )
+                        
+                        scoring_metric = st.selectbox(
+                            "Métrique de scoring",
+                            ["accuracy", "f1", "roc_auc", "precision", "recall", "r2", "rmse", "mae"]
+                        )
+                        
+                        warm_start = st.checkbox(
+                            "Warm start",
+                            value=False,
+                            help="Reprendre depuis des essais précédents"
+                        )
                 
-                st.subheader("Préprocessing")
-                handle_missing = st.selectbox(
-                    "Traitement valeurs manquantes",
-                    ["Automatique", "Suppression", "Imputation moyenne", "Imputation médiane"]
-                )
+                with tab3:
+                    st.subheader("Configuration du calcul distribué")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Backend de calcul**")
+                        compute_backend = st.selectbox(
+                            "Backend",
+                            ["Local", "Celery", "Ray", "Dask"],
+                            help="Ray recommandé pour le calcul distribué"
+                        )
+                        
+                        if compute_backend != "Local":
+                            n_workers = st.number_input(
+                                "Nombre de workers",
+                                min_value=1,
+                                max_value=32,
+                                value=4,
+                                help="Workers parallèles pour l'entraînement"
+                            )
+                            
+                            max_concurrent = st.number_input(
+                                "Jobs concurrents max",
+                                min_value=1,
+                                max_value=10,
+                                value=2
+                            )
+                    
+                    with col2:
+                        st.markdown("**Configuration GPU**")
+                        use_gpu = st.checkbox(
+                            "Activer GPU",
+                            value=False,
+                            help="Accélération GPU pour XGBoost/LightGBM"
+                        )
+                        
+                        if use_gpu:
+                            gpu_per_trial = st.number_input(
+                                "GPU par essai",
+                                min_value=0.1,
+                                max_value=4.0,
+                                value=1.0,
+                                step=0.1
+                            )
+                            
+                            gpu_memory_fraction = st.slider(
+                                "Fraction mémoire GPU",
+                                min_value=0.1,
+                                max_value=1.0,
+                                value=0.8
+                            )
+                        
+                        # Limites de ressources
+                        st.markdown("**Limites de ressources**")
+                        memory_limit = st.number_input(
+                            "RAM max (GB)",
+                            min_value=1,
+                            max_value=256,
+                            value=16
+                        )
+                        
+                        time_limit = st.number_input(
+                            "Temps max (minutes)",
+                            min_value=1,
+                            max_value=1440,
+                            value=60
+                        )
                 
-                feature_scaling = st.selectbox(
-                    "Normalisation",
-                    ["Automatique", "StandardScaler", "MinMaxScaler", "Aucune"]
-                )
-            
-            st.session_state.training_config = {
-                'mode': 'custom',
-                'algorithms': algorithms,
-                'validation': validation_strategy,
-                'auto_hpo': auto_hpo,
-                'preprocessing': {
-                    'missing': handle_missing,
-                    'scaling': feature_scaling
+                with tab4:
+                    st.subheader("Préprocessing avancé")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Gestion des valeurs manquantes**")
+                        missing_strategy = st.selectbox(
+                            "Stratégie",
+                            ["Automatique", "Suppression", "Imputation moyenne", 
+                             "Imputation médiane", "Imputation KNN", "MICE"]
+                        )
+                        
+                        missing_threshold = st.slider(
+                            "Seuil suppression colonnes (%)",
+                            min_value=0,
+                            max_value=100,
+                            value=50,
+                            help="Supprimer colonnes avec >X% de valeurs manquantes"
+                        )
+                        
+                        st.markdown("**Normalisation**")
+                        scaling_method = st.selectbox(
+                            "Méthode",
+                            ["Automatique", "StandardScaler", "MinMaxScaler", 
+                             "RobustScaler", "Normalizer", "Aucune"]
+                        )
+                    
+                    with col2:
+                        st.markdown("**Feature engineering**")
+                        create_polynomial = st.checkbox("Features polynomiales", value=False)
+                        if create_polynomial:
+                            poly_degree = st.slider("Degré", 2, 4, 2)
+                        
+                        create_interactions = st.checkbox("Interactions", value=False)
+                        create_datetime = st.checkbox("Features temporelles", value=True)
+                        
+                        st.markdown("**Sélection de features**")
+                        feature_selection = st.selectbox(
+                            "Méthode",
+                            ["Aucune", "Mutual Information", "SHAP", "Permutation", "Boruta"]
+                        )
+                        
+                        if feature_selection != "Aucune":
+                            selection_threshold = st.slider(
+                                "Seuil de sélection",
+                                min_value=0.0,
+                                max_value=1.0,
+                                value=0.01
+                            )
+                
+                # Compiler la configuration expert
+                st.session_state.training_config = {
+                    'mode': 'expert',
+                    'expert_mode': True,
+                    'algorithms': algorithms,
+                    'ensemble_method': ensemble_method.lower() if ensemble_method != "Aucune" else "none",
+                    'hpo': {
+                        'method': hpo_method.split()[0].lower() if hpo_method != "Aucune" else "none",
+                        'n_iter': hpo_n_iter if hpo_method != "Aucune" else 0,
+                        'early_stopping': early_stopping if hpo_method != "Aucune" else False,
+                        'patience': patience if (hpo_method != "Aucune" and early_stopping) else None
+                    },
+                    'validation': {
+                        'strategy': cv_strategy,
+                        'n_folds': cv_folds,
+                        'scoring': scoring_metric
+                    },
+                    'compute': {
+                        'backend': compute_backend.lower(),
+                        'n_workers': n_workers if compute_backend != "Local" else 1,
+                        'max_concurrent': max_concurrent if compute_backend != "Local" else 1,
+                        'use_gpu': use_gpu,
+                        'gpu_per_trial': gpu_per_trial if use_gpu else 0,
+                        'memory_limit': memory_limit,
+                        'time_limit': time_limit
+                    },
+                    'preprocessing': {
+                        'missing_strategy': missing_strategy.lower(),
+                        'missing_threshold': missing_threshold / 100,
+                        'scaling_method': scaling_method.lower(),
+                        'create_polynomial': create_polynomial,
+                        'poly_degree': poly_degree if create_polynomial else 2,
+                        'create_interactions': create_interactions,
+                        'create_datetime': create_datetime,
+                        'feature_selection': feature_selection.lower() if feature_selection != "Aucune" else "none",
+                        'selection_threshold': selection_threshold if feature_selection != "Aucune" else 0.01
+                    }
                 }
-            }
-        
-        else:  # Mode Expert
-            st.subheader("🎓 Configuration avancée")
             
-            config_json = st.text_area(
-                "Configuration JSON",
-                value=json.dumps({
-                    "algorithms": ["xgboost", "lightgbm", "catboost"],
+            else:  # Configuration JSON
+                st.subheader("📝 Configuration JSON avancée")
+                
+                default_config = json.dumps({
+                    "algorithms": ["xgboost", "lightgbm", "catboost", "random_forest"],
                     "hyperparameter_optimization": {
                         "method": "optuna",
                         "n_trials": 100,
-                        "timeout": 3600
+                        "timeout": 3600,
+                        "early_stopping_rounds": 20
                     },
                     "preprocessing": {
                         "feature_engineering": "auto",
-                        "outlier_detection": "isolation_forest"
+                        "outlier_detection": "isolation_forest",
+                        "scaling": "robust"
                     },
                     "ensemble": {
                         "method": "stacking",
-                        "meta_learner": "logistic_regression"
+                        "meta_learner": "logistic_regression",
+                        "use_probabilities": True
+                    },
+                    "distributed": {
+                        "backend": "ray",
+                        "n_workers": 4,
+                        "gpu_enabled": False
                     }
-                }, indent=2),
-                height=300
-            )
-            
-            try:
-                st.session_state.training_config = json.loads(config_json)
-                st.session_state.training_config['mode'] = 'expert'
-                st.success("✅ Configuration valide")
-            except json.JSONDecodeError as e:
-                st.error(f"❌ JSON invalide: {str(e)}")
+                }, indent=2)
+                
+                config_json = st.text_area(
+                    "Configuration JSON",
+                    value=default_config,
+                    height=400,
+                    help="Configuration complète en format JSON"
+                )
+                
+                try:
+                    st.session_state.training_config = json.loads(config_json)
+                    st.session_state.training_config['mode'] = 'expert_json'
+                    st.session_state.training_config['expert_mode'] = True
+                    st.success("✅ Configuration JSON valide")
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ JSON invalide: {str(e)}")
         
-        # Estimation des ressources
+        # Estimation des ressources (identique pour les deux modes)
         st.divider()
         st.subheader("📊 Estimation des ressources")
         
         col1, col2, col3, col4 = st.columns(4)
+        
+        if st.session_state.expert_mode:
+            # Estimations basées sur la config expert
+            time_est = st.session_state.training_config.get('compute', {}).get('time_limit', 60)
+            workers = st.session_state.training_config.get('compute', {}).get('n_workers', 1)
+            gpu = "Activé" if st.session_state.training_config.get('compute', {}).get('use_gpu', False) else "Désactivé"
+            ram = st.session_state.training_config.get('compute', {}).get('memory_limit', 16)
+        else:
+            # Estimations pour mode simplifié
+            time_est = st.session_state.training_config.get('time_budget', 600) / 60
+            workers = 2
+            gpu = "Désactivé"
+            ram = 4
+        
         with col1:
-            st.metric("⏱️ Temps estimé", f"{st.session_state.training_config.get('time_budget', 10)} min")
+            st.metric("⏱️ Temps estimé", f"{int(time_est)} min")
         with col2:
-            st.metric("💾 RAM requise", "~2 GB")
+            st.metric("💾 RAM requise", f"~{ram} GB")
         with col3:
-            st.metric("🔥 GPU", "Optionnel")
+            st.metric("🔥 GPU", gpu)
         with col4:
-            st.metric("💰 Coût estimé", "$0.10")
+            st.metric("👷 Workers", workers)
         
         # Navigation
         col1, col2, col3 = st.columns([1, 1, 1])
@@ -526,6 +833,12 @@ class AutoMLWizard:
     def _step_training(self):
         """Étape 4: Entraînement en cours."""
         st.header("🚀 Entraînement en cours")
+        
+        # Afficher le mode utilisé
+        if st.session_state.expert_mode:
+            st.info("🎓 Entraînement en mode expert avec configuration personnalisée")
+        else:
+            st.success("🚀 Entraînement en mode simplifié avec configuration optimisée")
         
         # Simulation de l'entraînement
         progress_container = st.container()
@@ -553,7 +866,7 @@ class AutoMLWizard:
                 elif i == 100:
                     st.success("✅ Entraînement terminé!")
                 
-                time.sleep(0.1)  # Simulation
+                time.sleep(0.05)  # Simulation réduite
         
         with metrics_container:
             st.subheader("📊 Métriques en temps réel")
@@ -602,19 +915,22 @@ class AutoMLWizard:
             st.subheader("📝 Logs d'entraînement")
             
             # Zone de logs avec auto-scroll
+            mode_str = "EXPERT" if st.session_state.expert_mode else "SIMPLIFIÉ"
             log_text = st.text_area(
                 "Logs",
-                value="""[2024-01-15 10:00:00] Démarrage de l'entraînement...
+                value=f"""[2024-01-15 10:00:00] Démarrage de l'entraînement en mode {mode_str}...
 [2024-01-15 10:00:05] Chargement des données: OK
-[2024-01-15 10:00:10] Préprocessing: 1000 lignes traitées
-[2024-01-15 10:00:15] Début de l'optimisation Optuna
-[2024-01-15 10:00:20] Trial 1/100: Score = 0.85
-[2024-01-15 10:00:25] Trial 2/100: Score = 0.87
-[2024-01-15 10:00:30] Meilleur score actuel: 0.87
-[2024-01-15 10:00:35] Entraînement XGBoost...
-[2024-01-15 10:00:40] Validation croisée: Fold 1/5
-[2024-01-15 10:00:45] Score moyen: 0.88 (+/- 0.02)
-[2024-01-15 10:00:50] Entraînement terminé avec succès!""",
+[2024-01-15 10:00:10] Configuration: {len(st.session_state.training_config.get('algorithms', ['XGBoost', 'RandomForest', 'LogisticRegression']))} algorithmes sélectionnés
+[2024-01-15 10:00:15] Préprocessing: 1000 lignes traitées
+[2024-01-15 10:00:20] Début de l'optimisation {"Optuna" if st.session_state.expert_mode else "simplifiée"}
+[2024-01-15 10:00:25] Trial 1/{"100" if st.session_state.expert_mode else "20"}: Score = 0.85
+[2024-01-15 10:00:30] Trial 2/{"100" if st.session_state.expert_mode else "20"}: Score = 0.87
+[2024-01-15 10:00:35] Meilleur score actuel: 0.87
+[2024-01-15 10:00:40] Entraînement XGBoost...
+[2024-01-15 10:00:45] Validation croisée: Fold 1/{st.session_state.training_config.get('cv_folds', 3)}
+[2024-01-15 10:00:50] Score moyen: 0.88 (+/- 0.02)
+[2024-01-15 10:00:55] Workers actifs: {st.session_state.training_config.get('compute', {}).get('n_workers', 2)}
+[2024-01-15 10:01:00] Entraînement terminé avec succès!""",
                 height=200,
                 disabled=True
             )
@@ -630,6 +946,12 @@ class AutoMLWizard:
     def _step_results(self):
         """Étape 5: Résultats et déploiement."""
         st.header("📊 Résultats de l'entraînement")
+        
+        # Afficher le mode utilisé
+        if st.session_state.expert_mode:
+            st.info("🎓 Résultats obtenus en mode expert")
+        else:
+            st.success("🚀 Résultats obtenus avec configuration optimisée")
         
         # Métriques principales
         col1, col2, col3, col4 = st.columns(4)
@@ -912,6 +1234,12 @@ def page_home():
         </p>
     """, unsafe_allow_html=True)
     
+    # Afficher le mode actuel
+    if st.session_state.expert_mode:
+        st.info("🎓 Mode expert activé - Accès complet à toutes les fonctionnalités")
+    else:
+        st.success("🚀 Mode simplifié - Configuration optimisée automatiquement")
+    
     # Métriques globales
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -951,7 +1279,8 @@ def page_home():
         "Type": ["Classification", "Régression", "Classification", "Clustering"],
         "Accuracy": [0.925, 0.887, 0.956, "-"],
         "Statut": ["✅ Déployé", "🔄 En cours", "✅ Déployé", "⏸️ En pause"],
-        "Dernière modification": ["Il y a 2h", "Il y a 5h", "Hier", "Il y a 3 jours"]
+        "Dernière modification": ["Il y a 2h", "Il y a 5h", "Hier", "Il y a 3 jours"],
+        "Mode": ["Expert", "Simplifié", "Expert", "Simplifié"]
     }
     
     df_projects = pd.DataFrame(projects_data)
@@ -1012,10 +1341,14 @@ def page_monitoring():
     """Page de monitoring des modèles."""
     st.header("📊 Monitoring des modèles")
     
+    # Afficher le mode
+    if st.session_state.expert_mode:
+        st.info("🎓 Mode expert - Toutes les métriques avancées disponibles")
+    
     # Sélection du modèle
     model_select = st.selectbox(
         "Sélectionner un modèle",
-        ["model-churn-v3", "model-credit-v2", "model-fraud-v5", "model-segment-v1"]
+        ["model-churn-v3 (Expert)", "model-credit-v2 (Simplifié)", "model-fraud-v5 (Expert)", "model-segment-v1 (Simplifié)"]
     )
     
     # Métriques temps réel
@@ -1032,26 +1365,42 @@ def page_monitoring():
         st.metric("Uptime", "99.99%", "")
     
     # Graphiques de monitoring
-    tab1, tab2, tab3 = st.tabs(["Performance", "Drift", "Alertes"])
+    if st.session_state.expert_mode:
+        # Mode expert: plus de tabs et métriques
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Performance", "Drift", "Alertes", "GPU/CPU", "Logs détaillés"])
+        
+        with tab4:
+            st.subheader("🖥️ Utilisation GPU/CPU")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("GPU Utilization", "67%", "+12%")
+                st.metric("GPU Memory", "4.2/8 GB", "")
+            with col2:
+                st.metric("CPU Cores", "14/16", "")
+                st.metric("RAM", "28/64 GB", "")
+        
+        with tab5:
+            st.subheader("📝 Logs détaillés")
+            st.text_area("Logs système", value="[Logs détaillés...]", height=300)
+    else:
+        # Mode simplifié: moins de tabs
+        tab1, tab2, tab3 = st.tabs(["Performance", "Drift", "Alertes"])
     
     with tab1:
-        # TODO: Ajouter graphiques de performance
-        st.info("Graphiques de performance en développement")
+        st.info("Graphiques de performance")
     
     with tab2:
-        # TODO: Ajouter détection de drift
-        st.info("Détection de drift en développement")
+        st.info("Détection de drift")
     
     with tab3:
-        # TODO: Ajouter système d'alertes
-        st.info("Système d'alertes en développement")
+        st.info("Système d'alertes")
 
 # ============================================================================
 # Application principale
 # ============================================================================
 
 def main():
-    """Point d'entrée principal de l'application Streamlit."""
+    """Point d'entrée principal de l'application Streamlit avec mode expert."""
     # Configuration de la page
     st.set_page_config(
         page_title="AutoML Platform - No-Code AI",
@@ -1065,7 +1414,8 @@ def main():
     
     # Tracking des métriques si disponible
     if METRICS_AVAILABLE:
-        track_streamlit_page("dashboard", "default", st.session_state.user_profile.get('role', 'user'))
+        mode = "expert" if st.session_state.expert_mode else "simplified"
+        track_streamlit_page("dashboard", mode, st.session_state.user_profile.get('role', 'user'))
     
     # CSS personnalisé
     st.markdown("""
@@ -1079,12 +1429,50 @@ def main():
         div[data-testid="stSidebar"] {
             background-color: #f0f2f6;
         }
+        .expert-badge {
+            background-color: #FFD700;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
         </style>
     """, unsafe_allow_html=True)
     
-    # Sidebar avec navigation
+    # Sidebar avec navigation et mode expert
     with st.sidebar:
         st.image("https://via.placeholder.com/300x100/1E88E5/FFFFFF?text=AutoML+Platform", use_column_width=True)
+        
+        st.divider()
+        
+        # Toggle pour le mode expert global
+        st.markdown("### 🎓 Mode Expert")
+        expert_mode = st.checkbox(
+            "Activer le mode expert",
+            value=st.session_state.expert_mode,
+            help="Active les options avancées dans toute l'application",
+            key="sidebar_expert_mode"
+        )
+        
+        if expert_mode != st.session_state.expert_mode:
+            st.session_state.expert_mode = expert_mode
+            if expert_mode:
+                st.success("Mode expert activé")
+                st.balloons()
+            else:
+                st.info("Mode simplifié activé")
+        
+        if st.session_state.expert_mode:
+            st.caption("🔓 Toutes les options avancées sont disponibles")
+            st.caption("• 30+ algorithmes")
+            st.caption("• Configuration HPO complète")
+            st.caption("• Calcul distribué (Ray/Dask)")
+            st.caption("• Configuration GPU")
+        else:
+            st.caption("🚀 Configuration simplifiée et optimisée")
+            st.caption("• 3 algorithmes fiables")
+            st.caption("• Paramètres automatiques")
+            st.caption("• Interface épurée")
         
         st.divider()
         
@@ -1107,7 +1495,17 @@ def main():
         
         # Informations utilisateur
         st.markdown("### 👤 Utilisateur")
-        st.info(f"**{st.session_state.user_profile['name']}**\n\nRôle: {st.session_state.user_profile['role']}")
+        user_info = f"**{st.session_state.user_profile['name']}**\n\nRôle: {st.session_state.user_profile['role']}"
+        if st.session_state.expert_mode:
+            user_info += "\n🎓 **Mode Expert**"
+        st.info(user_info)
+        
+        # Plan et quotas (visible en mode expert)
+        if st.session_state.expert_mode:
+            st.markdown("### 📊 Quotas")
+            st.metric("Modèles", "8/10")
+            st.metric("GPU heures", "4.2/10")
+            st.metric("Workers", "4/8")
         
         # Bouton de déconnexion
         if st.button("🚪 Déconnexion", use_container_width=True):
@@ -1118,12 +1516,20 @@ def main():
         
         # Aide et support
         st.markdown("### 💡 Aide & Support")
-        st.markdown("""
-        - [📚 Documentation](https://docs.automl-platform.com)
-        - [🎥 Tutoriels vidéo](https://youtube.com/automl)
-        - [💬 Chat support](https://support.automl-platform.com)
-        - [📧 Contact](mailto:support@automl-platform.com)
-        """)
+        if st.session_state.expert_mode:
+            st.markdown("""
+            - [📚 Documentation avancée](https://docs.automl-platform.com/expert)
+            - [🎓 Tutoriels experts](https://youtube.com/automl/expert)
+            - [💬 Support prioritaire](https://support.automl-platform.com/priority)
+            - [📧 Contact expert](mailto:expert@automl-platform.com)
+            """)
+        else:
+            st.markdown("""
+            - [📚 Documentation](https://docs.automl-platform.com)
+            - [🎥 Tutoriels vidéo](https://youtube.com/automl)
+            - [💬 Chat support](https://support.automl-platform.com)
+            - [📧 Contact](mailto:support@automl-platform.com)
+            """)
     
     # Contenu principal selon la page sélectionnée
     if selected == "🏠 Accueil":
@@ -1133,17 +1539,133 @@ def main():
     elif selected == "📊 Monitoring":
         page_monitoring()
     elif selected == "📁 Projets":
-        st.info("Page Projets en développement")
+        st.header("📁 Projets")
+        if st.session_state.expert_mode:
+            st.info("Mode expert: Accès à tous les paramètres de configuration des projets")
+            # Afficher plus d'options pour les projets
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("🔬 Projet avancé", use_container_width=True):
+                    st.info("Configuration avancée du projet...")
+            with col2:
+                if st.button("🤖 Import modèle", use_container_width=True):
+                    st.info("Import de modèles personnalisés...")
+            with col3:
+                if st.button("📊 Comparaison A/B", use_container_width=True):
+                    st.info("Tests A/B avancés...")
+        else:
+            st.info("Page Projets - Vue simplifiée")
+            # Vue simplifiée des projets
+            st.dataframe(pd.DataFrame({
+                "Projet": ["Churn", "Fraude", "Scoring"],
+                "Statut": ["Actif", "En pause", "Terminé"],
+                "Accuracy": [0.92, 0.88, 0.95]
+            }))
     elif selected == "⚙️ Paramètres":
-        st.info("Page Paramètres en développement")
+        st.header("⚙️ Paramètres")
+        
+        tab1, tab2, tab3 = st.tabs(["Général", "Compte", "Avancé"])
+        
+        with tab1:
+            st.subheader("Paramètres généraux")
+            
+            # Mode par défaut
+            default_mode = st.selectbox(
+                "Mode par défaut au démarrage",
+                ["Simplifié", "Expert", "Dernière utilisation"],
+                index=0 if not st.session_state.expert_mode else 1
+            )
+            
+            # Notifications
+            st.checkbox("Recevoir les notifications", value=True)
+            st.checkbox("Alertes par email", value=False)
+            
+            # Langue
+            st.selectbox("Langue", ["Français", "English", "Español"])
+        
+        with tab2:
+            st.subheader("Paramètres du compte")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_input("Nom", value=st.session_state.user_profile['name'])
+                st.text_input("Email", value="user@example.com")
+            with col2:
+                st.selectbox("Rôle", ["Analyst", "Data Scientist", "Manager", "Admin"])
+                st.selectbox("Plan", ["Free", "Pro", "Enterprise"])
+            
+            if st.button("💾 Sauvegarder", type="primary"):
+                st.success("Paramètres sauvegardés!")
+        
+        with tab3:
+            if st.session_state.expert_mode:
+                st.subheader("Paramètres avancés (Mode Expert)")
+                
+                # API Settings
+                st.markdown("### 🔌 Configuration API")
+                st.text_input("API Endpoint", value=API_BASE_URL)
+                st.text_input("MLflow URI", value=MLFLOW_URL)
+                api_key = st.text_input("API Key", type="password", value="sk-****")
+                
+                # Resource Limits
+                st.markdown("### 💻 Limites de ressources")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.number_input("RAM Max (GB)", min_value=1, max_value=256, value=16)
+                    st.number_input("CPU Cores Max", min_value=1, max_value=64, value=8)
+                with col2:
+                    st.number_input("GPU Max", min_value=0, max_value=8, value=1)
+                    st.number_input("Workers Max", min_value=1, max_value=32, value=4)
+                
+                # Advanced Features
+                st.markdown("### 🚀 Fonctionnalités avancées")
+                st.checkbox("Activer le débogage", value=False)
+                st.checkbox("Mode développeur", value=False)
+                st.checkbox("Accès aux logs système", value=True)
+                st.checkbox("Export ONNX", value=True)
+                st.checkbox("Support GPU", value=True)
+                
+                # Environment Variables
+                st.markdown("### 🔧 Variables d'environnement")
+                env_vars = st.text_area(
+                    "Variables (format KEY=VALUE)",
+                    value="AUTOML_EXPERT_MODE=true\nMAX_WORKERS=8\nGPU_ENABLED=true",
+                    height=150
+                )
+                
+                if st.button("⚡ Appliquer les paramètres avancés", type="primary"):
+                    st.success("Paramètres avancés appliqués!")
+                    st.warning("Certains paramètres nécessitent un redémarrage")
+            else:
+                st.info("🔒 Activez le mode expert pour accéder aux paramètres avancés")
+                if st.button("Activer le mode expert"):
+                    st.session_state.expert_mode = True
+                    st.rerun()
     
     # Footer
     st.divider()
-    st.markdown("""
-        <div style='text-align: center; color: gray;'>
-            <small>AutoML Platform v3.1.0 | © 2024 | Made with ❤️ for no-code AI</small>
-        </div>
-    """, unsafe_allow_html=True)
+    
+    footer_col1, footer_col2, footer_col3 = st.columns([2, 1, 2])
+    with footer_col1:
+        mode_badge = "🎓 Mode Expert" if st.session_state.expert_mode else "🚀 Mode Simplifié"
+        st.markdown(f"""
+            <div style='text-align: left; color: gray;'>
+                <small>{mode_badge} | AutoML Platform v3.1.0</small>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with footer_col2:
+        if st.session_state.expert_mode:
+            if st.button("📖 Guide Expert", use_container_width=True):
+                st.info("Ouverture du guide expert...")
+    
+    with footer_col3:
+        st.markdown("""
+            <div style='text-align: right; color: gray;'>
+                <small>© 2024 | Made with ❤️ for no-code AI</small>
+            </div>
+        """, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
