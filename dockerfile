@@ -59,7 +59,7 @@ RUN apt-get update && apt-get install -y \
 FROM base as builder
 
 # Copy requirements files
-COPY requirements.txt requirements-ui.txt requirements-dev.txt* ./
+COPY requirements.txt ./
 
 # Create virtual environment
 RUN python -m venv /opt/venv
@@ -68,32 +68,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip and install wheel
 RUN pip install --upgrade pip setuptools wheel
 
-# Install core requirements
+# Install all requirements from single file
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install UI requirements (including Streamlit)
-RUN pip install --no-cache-dir \
-    streamlit>=1.30.0 \
-    streamlit-option-menu>=0.3.6 \
-    streamlit-extras>=0.3.6 \
-    streamlit-aggrid>=0.3.4 \
-    streamlit-authenticator>=0.2.3 \
-    plotly>=5.18.0 \
-    altair>=5.2.0 \
-    matplotlib>=3.8.0 \
-    seaborn>=0.13.0
-
-# Install additional UI components
-RUN pip install --no-cache-dir \
-    streamlit-chat>=0.1.1 \
-    streamlit-elements>=0.1.0 \
-    streamlit-lottie>=0.0.5 \
-    streamlit-drawable-canvas>=0.9.3 \
-    streamlit-autorefresh>=1.0.1 \
-    reportlab>=4.0.0 \
-    python-docx>=1.1.0 \
-    xlsxwriter>=3.1.0 \
-    fpdf2>=2.7.0
 
 # ============================================================================
 # Stage 3: Runtime environment
@@ -161,13 +137,11 @@ RUN useradd -m -u 1000 -s /bin/bash automl && \
 # ============================================================================
 FROM runtime as development
 
-# Install development dependencies
+# Install additional development tools
 RUN pip install --no-cache-dir \
     pytest>=8.0.0 \
     pytest-cov>=4.1.0 \
     pytest-asyncio>=0.23.0 \
-    ipython>=8.20.0 \
-    jupyterlab>=4.0.0 \
     black>=24.0.0 \
     ruff>=0.2.0 \
     mypy>=1.8.0
