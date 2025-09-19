@@ -151,13 +151,18 @@ sphinx>=7.2.0                     # Documentation generator
 sphinx-rtd-theme>=2.0.0           # ReadTheDocs theme
 myst-parser>=2.0.0                # Markdown support
 
-# ---------- Development Tools ----------
-ipython>=8.20.0                   # Enhanced Python shell
+# ---------- Development Tools (Python version adaptive) ----------
+# IPython - Use version compatible with Python version
+ipython>=7.34.0,<8.0.0 ; python_version == "3.9"
+ipython>=8.18.0 ; python_version >= "3.10"
+
+# Jupyter tools - Compatible with Python 3.9+
 jupyter>=1.0.0                    # Notebook interface
-notebook>=7.0.0                   # Jupyter notebook
-jupyterlab>=4.0.0                 # JupyterLab
+notebook>=6.5.0,<7.0.0 ; python_version == "3.9"
+notebook>=7.0.0 ; python_version >= "3.10"
+jupyterlab>=3.6.0,<4.0.0 ; python_version == "3.9"
+jupyterlab>=4.0.0 ; python_version >= "3.10"
 
 # ---------- Production Deployment ----------
 gunicorn>=21.2.0                  # WSGI HTTP Server
 supervisor>=4.2.0                 # Process management
-python-multipart>=0.0.6           # Multipart form data
