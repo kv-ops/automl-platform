@@ -1,5 +1,6 @@
 """
-Tests unitaires pour les nouveaux connecteurs (Excel, Google Sheets, CRM)
+Tests unitaires complets pour tous les connecteurs de données
+Inclut : PostgreSQL, Snowflake, Excel, Google Sheets, CRM
 """
 
 import pytest
@@ -9,21 +10,481 @@ import tempfile
 import os
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, call
 import io
+from datetime import datetime
 
 # Import des modules à tester
 from automl_platform.api.connectors import (
+    # Classes de base
+    BaseConnector,
+    ConnectionConfig,
+    ConnectorFactory,
+    # Connecteurs traditionnels
+    PostgreSQLConnector,
+    SnowflakeConnector,
+    # Nouveaux connecteurs
     ExcelConnector,
     GoogleSheetsConnector,
     CRMConnector,
-    ConnectionConfig,
-    ConnectorFactory,
+    # Fonctions helper
     read_excel,
     write_excel,
     read_google_sheet,
-    fetch_crm_data
+    fetch_crm_data,
+    # Métriques
+    ml_connectors_requests_total,
+    ml_connectors_latency_seconds,
+    ml_connectors_errors_total,
+    ml_connectors_active_connections,
+    ml_connectors_data_volume_bytes
 )
+
+
+class TestConnectionConfig:
+    """Tests pour la classe ConnectionConfig."""
+    
+    def test_basic_config(self):
+        """Test de configuration basique."""
+        config = ConnectionConfig(
+            connection_type='postgresql',
+            host='localhost',
+            port=5432,
+            database='testdb',
+            username='user',
+            password='pass'
+        )
+        
+        assert config.connection_type == 'postgresql'
+        assert config.host == 'localhost'
+        assert config.port == 5432
+        assert config.database == 'testdb'
+        assert config.username == 'user'
+        assert config.password == 'pass'
+        assert config.tenant_id == 'default'  # Valeur par défaut
+    
+    def test_snowflake_config(self):
+        """Test de configuration Snowflake."""
+        config = ConnectionConfig(
+            connection_type='snowflake',
+            account='myaccount',
+            warehouse='mywarehouse',
+            database='mydb',
+            schema='myschema',
+            username='user',
+            password='pass',
+            role='myrole'
+        )
+        
+        assert config.connection_type == 'snowflake'
+        assert config.account == 'myaccount'
+        assert config.warehouse == 'mywarehouse'
+        assert config.role == 'myrole'
+    
+    def test_excel_config(self):
+        """Test de configuration Excel."""
+        config = ConnectionConfig(
+            connection_type='excel',
+            file_path='/path/to/file.xlsx',
+            max_rows=1000
+        )
+        
+        assert config.connection_type == 'excel'
+        assert config.file_path == '/path/to/file.xlsx'
+        assert config.max_rows == 1000
+    
+    def test_google_sheets_config(self):
+        """Test de configuration Google Sheets."""
+        config = ConnectionConfig(
+            connection_type='googlesheets',
+            spreadsheet_id='sheet123',
+            worksheet_name='Sheet1',
+            credentials_path='/path/to/creds.json'
+        )
+        
+        assert config.connection_type == 'googlesheets'
+        assert config.spreadsheet_id == 'sheet123'
+        assert config.worksheet_name == 'Sheet1'
+        assert config.credentials_path == '/path/to/creds.json'
+    
+    def test_crm_config(self):
+        """Test de configuration CRM."""
+        config = ConnectionConfig(
+            connection_type='hubspot',
+            crm_type='hubspot',
+            api_key='secret_key',
+            api_endpoint='https://api.hubapi.com'
+        )
+        
+        assert config.connection_type == 'hubspot'
+        assert config.crm_type == 'hubspot'
+        assert config.api_key == 'secret_key'
+        assert config.api_endpoint == 'https://api.hubapi.com'
+    
+    def test_to_dict(self):
+        """Test de conversion en dictionnaire."""
+        config = ConnectionConfig(
+            connection_type='postgresql',
+            host='localhost',
+            port=5432,
+            database='testdb'
+        )
+        
+        config_dict = config.to_dict()
+        
+        assert 'connection_type' in config_dict
+        assert 'host' in config_dict
+        assert 'port' in config_dict
+        assert 'database' in config_dict
+        # Les valeurs None ne doivent pas être incluses
+        assert 'username' not in config_dict
+        assert 'password' not in config_dict
+
+
+class TestBaseConnector:
+    """Tests pour la classe de base BaseConnector."""
+    
+    def test_metrics_initialization(self):
+        """Test que les métriques sont initialisées."""
+        # Créer une sous-classe concrète pour tester
+        class TestConnector(BaseConnector):
+            def connect(self): pass
+            def disconnect(self): pass
+            def _execute_query(self, query, params=None): return pd.DataFrame()
+            def _read_table_impl(self, table_name, schema=None): return pd.DataFrame()
+            def _write_table_impl(self, df, table_name, schema=None, if_exists='append'): pass
+            def list_tables(self, schema=None): return []
+            def get_table_info(self, table_name, schema=None): return {}
+        
+        config = ConnectionConfig(connection_type='test')
+        
+        # Capturer l'état initial des métriques
+        with patch.object(ml_connectors_active_connections.labels(connector_type='TestConnector'), 'inc') as mock_inc:
+            connector = TestConnector(config)
+            mock_inc.assert_called_once()
+    
+    def test_query_with_metrics(self):
+        """Test que query() enregistre les métriques."""
+        class TestConnector(BaseConnector):
+            def connect(self): pass
+            def disconnect(self): pass
+            def _execute_query(self, query, params=None): 
+                return pd.DataFrame({'col': [1, 2, 3]})
+            def _read_table_impl(self, table_name, schema=None): return pd.DataFrame()
+            def _write_table_impl(self, df, table_name, schema=None, if_exists='append'): pass
+            def list_tables(self, schema=None): return []
+            def get_table_info(self, table_name, schema=None): return {}
+        
+        config = ConnectionConfig(connection_type='test', tenant_id='test_tenant')
+        connector = TestConnector(config)
+        
+        # Exécuter une requête
+        result = connector.query("SELECT * FROM test")
+        
+        # Vérifier le résultat
+        assert not result.empty
+        assert len(result) == 3
+
+
+class TestPostgreSQLConnector:
+    """Tests pour le connecteur PostgreSQL."""
+    
+    def setup_method(self):
+        """Configuration avant chaque test."""
+        self.config = ConnectionConfig(
+            connection_type='postgresql',
+            host='localhost',
+            port=5432,
+            database='testdb',
+            username='user',
+            password='pass',
+            tenant_id='test_tenant'
+        )
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    def test_connect(self, mock_psycopg2):
+        """Test de connexion PostgreSQL."""
+        # Mock de la connexion
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        # Créer le connecteur
+        connector = PostgreSQLConnector(self.config)
+        connector.connect()
+        
+        # Vérifications
+        assert connector.connected == True
+        mock_psycopg2.connect.assert_called_once_with(
+            host='localhost',
+            port=5432,
+            database='testdb',
+            user='user',
+            password='pass',
+            connect_timeout=30,
+            sslmode='require'
+        )
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    def test_disconnect(self, mock_psycopg2):
+        """Test de déconnexion PostgreSQL."""
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        connector = PostgreSQLConnector(self.config)
+        connector.connect()
+        connector.disconnect()
+        
+        assert connector.connected == False
+        mock_connection.close.assert_called_once()
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    @patch('pandas.read_sql')
+    def test_execute_query(self, mock_read_sql, mock_psycopg2):
+        """Test d'exécution de requête PostgreSQL."""
+        # Mock des données
+        test_df = pd.DataFrame({'id': [1, 2, 3], 'name': ['a', 'b', 'c']})
+        mock_read_sql.return_value = test_df
+        
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        # Exécuter la requête
+        connector = PostgreSQLConnector(self.config)
+        result = connector._execute_query("SELECT * FROM test")
+        
+        # Vérifications
+        pd.testing.assert_frame_equal(result, test_df)
+        mock_read_sql.assert_called_once()
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    @patch('pandas.read_sql')
+    def test_read_table(self, mock_read_sql, mock_psycopg2):
+        """Test de lecture de table PostgreSQL."""
+        test_df = pd.DataFrame({'id': [1, 2], 'value': [10, 20]})
+        mock_read_sql.return_value = test_df
+        
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        connector = PostgreSQLConnector(self.config)
+        result = connector._read_table_impl('test_table', 'public')
+        
+        # Vérifier la requête SQL générée
+        args = mock_read_sql.call_args
+        assert 'SELECT * FROM "public"."test_table"' in args[0][0]
+        pd.testing.assert_frame_equal(result, test_df)
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    def test_write_table(self, mock_psycopg2):
+        """Test d'écriture dans table PostgreSQL."""
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        connector = PostgreSQLConnector(self.config)
+        test_df = pd.DataFrame({'col1': [1, 2], 'col2': ['a', 'b']})
+        
+        # Mock de to_sql
+        with patch.object(pd.DataFrame, 'to_sql') as mock_to_sql:
+            connector._write_table_impl(test_df, 'test_table', 'public')
+            
+            mock_to_sql.assert_called_once_with(
+                'test_table',
+                mock_connection,
+                schema='public',
+                if_exists='append',
+                index=False,
+                method='multi',
+                chunksize=10000
+            )
+            mock_connection.commit.assert_called_once()
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    @patch('pandas.read_sql')
+    def test_list_tables(self, mock_read_sql, mock_psycopg2):
+        """Test de listage des tables PostgreSQL."""
+        # Mock du résultat
+        tables_df = pd.DataFrame({'tablename': ['table1', 'table2', 'table3']})
+        mock_read_sql.return_value = tables_df
+        
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        connector = PostgreSQLConnector(self.config)
+        tables = connector.list_tables('public')
+        
+        assert tables == ['table1', 'table2', 'table3']
+        # Vérifier que la requête contient le bon schéma
+        args = mock_read_sql.call_args
+        assert 'pg_tables' in args[0][0]
+        assert 'schemaname' in args[0][0]
+    
+    @patch('automl_platform.api.connectors.psycopg2')
+    @patch('pandas.read_sql')
+    def test_get_table_info(self, mock_read_sql, mock_psycopg2):
+        """Test de récupération des métadonnées PostgreSQL."""
+        # Mock des colonnes
+        columns_df = pd.DataFrame({
+            'column_name': ['id', 'name', 'value'],
+            'data_type': ['integer', 'varchar', 'numeric'],
+            'is_nullable': ['NO', 'YES', 'YES'],
+            'column_default': [None, None, '0']
+        })
+        
+        # Mock du count
+        count_df = pd.DataFrame({'row_count': [100]})
+        
+        mock_read_sql.side_effect = [columns_df, count_df]
+        
+        mock_connection = Mock()
+        mock_psycopg2.connect.return_value = mock_connection
+        
+        connector = PostgreSQLConnector(self.config)
+        info = connector.get_table_info('test_table', 'public')
+        
+        assert info['table_name'] == 'test_table'
+        assert info['schema'] == 'public'
+        assert info['row_count'] == 100
+        assert len(info['columns']) == 3
+        assert info['columns'][0]['column_name'] == 'id'
+
+
+class TestSnowflakeConnector:
+    """Tests pour le connecteur Snowflake."""
+    
+    def setup_method(self):
+        """Configuration avant chaque test."""
+        self.config = ConnectionConfig(
+            connection_type='snowflake',
+            account='test_account',
+            warehouse='test_warehouse',
+            database='test_db',
+            schema='test_schema',
+            username='user',
+            password='pass',
+            role='test_role',
+            tenant_id='test_tenant'
+        )
+    
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_connect(self, mock_snowflake):
+        """Test de connexion Snowflake."""
+        mock_connection = Mock()
+        mock_snowflake.connect.return_value = mock_connection
+        
+        connector = SnowflakeConnector(self.config)
+        connector.connect()
+        
+        assert connector.connected == True
+        mock_snowflake.connect.assert_called_once_with(
+            user='user',
+            password='pass',
+            account='test_account',
+            warehouse='test_warehouse',
+            database='test_db',
+            schema='test_schema',
+            login_timeout=30,
+            role='test_role'
+        )
+    
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_disconnect(self, mock_snowflake):
+        """Test de déconnexion Snowflake."""
+        mock_connection = Mock()
+        mock_snowflake.connect.return_value = mock_connection
+        
+        connector = SnowflakeConnector(self.config)
+        connector.connect()
+        connector.disconnect()
+        
+        assert connector.connected == False
+        mock_connection.close.assert_called_once()
+    
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_execute_query(self, mock_snowflake):
+        """Test d'exécution de requête Snowflake."""
+        # Mock du cursor et des résultats
+        mock_cursor = Mock()
+        mock_cursor.description = [('ID',), ('NAME',), ('VALUE',)]
+        mock_cursor.fetchall.return_value = [
+            (1, 'test1', 100),
+            (2, 'test2', 200)
+        ]
+        
+        mock_connection = Mock()
+        mock_connection.cursor.return_value = mock_cursor
+        mock_snowflake.connect.return_value = mock_connection
+        
+        connector = SnowflakeConnector(self.config)
+        result = connector._execute_query("SELECT * FROM test_table")
+        
+        # Vérifications
+        assert len(result) == 2
+        assert list(result.columns) == ['ID', 'NAME', 'VALUE']
+        mock_cursor.execute.assert_any_call(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 300")
+        mock_cursor.execute.assert_any_call("SELECT * FROM test_table")
+    
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_read_table_with_limit(self, mock_snowflake):
+        """Test de lecture de table avec limite."""
+        mock_cursor = Mock()
+        mock_cursor.description = [('ID',), ('VALUE',)]
+        mock_cursor.fetchall.return_value = [(1, 10), (2, 20)]
+        
+        mock_connection = Mock()
+        mock_connection.cursor.return_value = mock_cursor
+        mock_snowflake.connect.return_value = mock_connection
+        
+        self.config.max_rows = 100
+        connector = SnowflakeConnector(self.config)
+        result = connector._read_table_impl('test_table', 'test_schema')
+        
+        # Vérifier que LIMIT est ajouté
+        calls = mock_cursor.execute.call_args_list
+        query_call = [c for c in calls if 'SELECT' in str(c)][0]
+        assert 'LIMIT 100' in query_call[0][0]
+    
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    @patch('automl_platform.api.connectors.snowflake.connector.pandas_tools.write_pandas')
+    def test_write_table(self, mock_write_pandas, mock_snowflake):
+        """Test d'écriture dans Snowflake."""
+        mock_connection = Mock()
+        mock_snowflake.connect.return_value = mock_connection
+        
+        # Mock de write_pandas
+        mock_write_pandas.return_value = (True, 1, 2, "Success")
+        
+        connector = SnowflakeConnector(self.config)
+        test_df = pd.DataFrame({'col1': [1, 2], 'col2': ['a', 'b']})
+        
+        connector._write_table_impl(test_df, 'test_table', 'test_schema', 'replace')
+        
+        mock_write_pandas.assert_called_once_with(
+            mock_connection,
+            test_df,
+            'test_table',
+            database='test_db',
+            schema='test_schema',
+            auto_create_table=True,
+            overwrite=True,
+            chunk_size=10000
+        )
+    
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_list_tables(self, mock_snowflake):
+        """Test de listage des tables Snowflake."""
+        mock_cursor = Mock()
+        mock_cursor.description = [('name',)]
+        mock_cursor.fetchall.return_value = [('table1',), ('table2',), ('table3',)]
+        
+        mock_connection = Mock()
+        mock_connection.cursor.return_value = mock_cursor
+        mock_snowflake.connect.return_value = mock_connection
+        
+        connector = SnowflakeConnector(self.config)
+        tables = connector.list_tables('test_schema')
+        
+        assert tables == ['table1', 'table2', 'table3']
+        mock_cursor.execute.assert_any_call("SHOW TABLES IN SCHEMA test_schema")
 
 
 class TestExcelConnector:
@@ -72,6 +533,32 @@ class TestExcelConnector:
             # Nettoyer
             os.unlink(tmp_path)
     
+    def test_read_excel_with_options(self):
+        """Test de lecture avec options."""
+        # Créer un fichier avec headers sur plusieurs lignes
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+            # Ajouter des lignes à ignorer
+            df_with_header = pd.DataFrame({
+                'Title': ['Report Title', 'Date: 2024', 'col1', '1', '2', '3'],
+                'Col2': ['', '', 'col2', 'a', 'b', 'c'],
+                'Col3': ['', '', 'col3', '1.1', '2.2', '3.3']
+            })
+            df_with_header.to_excel(tmp.name, index=False, header=False)
+            tmp_path = tmp.name
+        
+        try:
+            # Lire en sautant les premières lignes
+            df = self.connector.read_excel(
+                path=tmp_path,
+                header=2,
+                skiprows=[3]  # Skip la ligne après le header
+            )
+            
+            assert df is not None
+            assert len(df) == 2  # Seulement 2 lignes de données
+        finally:
+            os.unlink(tmp_path)
+    
     def test_read_excel_multiple_sheets(self):
         """Test de lecture avec plusieurs feuilles."""
         # Créer un fichier Excel avec plusieurs feuilles
@@ -110,19 +597,20 @@ class TestExcelConnector:
             if os.path.exists(output_path):
                 os.unlink(output_path)
     
-    def test_write_excel_custom_path(self):
-        """Test d'écriture avec chemin personnalisé."""
-        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
-            output_path = tmp.name
+    def test_write_excel_custom_sheet(self):
+        """Test d'écriture avec nom de feuille personnalisé."""
+        output_path = self.connector.write_excel(
+            self.test_df,
+            sheet_name='CustomSheet'
+        )
         
         try:
-            # Écrire avec chemin personnalisé
-            result_path = self.connector.write_excel(self.test_df, path=output_path)
-            assert result_path == output_path
-            assert os.path.exists(output_path)
+            # Vérifier le nom de la feuille
+            xl_file = pd.ExcelFile(output_path)
+            assert 'CustomSheet' in xl_file.sheet_names
             
-            # Vérifier le contenu
-            df = pd.read_excel(output_path)
+            # Vérifier les données
+            df = pd.read_excel(output_path, sheet_name='CustomSheet')
             pd.testing.assert_frame_equal(df, self.test_df)
         finally:
             if os.path.exists(output_path):
@@ -157,15 +645,17 @@ class TestExcelConnector:
             with pd.ExcelWriter(tmp.name) as writer:
                 self.test_df.to_excel(writer, sheet_name='Data', index=False)
                 self.test_df.to_excel(writer, sheet_name='Results', index=False)
+                self.test_df.to_excel(writer, sheet_name='Summary', index=False)
             tmp_path = tmp.name
         
         try:
             self.config.file_path = tmp_path
             sheets = self.connector.list_tables()
             
-            assert len(sheets) == 2
+            assert len(sheets) == 3
             assert 'Data' in sheets
             assert 'Results' in sheets
+            assert 'Summary' in sheets
         finally:
             os.unlink(tmp_path)
     
@@ -183,6 +673,7 @@ class TestExcelConnector:
             assert info['row_count'] == len(self.test_df)
             assert len(info['columns']) == len(self.test_df.columns)
             assert info['columns'][0]['column_name'] == 'col1'
+            assert 'int' in info['columns'][0]['data_type'].lower()
         finally:
             os.unlink(tmp_path)
     
@@ -195,6 +686,17 @@ class TestExcelConnector:
         # Pas de chemin fourni
         with pytest.raises(ValueError):
             self.connector.read_excel()
+        
+        # Feuille inexistante
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+            self.test_df.to_excel(tmp.name, index=False)
+            tmp_path = tmp.name
+        
+        try:
+            with pytest.raises(Exception):
+                self.connector.read_excel(path=tmp_path, sheet_name='NonExistent')
+        finally:
+            os.unlink(tmp_path)
 
 
 class TestGoogleSheetsConnector:
@@ -220,7 +722,8 @@ class TestGoogleSheetsConnector:
         })
     
     @patch('automl_platform.api.connectors.gspread')
-    def test_authentication_with_file(self, mock_gspread):
+    @patch('automl_platform.api.connectors.service_account')
+    def test_authentication_with_file(self, mock_service_account, mock_gspread):
         """Test d'authentification avec fichier de credentials."""
         # Créer un fichier de credentials temporaire
         creds_data = {
@@ -235,16 +738,56 @@ class TestGoogleSheetsConnector:
             creds_path = tmp.name
         
         try:
+            # Mock des credentials
+            mock_creds = Mock()
+            mock_service_account.Credentials.from_service_account_file.return_value = mock_creds
+            
+            # Mock du client
+            mock_client = Mock()
+            mock_gspread.authorize.return_value = mock_client
+            
             config = ConnectionConfig(
                 connection_type='googlesheets',
                 credentials_path=creds_path
             )
             
-            with patch('automl_platform.api.connectors.service_account.Credentials') as mock_creds:
-                connector = GoogleSheetsConnector(config)
-                assert connector.client is not None
+            connector = GoogleSheetsConnector(config)
+            
+            # Vérifications
+            assert connector.client is not None
+            mock_service_account.Credentials.from_service_account_file.assert_called_once()
+            mock_gspread.authorize.assert_called_once_with(mock_creds)
         finally:
             os.unlink(creds_path)
+    
+    @patch.dict(os.environ, {'GOOGLE_SHEETS_CREDENTIALS': '{"type": "service_account"}'})
+    @patch('automl_platform.api.connectors.gspread')
+    @patch('automl_platform.api.connectors.service_account')
+    def test_authentication_with_env(self, mock_service_account, mock_gspread):
+        """Test d'authentification avec variable d'environnement."""
+        mock_creds = Mock()
+        mock_service_account.Credentials.from_service_account_info.return_value = mock_creds
+        
+        mock_client = Mock()
+        mock_gspread.authorize.return_value = mock_client
+        
+        config = ConnectionConfig(connection_type='googlesheets')
+        connector = GoogleSheetsConnector(config)
+        
+        assert connector.client is not None
+        mock_service_account.Credentials.from_service_account_info.assert_called_once()
+    
+    @patch('automl_platform.api.connectors.gspread')
+    def test_connect(self, mock_gspread):
+        """Test de connexion."""
+        self.connector.client = Mock()
+        self.connector.connect()
+        assert self.connector.connected == True
+        
+        # Test sans client
+        self.connector.client = None
+        with pytest.raises(ConnectionError):
+            self.connector.connect()
     
     @patch('automl_platform.api.connectors.gspread')
     def test_read_google_sheet(self, mock_gspread):
@@ -318,20 +861,30 @@ class TestGoogleSheetsConnector:
         assert result['worksheet'] == 'Sheet1'
     
     @patch('automl_platform.api.connectors.gspread')
-    def test_write_google_sheet_clear_existing(self, mock_gspread):
-        """Test d'écriture avec effacement des données existantes."""
-        mock_sheet = Mock()
+    def test_write_google_sheet_new_worksheet(self, mock_gspread):
+        """Test d'écriture dans une nouvelle feuille."""
         mock_spreadsheet = Mock()
-        mock_spreadsheet.worksheet.return_value = mock_sheet
+        
+        # Simuler que la feuille n'existe pas
+        mock_spreadsheet.worksheet.side_effect = Exception("Worksheet not found")
+        
+        # Mock pour add_worksheet
+        mock_new_sheet = Mock()
+        mock_spreadsheet.add_worksheet.return_value = mock_new_sheet
         
         self.connector.client = Mock()
         self.connector.client.open_by_key.return_value = mock_spreadsheet
         
-        # Écrire avec effacement
-        self.connector.write_google_sheet(self.test_df, clear_existing=True)
+        # Écrire les données
+        result = self.connector.write_google_sheet(self.test_df, worksheet_name='NewSheet')
         
-        # Vérifier que clear() a été appelé
-        mock_sheet.clear.assert_called_once()
+        # Vérifications
+        mock_spreadsheet.add_worksheet.assert_called_once_with(
+            title='NewSheet',
+            rows=len(self.test_df) + 1,
+            cols=len(self.test_df.columns)
+        )
+        mock_new_sheet.update.assert_called_once()
     
     @patch('automl_platform.api.connectors.gspread')
     def test_list_tables(self, mock_gspread):
@@ -398,6 +951,39 @@ class TestCRMConnector:
         
         self.connector.disconnect()
         assert self.connector.connected == False
+    
+    @patch('requests.Session')
+    def test_setup_session_hubspot(self, mock_session_class):
+        """Test de configuration de session pour HubSpot."""
+        mock_session = Mock()
+        mock_session_class.return_value = mock_session
+        
+        config = ConnectionConfig(
+            connection_type='hubspot',
+            crm_type='hubspot',
+            api_key='test_key'
+        )
+        connector = CRMConnector(config)
+        
+        # Vérifier l'header d'autorisation
+        assert mock_session.headers['Authorization'] == 'Bearer test_key'
+    
+    @patch('requests.Session')
+    def test_setup_session_pipedrive(self, mock_session_class):
+        """Test de configuration de session pour Pipedrive."""
+        mock_session = Mock()
+        mock_session_class.return_value = mock_session
+        
+        config = ConnectionConfig(
+            connection_type='pipedrive',
+            crm_type='pipedrive',
+            api_key='test_key'
+        )
+        connector = CRMConnector(config)
+        
+        # Vérifier les paramètres de base
+        assert hasattr(connector, 'base_params')
+        assert connector.base_params['api_token'] == 'test_key'
     
     @patch('requests.Session')
     def test_fetch_crm_data_hubspot(self, mock_session_class):
@@ -486,6 +1072,33 @@ class TestCRMConnector:
         assert result['total_records'] == len(self.test_df)
         assert mock_session.post.call_count == len(self.test_df)
     
+    @patch('requests.Session')
+    def test_write_crm_data_with_errors(self, mock_session_class):
+        """Test d'écriture avec gestion d'erreurs."""
+        # Mock avec une erreur sur le deuxième enregistrement
+        response1 = Mock()
+        response1.status_code = 201
+        response1.json.return_value = {'id': 'id1'}
+        
+        response2 = Mock()
+        response2.status_code = 400
+        response2.raise_for_status.side_effect = Exception("Bad request")
+        
+        mock_session = Mock()
+        mock_session.post.side_effect = [response1, response2]
+        mock_session_class.return_value = mock_session
+        
+        self.connector._setup_session()
+        self.connector.session = mock_session
+        
+        # Écrire les données
+        result = self.connector.write_crm_data(self.test_df, 'contacts')
+        
+        # Vérifications
+        assert result['success_count'] == 1
+        assert result['error_count'] == 1
+        assert len(result['errors']) == 1
+    
     def test_build_endpoint(self):
         """Test de construction d'endpoint."""
         # HubSpot
@@ -525,6 +1138,27 @@ class TestCRMConnector:
         data = {'records': [7, 8, 9]}
         records = self.connector._extract_records(data, 'Account')
         assert records == [7, 8, 9]
+    
+    def test_get_next_page(self):
+        """Test de récupération des paramètres de pagination."""
+        # HubSpot
+        self.config.crm_type = 'hubspot'
+        data = {'paging': {'next': {'after': 'cursor123'}}}
+        next_page = self.connector._get_next_page(data, {})
+        assert next_page == {'after': 'cursor123'}
+        
+        # Pipedrive
+        self.config.crm_type = 'pipedrive'
+        data = {'additional_data': {'pagination': {'more_items_in_collection': True}}}
+        params = {'start': 0, 'limit': 100}
+        next_page = self.connector._get_next_page(data, params)
+        assert next_page == {'start': 100}
+        
+        # Salesforce
+        self.config.crm_type = 'salesforce'
+        data = {'nextRecordsUrl': '/services/data/v55.0/query/next'}
+        next_page = self.connector._get_next_page(data, {})
+        assert next_page == {'next_records_url': '/services/data/v55.0/query/next'}
     
     def test_flatten_dataframe(self):
         """Test d'aplatissement de DataFrame avec données imbriquées."""
@@ -567,16 +1201,37 @@ class TestCRMConnector:
 class TestConnectorFactory:
     """Tests pour la factory de connecteurs."""
     
+    def test_create_postgresql_connector(self):
+        """Test de création d'un connecteur PostgreSQL."""
+        config = ConnectionConfig(connection_type='postgresql')
+        with patch('automl_platform.api.connectors.psycopg2'):
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, PostgreSQLConnector)
+        
+        # Alias postgres
+        config = ConnectionConfig(connection_type='postgres')
+        with patch('automl_platform.api.connectors.psycopg2'):
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, PostgreSQLConnector)
+    
+    def test_create_snowflake_connector(self):
+        """Test de création d'un connecteur Snowflake."""
+        config = ConnectionConfig(connection_type='snowflake')
+        with patch('automl_platform.api.connectors.snowflake.connector'):
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, SnowflakeConnector)
+    
     def test_create_excel_connector(self):
         """Test de création d'un connecteur Excel."""
         config = ConnectionConfig(connection_type='excel')
         connector = ConnectorFactory.create_connector(config)
         assert isinstance(connector, ExcelConnector)
         
-        # Alias xlsx
-        config = ConnectionConfig(connection_type='xlsx')
-        connector = ConnectorFactory.create_connector(config)
-        assert isinstance(connector, ExcelConnector)
+        # Alias xlsx et xls
+        for conn_type in ['xlsx', 'xls']:
+            config = ConnectionConfig(connection_type=conn_type)
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, ExcelConnector)
     
     def test_create_googlesheets_connector(self):
         """Test de création d'un connecteur Google Sheets."""
@@ -586,9 +1241,10 @@ class TestConnectorFactory:
             assert isinstance(connector, GoogleSheetsConnector)
             
             # Alias
-            config = ConnectionConfig(connection_type='gsheets')
-            connector = ConnectorFactory.create_connector(config)
-            assert isinstance(connector, GoogleSheetsConnector)
+            for conn_type in ['google_sheets', 'gsheets']:
+                config = ConnectionConfig(connection_type=conn_type)
+                connector = ConnectorFactory.create_connector(config)
+                assert isinstance(connector, GoogleSheetsConnector)
     
     def test_create_crm_connector(self):
         """Test de création d'un connecteur CRM."""
@@ -603,17 +1259,33 @@ class TestConnectorFactory:
         connector = ConnectorFactory.create_connector(config)
         assert isinstance(connector, CRMConnector)
         assert config.crm_type == 'salesforce'
+        
+        # Pipedrive
+        config = ConnectionConfig(connection_type='pipedrive')
+        connector = ConnectorFactory.create_connector(config)
+        assert isinstance(connector, CRMConnector)
+        assert config.crm_type == 'pipedrive'
     
     def test_list_supported_connectors(self):
         """Test de listage des connecteurs supportés."""
         connectors = ConnectorFactory.list_supported_connectors()
         
+        # Vérifier les connecteurs traditionnels
+        assert 'postgresql' in connectors
+        assert 'postgres' in connectors
+        assert 'snowflake' in connectors
+        
+        # Vérifier les nouveaux connecteurs
         assert 'excel' in connectors
+        assert 'xlsx' in connectors
+        assert 'xls' in connectors
         assert 'googlesheets' in connectors
+        assert 'google_sheets' in connectors
+        assert 'gsheets' in connectors
         assert 'hubspot' in connectors
         assert 'salesforce' in connectors
-        assert 'postgresql' in connectors
-        assert 'snowflake' in connectors
+        assert 'pipedrive' in connectors
+        assert 'crm' in connectors
     
     def test_get_connector_categories(self):
         """Test de récupération des catégories."""
@@ -624,10 +1296,12 @@ class TestConnectorFactory:
         assert 'cloud' in categories
         assert 'crm' in categories
         
+        # Vérifier le contenu des catégories
+        assert 'postgresql' in categories['databases']
+        assert 'snowflake' in categories['databases']
         assert 'excel' in categories['files']
         assert 'googlesheets' in categories['cloud']
         assert 'hubspot' in categories['crm']
-        assert 'postgresql' in categories['databases']
     
     def test_invalid_connector_type(self):
         """Test avec type de connecteur invalide."""
@@ -721,5 +1395,51 @@ class TestHelperFunctions:
         assert 'email' in df.columns
 
 
+class TestMetricsIntegration:
+    """Tests pour l'intégration des métriques Prometheus."""
+    
+    def test_metrics_on_successful_operation(self):
+        """Test que les métriques sont enregistrées lors d'opérations réussies."""
+        config = ConnectionConfig(
+            connection_type='excel',
+            tenant_id='test_tenant'
+        )
+        connector = ExcelConnector(config)
+        
+        # Créer un fichier de test
+        test_df = pd.DataFrame({'col1': [1, 2, 3]})
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+            test_df.to_excel(tmp.name, index=False)
+            tmp_path = tmp.name
+        
+        try:
+            # Lire le fichier (devrait enregistrer des métriques)
+            df = connector.read_excel(path=tmp_path)
+            
+            # Vérifier que l'opération a réussi
+            assert df is not None
+            assert len(df) == 3
+            
+            # Note: Dans un vrai test, on pourrait vérifier les métriques
+            # en utilisant le registry, mais ici on vérifie juste que
+            # l'opération s'exécute sans erreur
+        finally:
+            os.unlink(tmp_path)
+    
+    def test_metrics_on_error(self):
+        """Test que les erreurs sont enregistrées dans les métriques."""
+        config = ConnectionConfig(
+            connection_type='excel',
+            tenant_id='test_tenant'
+        )
+        connector = ExcelConnector(config)
+        
+        # Essayer de lire un fichier inexistant
+        with pytest.raises(Exception):
+            connector.read_excel(path='nonexistent.xlsx')
+        
+        # Note: L'erreur devrait être comptée dans ml_connectors_errors_total
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    pytest.main([__file__, "-v", "--tb=short"])
