@@ -1,0 +1,376 @@
+# Template for Recommendation System
+# Optimized for personalization and ranking
+
+name: "recommendation_system"
+description: "Template for building recommendation systems with collaborative and content-based filtering"
+author: "AutoML Platform Team"
+version: "1.0.0"
+tags: ["recommendation", "ranking", "personalization", "collaborative_filtering"]
+
+# Task configuration
+task: "ranking"  # Special task type for recommendations
+task_settings:
+  problem_type: "recommendation"
+  primary_metric: "ndcg"  # Normalized Discounted Cumulative Gain
+  recommendation_type: "hybrid"  # Combine collaborative and content-based
+
+# Data preprocessing
+preprocessing:
+  handle_missing:
+    strategy: "zero"  # Fill missing ratings with 0
+    user_features: "mean"  # Fill user features with mean
+    item_features: "mode"  # Fill item features with mode
+    
+  handle_outliers:
+    method: "clip"
+    percentiles: [0.01, 0.99]
+    
+  feature_engineering:
+    # User features
+    - user_activity:
+        total_interactions: true
+        average_rating: true
+        rating_variance: true
+        days_since_first_interaction: true
+        days_since_last_interaction: true
+        interaction_frequency: true
+        category_preferences: true
+        time_preferences: true  # Time of day patterns
+    
+    # Item features  
+    - item_popularity:
+        total_ratings: true
+        average_rating: true
+        rating_variance: true
+        trending_score: true  # Recent popularity
+        seasonal_score: true
+        
+    # Interaction features
+    - interaction_context:
+        time_of_day: true
+        day_of_week: true
+        season: true
+        device_type: true
+        session_length: true
+        
+    # Text features (if available)
+    - text_embeddings:
+        method: "tfidf"  # or "bert", "word2vec"
+        dimensions: 100
+        
+    # Graph features
+    - graph_features:
+        user_similarity: true
+        item_similarity: true
+        co_occurrence: true
+        
+  encoding:
+    categorical_method: "target"
+    user_id_encoding: "label"  # Keep user IDs
+    item_id_encoding: "label"  # Keep item IDs
+    
+  scaling:
+    method: "minmax"
+    range: [0, 1]
+
+# Recommendation-specific settings
+recommendation:
+  # Collaborative filtering
+  collaborative_filtering:
+    enabled: true
+    method: "matrix_factorization"
+    
+    matrix_factorization:
+      n_factors: 100
+      regularization: 0.01
+      learning_rate: 0.01
+      n_epochs: 20
+      
+    neighborhood_based:
+      similarity_metric: "cosine"
+      k_neighbors: 50
+      min_neighbors: 5
+      
+  # Content-based filtering
+  content_based:
+    enabled: true
+    similarity_metric: "cosine"
+    feature_weights: "learned"
+    
+  # Hybrid approach
+  hybrid:
+    combination_method: "weighted"  # or "switching", "stacking"
+    weight_optimization: true
+    
+  # Cold start handling
+  cold_start:
+    new_users: "popular_items"  # Recommend popular items
+    new_items: "similar_items"  # Find similar items
+    min_interactions: 5
+
+# Model selection
+algorithms:
+  # Tree-based for learning interactions
+  - "XGBoost"
+  - "LightGBM"
+  - "RandomForest"
+  # Linear models for interpretability
+  - "LogisticRegression"
+  - "Ridge"
+  # Neural networks for complex patterns
+  - "NeuralNetwork"
+  # Specific recommendation algorithms
+  - "RankSVM"  # Learning to rank
+  - "LambdaMART"  # Gradient boosted ranking
+
+exclude_algorithms:
+  - "SVM"  # Too slow for large datasets
+  - "GaussianNB"  # Not suitable for recommendations
+
+# Feature engineering for recommendations
+recommendation_features:
+  # User-item interaction matrix
+  interaction_matrix:
+    type: "sparse"
+    include_implicit: true  # Views, clicks, etc.
+    
+  # Temporal features
+  temporal:
+    time_decay: true  # Weight recent interactions more
+    seasonal_patterns: true
+    trend_detection: true
+    
+  # Diversity features
+  diversity:
+    category_diversity: true
+    exploration_bonus: true  # Boost less popular items
+    
+  # Business features
+  business:
+    margin_weighting: false  # Don't optimize for profit
+    inventory_awareness: true
+    promotional_items: true
+
+# Hyperparameter optimization
+hpo:
+  method: "optuna"
+  n_iter: 50
+  timeout: 2400
+  
+  # Optimize for ranking metrics
+  optimization_metric: "ndcg@10"
+  
+  search_spaces:
+    XGBoost:
+      max_depth: [3, 10]
+      learning_rate: [0.01, 0.3]
+      n_estimators: [100, 500]
+      subsample: [0.7, 1.0]
+      colsample_bytree: [0.7, 1.0]
+      
+    LightGBM:
+      num_leaves: [31, 127]
+      learning_rate: [0.01, 0.3]
+      n_estimators: [100, 500]
+      feature_fraction: [0.7, 1.0]
+      bagging_fraction: [0.7, 1.0]
+      
+    NeuralNetwork:
+      hidden_layers: [[64, 32], [128, 64], [256, 128, 64]]
+      dropout_rate: [0.1, 0.5]
+      learning_rate: [0.001, 0.01]
+      batch_size: [32, 128]
+
+# Cross-validation for recommendations
+cv:
+  strategy: "user_based"  # Split by users
+  n_folds: 5
+  shuffle: true
+  
+  # Time-based validation for temporal data
+  time_based:
+    enabled: true
+    test_days: 7  # Last 7 days for test
+    validation_days: 7  # Previous 7 days for validation
+
+# Ensemble configuration
+ensemble:
+  method: "blending"
+  weights: "optimized"
+  diversity_bonus: true  # Reward diverse recommendations
+
+# Scoring metrics for recommendations
+metrics:
+  # Ranking metrics
+  - "ndcg"  # NDCG@k
+  - "map"  # Mean Average Precision
+  - "mrr"  # Mean Reciprocal Rank
+  - "precision_at_k"
+  - "recall_at_k"
+  - "hit_rate"
+  
+  # Business metrics
+  - "coverage"  # Catalog coverage
+  - "diversity"  # Recommendation diversity
+  - "novelty"  # Recommendation novelty
+  - "serendipity"  # Unexpected good recommendations
+  
+  # Engagement metrics
+  - "ctr"  # Click-through rate
+  - "conversion_rate"
+
+# Evaluation settings
+evaluation:
+  top_k: [5, 10, 20]  # Evaluate at different cutoffs
+  
+  # A/B testing specific
+  ab_test:
+    enabled: true
+    test_size: 0.1
+    metrics: ["ctr", "conversion_rate", "revenue_per_user"]
+    min_sample_size: 10000
+
+# Business rules for recommendations
+business_rules:
+  # Filtering rules
+  filters:
+    - exclude_already_purchased: true
+    - exclude_out_of_stock: true
+    - respect_user_preferences: true  # Dietary, content rating, etc.
+    
+  # Boosting rules
+  boosts:
+    - new_items: 1.2  # Boost new items by 20%
+    - promotional_items: 1.5  # Boost promotional items by 50%
+    - high_margin_items: 1.1  # Slight boost for high margin
+    
+  # Diversification
+  diversification:
+    enabled: true
+    method: "mmr"  # Maximal Marginal Relevance
+    lambda: 0.5  # Balance relevance and diversity
+    
+  # Constraints
+  constraints:
+    max_items_per_category: 3
+    min_rating_threshold: 3.0
+    recency_days: 365  # Only items from last year
+
+# Real-time personalization
+real_time:
+  enabled: true
+  feature_store: true
+  
+  # Session-based recommendations
+  session_based:
+    enabled: true
+    session_timeout_minutes: 30
+    min_session_length: 3
+    
+  # Context awareness
+  context_features:
+    - location
+    - device
+    - time_of_day
+    - weather  # If available
+    
+  # Dynamic re-ranking
+  reranking:
+    enabled: true
+    personalization_weight: 0.7
+
+# Model interpretation
+interpretation:
+  explanation_method: "shap"
+  explain_top_k: 3  # Explain top 3 recommendations
+  
+  # Generate explanations
+  explanation_types:
+    - "similar_to_liked"  # "Because you liked X"
+    - "popular_in_category"  # "Popular in category Y"
+    - "trending_now"  # "Trending this week"
+    - "personalized_for_you"  # "Picked for you"
+
+# Monitoring settings
+monitoring:
+  # Performance monitoring
+  performance_metrics:
+    - "ndcg"
+    - "ctr"
+    - "conversion_rate"
+    - "revenue_per_user"
+    
+  # Recommendation quality
+  quality_metrics:
+    - "coverage"  # % of catalog recommended
+    - "diversity"
+    - "novelty"
+    - "popularity_bias"
+    
+  # User engagement
+  engagement_tracking:
+    - "clicks"
+    - "add_to_cart"
+    - "purchases"
+    - "ratings"
+    
+  # Drift detection
+  drift_detection:
+    user_behavior_drift: true
+    item_popularity_drift: true
+    
+  alerts:
+    ctr_drop_threshold: 0.1
+    coverage_min_threshold: 0.2
+
+# Export settings
+export:
+  formats: ["onnx", "pickle"]
+  include_preprocessor: true
+  optimize_for: "latency"
+  
+  # Export recommendation index
+  export_index:
+    format: "faiss"  # For similarity search
+    update_frequency: "daily"
+
+# Deployment settings
+deployment:
+  deployment_target: "api"
+  
+  # Caching strategy
+  caching:
+    enabled: true
+    cache_duration_hours: 24
+    user_specific_cache: true
+    
+  # Batch generation
+  batch_recommendations:
+    enabled: true
+    schedule: "daily"
+    users_per_batch: 10000
+    
+  # API settings
+  api:
+    max_recommendations: 100
+    default_recommendations: 10
+    response_time_ms: 100
+
+# Retraining settings
+retraining:
+  schedule: "daily"
+  incremental_learning: true  # Update with new interactions
+  full_retrain_schedule: "weekly"
+  
+  # Feedback loop
+  feedback_incorporation:
+    implicit_feedback: true  # Clicks, views
+    explicit_feedback: true  # Ratings, likes
+    negative_feedback: true  # Dislikes, "not interested"
+    
+# Documentation
+documentation:
+  auto_generate: true
+  include_recommendation_examples: true
+  include_feature_importance: true
+  include_business_impact: true
