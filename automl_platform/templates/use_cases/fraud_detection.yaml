@@ -1,0 +1,269 @@
+# Template for Fraud Detection
+# Optimized for highly imbalanced classification with focus on precision
+
+name: "fraud_detection"
+description: "Template for detecting fraudulent transactions with minimal false positives"
+author: "AutoML Platform Team"
+version: "1.0.0"
+tags: ["classification", "fraud", "anomaly", "imbalanced", "financial"]
+
+# Task configuration
+task: "classification"
+task_settings:
+  problem_type: "binary"
+  primary_metric: "average_precision"  # Good for imbalanced data
+  class_imbalance_handling: true
+  anomaly_detection: true
+
+# Data preprocessing
+preprocessing:
+  handle_missing:
+    strategy: "smart"
+    threshold: 0.2  # Drop columns with >20% missing
+    
+  handle_outliers:
+    method: "none"  # Keep outliers - they might be fraud!
+    
+  feature_engineering:
+    - velocity_features: true  # Transaction velocity features
+    - amount_features:
+        log_transform: true
+        bins: [10, 50, 100, 500, 1000, 5000]
+        ratios: true
+    - time_features:
+        extract: ["hour", "dayofweek", "month"]
+        is_weekend: true
+        is_night: true  # Flag night transactions
+    - frequency_encoding: true  # Encode rare categories
+    - count_encoding: true  # Count of transactions per entity
+    - target_encoding: true  # With regularization
+    - interaction_features: 
+        max_interactions: 10
+        important_features: ["amount", "merchant_category", "location"]
+    
+  encoding:
+    categorical_method: "target"  # With smoothing for fraud
+    handle_unknown: "missing"  # Treat unknown as suspicious
+    
+  scaling:
+    method: "robust"  # Robust to outliers
+
+# Fraud-specific features
+fraud_features:
+  # Behavioral patterns
+  user_profiling:
+    - average_transaction_amount: [7, 30, 90]  # days
+    - transaction_frequency: [1, 7, 30]
+    - unique_merchants: [7, 30]
+    - location_changes: true
+    
+  # Risk indicators
+  risk_features:
+    - unusual_amount: true  # Deviation from user's normal
+    - unusual_merchant: true
+    - unusual_time: true
+    - unusual_location: true
+    - rapid_transactions: true  # Multiple transactions quickly
+    
+  # Network features (if available)
+  network_features:
+    - shared_device: true
+    - shared_ip: true
+    - merchant_fraud_rate: true
+
+# Model selection
+algorithms:
+  # Tree-based models (excellent for fraud)
+  - "XGBoost"
+  - "LightGBM"
+  - "CatBoost"
+  - "RandomForest"
+  - "IsolationForest"  # Anomaly detection
+  # Linear models
+  - "LogisticRegression"
+  # Neural networks
+  - "NeuralNetwork"
+  # Ensemble
+  - "ExtraTrees"
+
+exclude_algorithms:
+  - "GaussianNB"
+  - "KNN"  # Too slow for real-time
+
+# Sampling strategy for imbalanced data
+sampling:
+  strategy: "hybrid"  # Combine over and under sampling
+  methods:
+    - "SMOTE"  # Synthetic minority oversampling
+    - "ADASYN"  # Adaptive synthetic sampling
+    - "TomekLinks"  # Remove borderline samples
+  sampling_ratio: 0.1  # Target 10% positive class
+
+# Hyperparameter optimization
+hpo:
+  method: "optuna"
+  n_iter: 100  # More iterations for critical task
+  timeout: 3600  # 1 hour
+  
+  # Focus on reducing false positives
+  optimization_metric: "precision_at_recall_50"
+  
+  search_spaces:
+    XGBoost:
+      scale_pos_weight: [1, 100]  # Heavy imbalance
+      max_depth: [4, 12]
+      learning_rate: [0.01, 0.2]
+      n_estimators: [200, 1000]
+      subsample: [0.6, 1.0]
+      colsample_bytree: [0.6, 1.0]
+      gamma: [0, 0.5]
+      min_child_weight: [1, 10]
+      
+    LightGBM:
+      is_unbalance: true
+      scale_pos_weight: [1, 100]
+      num_leaves: [31, 255]
+      learning_rate: [0.01, 0.2]
+      n_estimators: [200, 1000]
+      feature_fraction: [0.6, 1.0]
+      bagging_fraction: [0.6, 1.0]
+      lambda_l1: [0, 1]
+      lambda_l2: [0, 1]
+      
+    IsolationForest:
+      contamination: [0.001, 0.01]  # Expected fraud rate
+      n_estimators: [100, 300]
+      max_samples: [256, 2048]
+
+# Cross-validation
+cv:
+  strategy: "stratified"
+  n_folds: 5
+  shuffle: true
+
+# Ensemble configuration
+ensemble:
+  method: "stacking"
+  meta_learner: "LogisticRegression"
+  use_probabilities: true
+  blend_anomaly_scores: true  # Blend with IsolationForest
+
+# Scoring metrics
+metrics:
+  - "average_precision"
+  - "roc_auc"
+  - "precision"
+  - "recall"
+  - "f1"
+  - "precision_at_k"  # Top K% most suspicious
+
+# Threshold optimization
+threshold_optimization:
+  enabled: true
+  method: "f1"  # or "cost_based"
+  constraints:
+    min_precision: 0.7  # At least 70% precision
+    max_false_positive_rate: 0.01  # Max 1% FPR
+
+# Feature importance
+feature_importance:
+  calculate: true
+  method: "shap"  # SHAP for fraud explanation
+  top_k: 25
+
+# Model interpretation
+interpretation:
+  shap_values: true
+  lime_explanations: true  # For individual transactions
+  counterfactual_explanations: true
+  rule_extraction: true  # Extract fraud rules
+
+# Monitoring settings
+monitoring:
+  drift_detection: true
+  drift_method: "psi"
+  
+  performance_monitoring:
+    track_metrics: ["precision", "recall", "f1", "fraud_rate"]
+    alert_on_degradation: 0.05
+    
+  fraud_monitoring:
+    track_fraud_rate: true
+    anomaly_score_distribution: true
+    false_positive_analysis: true
+    
+  real_time_monitoring:
+    enabled: true
+    latency_threshold_ms: 100
+    throughput_tracking: true
+
+# Export settings
+export:
+  formats: ["onnx", "pmml"]
+  quantize: false  # Keep full precision for fraud
+  optimize_for: "latency"  # Real-time scoring
+
+# Business rules
+business_rules:
+  # Multi-tier fraud scoring
+  risk_tiers:
+    low: [0.0, 0.3]
+    medium: [0.3, 0.7]
+    high: [0.7, 1.0]
+    
+  # Automatic actions based on score
+  auto_actions:
+    - score_range: [0.9, 1.0]
+      action: "block"
+    - score_range: [0.7, 0.9]
+      action: "review"
+    - score_range: [0.0, 0.7]
+      action: "approve"
+      
+  # Hard rules (override model)
+  hard_rules:
+    - condition: "amount > 10000"
+      action: "review"
+    - condition: "new_account and amount > 1000"
+      action: "review"
+      
+  cost_matrix:
+    false_positive: 10  # Cost of blocking good transaction
+    false_negative: 100  # Cost of missing fraud (10x worse)
+
+# Real-time scoring
+real_time:
+  enabled: true
+  max_latency_ms: 50
+  feature_store: true
+  cache_predictions: true
+  
+# Deployment settings
+deployment:
+  auto_deploy: false
+  deployment_target: "api"
+  batch_prediction: false
+  real_time_scoring: true
+  shadow_mode: true  # Run in shadow before production
+  
+# Retraining settings
+retraining:
+  schedule: "daily"
+  trigger_on_drift: true
+  trigger_on_fraud_spike: true
+  min_samples: 10000
+  feedback_loop: true  # Incorporate investigation results
+  
+# A/B testing
+ab_testing:
+  enabled: true
+  traffic_percentage: 10  # Test on 10% of traffic
+  minimum_sample_size: 10000
+  metrics_to_track: ["precision", "recall", "blocked_rate"]
+
+# Documentation
+documentation:
+  auto_generate: true
+  include_fraud_patterns: true
+  include_rule_explanations: true
+  compliance_report: true
