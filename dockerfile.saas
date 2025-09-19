@@ -110,14 +110,29 @@ ENV PYTHONUNBUFFERED=1 \
     # MLflow
     MLFLOW_TRACKING_URI=http://mlflow:5000
 
-# Copy startup script
-COPY scripts/start_saas.sh /app/scripts/start_saas.sh
-RUN chmod +x /app/scripts/start_saas.sh
+# Create simple startup script inline
+RUN cat > /app/start.sh << 'EOF' && chmod +x /app/start.sh
+#!/bin/bash
+# Start API
+gunicorn automl_platform.api.main:app \
+    --bind 0.0.0.0:8000 \
+    --workers 4 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --timeout 120 &
+
+# Start UI
+streamlit run /app/ui/app.py \
+    --server.port 8501 \
+    --server.address 0.0.0.0 &
+
+# Wait for all processes
+wait
+EOF
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${API_PORT}/health && \
-        curl -f http://localhost:${UI_PORT}/_stcore/health || exit 1
+    CMD curl -f http://localhost:8000/health && \
+        curl -f http://localhost:8501/_stcore/health || exit 1
 
 # Expose ports
 EXPOSE 8000 8501
@@ -125,8 +140,8 @@ EXPOSE 8000 8501
 # Switch to non-root user
 USER automl
 
-# Default command - starts all services
-CMD ["/app/scripts/start_saas.sh"]
+# Default command - use the inline script
+CMD ["/app/start.sh"]
 
 # -----------------------------------------------------------------------------
 # Stage 5: Development mode (optional)
