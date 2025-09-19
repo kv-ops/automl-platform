@@ -189,8 +189,36 @@ log_section "Environment Configuration"
 
 # Create .env file if it doesn't exist
 if [ ! -f "$DEPLOY_DIR/$ENV_FILE" ]; then
-    log_info "Creating .env file from template..."
-    cat > "$DEPLOY_DIR/$ENV_FILE" << EOF
+    log_info "Creating .env file from .env.example..."
+    
+    # Copy template
+    cp "$DEPLOY_DIR/.env.example" "$DEPLOY_DIR/$ENV_FILE"
+    
+    # Add SaaS-specific configurations
+    cat >> "$DEPLOY_DIR/$ENV_FILE" << EOF
+
+# =============================================================================
+# SaaS Mode Configuration (Auto-generated)
+# =============================================================================
+
+# Enable SaaS mode
+AUTOML_MODE=saas
+AUTOML_EXPERT_MODE=false
+
+# SSO Configuration
+SSO_ENABLED=true
+KEYCLOAK_ENABLED=true
+KEYCLOAK_CLIENT_SECRET=$(openssl rand -base64 32)
+
+# Multi-tenant
+MULTI_TENANT_ENABLED=true
+DEFAULT_TENANT_PLAN=trial
+
+# Secure passwords (auto-generated)
+POSTGRES_PASSWORD=$(openssl rand -base64 32)
+REDIS_PASSWORD=$(openssl rand -base64 32)
+MINIO_ROOT_PASSWORD=$(openssl rand -base64 32)
+JWT_SECRET_KEY=$(openssl rand -base64 48)
 # =============================================================================
 # AutoML Platform - Environment Configuration
 # Generated: $(date)
