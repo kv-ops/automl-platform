@@ -142,7 +142,7 @@ predictions = orchestrator.predict(new_data)
 python main.py api --host 0.0.0.0 --port 8000
 
 # Or using uvicorn directly
-uvicorn automl_platform.api.app:app --reload
+uvicorn automl_platform.api.api:app --reload
 ```
 
 API endpoints:
