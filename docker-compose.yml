@@ -290,7 +290,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: automl_api
-    command: uvicorn automl_platform.api.app:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn automl_platform.api.api:app --host 0.0.0.0 --port 8000 --reload
     environment:
       DATABASE_URL: postgresql://automl:automl_secret@postgres:5432/automl
       REDIS_URL: redis://:redis_secret@redis:6379/0
