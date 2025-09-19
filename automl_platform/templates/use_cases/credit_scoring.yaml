@@ -1,0 +1,323 @@
+# Template for Credit Scoring
+# Optimized for regulatory compliance and interpretability
+
+name: "credit_scoring"
+description: "Template for credit risk assessment with explainable AI"
+author: "AutoML Platform Team"
+version: "1.0.0"
+tags: ["classification", "credit", "risk", "financial", "regulatory"]
+
+# Task configuration
+task: "classification"
+task_settings:
+  problem_type: "binary"  # Good/Bad credit
+  primary_metric: "roc_auc"
+  class_imbalance_handling: true
+  require_interpretability: true  # Regulatory requirement
+
+# Data preprocessing
+preprocessing:
+  handle_missing:
+    strategy: "smart"
+    imputation_indicators: true  # Create missingness indicators
+    threshold: 0.5  # Drop columns with >50% missing
+    
+  handle_outliers:
+    method: "winsorize"
+    percentiles: [0.01, 0.99]
+    
+  feature_engineering:
+    - financial_ratios:
+        debt_to_income: true
+        payment_to_income: true
+        credit_utilization: true
+    - credit_history_features:
+        delinquency_patterns: true
+        payment_history_score: true
+        credit_age: true
+        credit_mix_diversity: true
+    - behavioral_features:
+        application_velocity: true
+        channel_preferences: true
+    - stability_indicators:
+        employment_stability: true
+        residential_stability: true
+    - interaction_features:
+        between: ["income", "debt", "employment_length"]
+    
+  encoding:
+    categorical_method: "woe"  # Weight of Evidence for credit
+    binning:
+      method: "decision_tree"  # Optimal binning
+      max_bins: 10
+      min_bin_size: 0.05
+      
+  scaling:
+    method: "standard"
+    
+# Credit-specific features
+credit_features:
+  # Bureau features
+  bureau_features:
+    - credit_score_band
+    - number_of_inquiries
+    - number_of_accounts
+    - oldest_account_age
+    - newest_account_age
+    - number_of_delinquencies
+    - worst_delinquency_status
+    
+  # Payment behavior
+  payment_features:
+    - payment_history_score
+    - average_days_delinquent
+    - max_days_delinquent
+    - payment_consistency
+    
+  # Financial features
+  financial_features:
+    - income_verification
+    - employment_type
+    - employment_length
+    - debt_consolidation
+
+# Model selection (focus on interpretability)
+algorithms:
+  # Interpretable models preferred
+  - "LogisticRegression"  # Industry standard
+  - "DecisionTree"  # For scorecard
+  - "XGBoost"  # With SHAP explanations
+  - "LightGBM"  # Fast and accurate
+  - "RandomForest"
+  # Linear models for scorecards
+  - "Ridge"
+  - "ElasticNet"
+
+exclude_algorithms:
+  - "NeuralNetwork"  # Not interpretable enough
+  - "SVM"  # Hard to explain
+
+# Scorecard development
+scorecard:
+  enabled: true
+  base_score: 600
+  base_odds: 50  # 50:1 odds
+  pdo: 20  # Points to double odds
+  
+  binning:
+    method: "chi_merge"
+    max_bins: 10
+    min_samples_per_bin: 0.05
+    
+  variable_selection:
+    method: "stepwise"
+    significance_level: 0.05
+    max_variables: 15
+
+# Hyperparameter optimization
+hpo:
+  method: "optuna"
+  n_iter: 50
+  timeout: 1800
+  
+  search_spaces:
+    LogisticRegression:
+      C: [0.001, 10]
+      penalty: ["l1", "l2", "elasticnet"]
+      class_weight: ["balanced", null]
+      
+    XGBoost:
+      max_depth: [2, 6]  # Shallow for interpretability
+      learning_rate: [0.01, 0.1]
+      n_estimators: [100, 300]
+      subsample: [0.7, 1.0]
+      colsample_bytree: [0.7, 1.0]
+      scale_pos_weight: [1, 5]
+      
+    DecisionTree:
+      max_depth: [3, 10]
+      min_samples_split: [50, 200]
+      min_samples_leaf: [20, 100]
+      class_weight: ["balanced", null]
+
+# Cross-validation
+cv:
+  strategy: "stratified"
+  n_folds: 5
+  shuffle: true
+
+# Ensemble configuration
+ensemble:
+  method: "voting"
+  voting: "soft"
+  weights: "optimized"
+
+# Scoring metrics
+metrics:
+  - "roc_auc"
+  - "gini"  # Gini coefficient (2*AUC - 1)
+  - "ks"  # Kolmogorov-Smirnov statistic
+  - "precision"
+  - "recall"
+  - "f1"
+  - "log_loss"
+
+# Model validation
+validation:
+  # Out-of-time validation
+  time_based_split: true
+  
+  # Population stability
+  psi_threshold: 0.25
+  
+  # Discrimination tests
+  fair_lending_tests:
+    protected_attributes: ["gender", "ethnicity", "age_group"]
+    disparity_threshold: 0.8  # 80% rule
+    
+  # Backtesting
+  historical_performance: true
+  vintage_analysis: true
+
+# Feature importance
+feature_importance:
+  calculate: true
+  method: "shap"
+  top_k: 20
+  
+  # Regulatory requirements
+  adverse_action_reasons: true
+  max_reasons: 4  # Top 4 reasons for denial
+
+# Model interpretation
+interpretation:
+  shap_values: true
+  partial_dependence: true
+  ice_plots: true  # Individual Conditional Expectation
+  surrogate_model: true  # Global surrogate for explanation
+  
+  # Regulatory explanations
+  reason_codes: true
+  plain_language_explanations: true
+
+# Fairness and bias
+fairness:
+  bias_detection: true
+  bias_mitigation: "preprocessing"  # or "postprocessing"
+  
+  fairness_metrics:
+    - "demographic_parity"
+    - "equal_opportunity"
+    - "calibration"
+    
+  protected_features: ["gender", "ethnicity", "age_group"]
+  
+# Monitoring settings
+monitoring:
+  drift_detection: true
+  drift_method: "psi"
+  
+  performance_monitoring:
+    track_metrics: ["roc_auc", "gini", "approval_rate"]
+    alert_on_degradation: 0.05
+    
+  portfolio_monitoring:
+    default_rate_tracking: true
+    approval_rate_tracking: true
+    score_distribution: true
+    
+  regulatory_monitoring:
+    fair_lending_compliance: true
+    model_documentation: true
+    audit_trail: true
+
+# Risk tiers
+risk_tiers:
+  - name: "Prime"
+    score_range: [740, 850]
+    approval_rate: 0.95
+    interest_rate: "base"
+  - name: "Near Prime"
+    score_range: [680, 739]
+    approval_rate: 0.80
+    interest_rate: "base + 2%"
+  - name: "Subprime"
+    score_range: [620, 679]
+    approval_rate: 0.60
+    interest_rate: "base + 5%"
+  - name: "Deep Subprime"
+    score_range: [300, 619]
+    approval_rate: 0.30
+    interest_rate: "base + 10%"
+
+# Business rules
+business_rules:
+  # Hard cutoffs
+  minimum_score: 620
+  maximum_dti: 0.43  # Debt-to-income ratio
+  minimum_income: 25000
+  
+  # Override rules
+  auto_approve:
+    - condition: "credit_score >= 750 and dti <= 0.30"
+  auto_decline:
+    - condition: "bankruptcy_flag == 1 and months_since_bankruptcy < 24"
+    - condition: "fraud_flag == 1"
+    
+  # Manual review triggers
+  manual_review:
+    - condition: "score between 620 and 640"
+    - condition: "high_risk_flag == 1"
+
+# Compliance
+compliance:
+  regulations: ["FCRA", "ECOA", "GDPR"]
+  
+  documentation:
+    model_risk_assessment: true
+    validation_report: true
+    fairness_report: true
+    
+  audit:
+    log_predictions: true
+    log_features: true
+    log_explanations: true
+    retention_days: 2555  # 7 years
+
+# Export settings
+export:
+  formats: ["pmml", "onnx"]  # PMML preferred for credit
+  quantize: false
+  include_preprocessing: true
+  
+  # Scorecard export
+  scorecard_format: "sas"  # or "sql", "python"
+
+# Deployment settings
+deployment:
+  auto_deploy: false
+  deployment_target: "api"
+  batch_prediction: true
+  real_time_scoring: true
+  
+  # A/B testing before full deployment
+  champion_challenger: true
+  
+# Retraining settings
+retraining:
+  schedule: "monthly"
+  trigger_on_drift: true
+  trigger_on_performance: true
+  min_samples: 5000
+  
+  # Model governance
+  approval_required: true
+  validation_required: true
+  
+# Documentation
+documentation:
+  auto_generate: true
+  include_methodology: true
+  include_validation_results: true
+  include_fairness_analysis: true
+  regulatory_compliance_report: true
