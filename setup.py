@@ -1,6 +1,6 @@
 """
 Setup script for AutoML Platform
-Version 3.2.0 - Enterprise Edition with No-Code UI and MLOps
+Version 3.2.0 - Enterprise Edition with No-Code UI and Extended Connectors
 """
 
 from setuptools import setup, find_packages
@@ -12,7 +12,7 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text() if (this_directory / "README.md").exists() else ""
 
 # Read version from version file
-version = "3.2.0"  # Updated version for no-code release
+version = "3.2.1"  # Updated version for extended connectors
 version_file = this_directory / "automl_platform" / "__version__.py"
 if version_file.exists():
     with open(version_file) as f:
@@ -79,12 +79,49 @@ install_requires = [
     "tabulate>=0.9.0",
     "tenacity>=8.2.0",
     "psutil>=5.9.6",
-    "openpyxl>=3.1.0",
-    "pyarrow>=14.0.0",
+    
+    # NEW: Essential for extended connectors
+    "openpyxl>=3.1.0",  # Pour Excel avancé
+    "xlsxwriter>=3.1.0",  # Pour l'export Excel
+    "pyarrow>=14.0.0",  # Pour Parquet
 ]
 
 # Optional dependencies organized by feature
 extras_require = {
+    # NEW: Extended connectors bundle
+    "connectors": [
+        # Excel support
+        "openpyxl>=3.1.0",
+        "xlsxwriter>=3.1.0",
+        "xlrd>=2.0.1",  # Pour lire les anciens fichiers Excel
+        
+        # Google Sheets support
+        "gspread>=5.12.0",
+        "google-auth>=2.27.0",
+        "google-auth-oauthlib>=1.2.0",
+        "google-auth-httplib2>=0.2.0",
+        "pygsheets>=2.0.6",  # Alternative à gspread
+        
+        # CRM connectors
+        "hubspot-api-client>=8.2.0",  # HubSpot
+        "simple-salesforce>=1.12.5",  # Salesforce
+        "pipedrive-python-lib>=1.2.0",  # Pipedrive
+        "zoho-crm>=0.5.0",  # Zoho CRM
+        
+        # Database connectors (extended)
+        "snowflake-connector-python>=3.7.0",
+        "google-cloud-bigquery>=3.15.0",
+        "databricks-connect>=14.1.0",
+        "pyodbc>=5.0.1",
+        "cx_Oracle>=8.3.0",
+        "pymongo>=4.6.0",
+        "cassandra-driver>=3.29.0",
+        "elasticsearch>=8.12.0",
+        "influxdb-client>=1.40.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
+    ],
+    
     # Enhanced UI/Dashboard components
     "ui_advanced": [
         "streamlit-extras>=0.3.6",
@@ -218,7 +255,7 @@ extras_require = {
         "fastapi-versioning>=0.10.0",
     ],
 
-    # Database & Storage
+    # Database & Storage (updated with connectors)
     "storage": [
         "alembic>=1.13.0",
         "pymongo>=4.6.0",
@@ -227,6 +264,10 @@ extras_require = {
         "google-cloud-storage>=2.10.0",
         "azure-storage-blob>=12.19.0",
         "aioboto3>=12.0.0",
+        # Database connectors now included here too
+        "snowflake-connector-python>=3.7.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
     ],
 
     # Distributed Computing
@@ -284,18 +325,6 @@ extras_require = {
         "feast>=0.36.0",
         "featuretools>=1.28.0",
         "featureform>=1.12.0",
-    ],
-
-    # Data Connectors
-    "connectors": [
-        "snowflake-connector-python>=3.7.0",
-        "google-cloud-bigquery>=3.15.0",
-        "databricks-connect>=14.1.0",
-        "pyodbc>=5.0.1",
-        "cx_Oracle>=8.3.0",
-        "cassandra-driver>=3.29.0",
-        "elasticsearch>=8.12.0",
-        "influxdb-client>=1.40.0",
     ],
 
     # Monitoring & Observability
@@ -378,8 +407,9 @@ extras_require = {
     ],
 }
 
-# No-code bundle - Everything needed for non-technical users
+# No-code bundle - Everything needed for non-technical users (updated)
 extras_require["nocode"] = list(set([
+    *extras_require["connectors"],  # NEW: Include all connectors
     *extras_require["ui_advanced"],
     *extras_require["reporting"],
     *extras_require["viz"],
@@ -389,7 +419,7 @@ extras_require["nocode"] = list(set([
     "papermill>=2.5.0",
 ]))
 
-# Enterprise edition includes production essentials
+# Enterprise edition includes production essentials (updated)
 extras_require["enterprise"] = list(set([
     *extras_require["api"],
     *extras_require["storage"],
@@ -402,6 +432,7 @@ extras_require["enterprise"] = list(set([
     *extras_require["streaming"],
     *extras_require["cloud"],
     *extras_require["nocode"],
+    *extras_require["connectors"],  # NEW: Include connectors
 ]))
 
 # Combine all extras for complete installation
@@ -426,7 +457,7 @@ setup(
     version=version,
     author="AutoML Platform Team",
     author_email="team@automl-platform.com",
-    description="Enterprise AutoML platform with no-code UI, MLOps, distributed training, and production deployment",
+    description="Enterprise AutoML platform with no-code UI, extended connectors, MLOps, distributed training, and production deployment",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/automl-platform/automl-platform",
@@ -506,6 +537,11 @@ setup(
             # Reports & Analytics (NEW)
             "automl-report=automl_platform.cli.report:report_cli",
             "automl-analytics=automl_platform.cli.analytics:analytics_cli",
+            
+            # NEW: Connector utilities
+            "automl-excel=automl_platform.cli.connectors:excel_cli",
+            "automl-gsheets=automl_platform.cli.connectors:gsheets_cli",
+            "automl-crm=automl_platform.cli.connectors:crm_cli",
         ],
     },
 
@@ -535,7 +571,7 @@ setup(
         "Natural Language :: French",
     ],
 
-    # Keywords
+    # Keywords (updated)
     keywords=[
         "automl",
         "machine-learning",
@@ -563,6 +599,12 @@ setup(
         "oidc",
         "gpu",
         "cuda",
+        "excel",
+        "google-sheets",
+        "crm",
+        "hubspot",
+        "salesforce",
+        "data-connectors",
     ],
 
     # Project URLs
@@ -581,6 +623,7 @@ setup(
         "Slack Community": "https://automl-platform.slack.com",
         "Commercial Support": "https://automl-platform.com/support",
         "Enterprise": "https://automl-platform.com/enterprise",
+        "Connectors Guide": "https://docs.automl-platform.com/connectors",
     },
 
     # Testing
