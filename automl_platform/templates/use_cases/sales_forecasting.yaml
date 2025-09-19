@@ -1,0 +1,215 @@
+# Template for Sales Forecasting
+# Optimized for time series regression with seasonality
+
+name: "sales_forecasting"
+description: "Template for forecasting sales with time series features"
+author: "AutoML Platform Team"
+version: "1.0.0"
+tags: ["regression", "forecasting", "sales", "time_series"]
+
+# Task configuration
+task: "regression"
+task_settings:
+  problem_type: "time_series"
+  primary_metric: "mape"  # Mean Absolute Percentage Error
+  handle_seasonality: true
+
+# Data preprocessing
+preprocessing:
+  handle_missing:
+    strategy: "forward_fill"  # Forward fill for time series
+    interpolation: "linear"
+    
+  handle_outliers:
+    method: "isolation_forest"
+    contamination: 0.05
+    
+  feature_engineering:
+    # Time series specific features
+    - lag_features: [1, 7, 14, 30, 365]  # Daily, weekly, monthly, yearly lags
+    - rolling_statistics: 
+        windows: [7, 14, 30]
+        operations: ["mean", "std", "min", "max"]
+    - date_features: 
+        extract: ["year", "month", "day", "dayofweek", "quarter", "weekofyear"]
+        cyclical_encoding: true  # Sin/cos encoding for cyclical features
+    - holiday_features: true
+    - trend_features: true
+    - fourier_features:
+        periods: [7, 30.5, 365.25]  # Weekly, monthly, yearly
+        n_terms: 3
+    
+  encoding:
+    categorical_method: "ordinal"  # For time-based categories
+    
+  scaling:
+    method: "robust"  # Robust to outliers
+    
+# Time series specific settings
+time_series:
+  date_column: "date"  # Will be configured at runtime
+  target_column: "sales"  # Will be configured at runtime
+  frequency: "D"  # Daily frequency (can be overridden)
+  
+  validation:
+    method: "time_series_split"
+    n_splits: 5
+    test_size: 30  # 30 days for test
+    gap: 0  # No gap between train and test
+    
+  seasonality:
+    detect_automatically: true
+    known_periods: [7, 30, 365]  # Weekly, monthly, yearly
+
+# Model selection
+algorithms:
+  # Tree-based models (good for complex patterns)
+  - "XGBoost"
+  - "LightGBM"
+  - "RandomForest"
+  - "ExtraTrees"
+  # Linear models (good for trend)
+  - "Ridge"
+  - "Lasso"
+  - "ElasticNet"
+  # Advanced regressors
+  - "GradientBoosting"
+  - "HistGradientBoosting"
+  # Neural network for complex non-linear patterns
+  - "NeuralNetwork"
+
+exclude_algorithms:
+  - "KNN"  # Poor for time series
+  - "SVM"  # Too slow for large time series
+
+# Hyperparameter optimization
+hpo:
+  method: "optuna"
+  n_iter: 75
+  timeout: 2400  # 40 minutes
+  
+  search_spaces:
+    XGBoost:
+      max_depth: [3, 12]
+      learning_rate: [0.01, 0.3]
+      n_estimators: [100, 1000]
+      subsample: [0.7, 1.0]
+      colsample_bytree: [0.7, 1.0]
+      gamma: [0, 0.2]
+      
+    LightGBM:
+      num_leaves: [31, 255]
+      learning_rate: [0.01, 0.3]
+      n_estimators: [100, 1000]
+      feature_fraction: [0.7, 1.0]
+      bagging_fraction: [0.7, 1.0]
+      min_child_samples: [5, 50]
+      
+    Ridge:
+      alpha: [0.001, 100]
+      
+    ElasticNet:
+      alpha: [0.001, 10]
+      l1_ratio: [0.1, 0.9]
+
+# Cross-validation
+cv:
+  strategy: "time_series"  # Time series split
+  n_folds: 5
+  shuffle: false  # Never shuffle time series!
+
+# Ensemble configuration
+ensemble:
+  method: "stacking"
+  meta_learner: "Ridge"
+  cv_for_meta: true
+
+# Scoring metrics
+metrics:
+  - "mape"  # Mean Absolute Percentage Error
+  - "mae"   # Mean Absolute Error
+  - "rmse"  # Root Mean Square Error
+  - "r2"    # R-squared
+  - "smape" # Symmetric MAPE
+
+# Feature importance
+feature_importance:
+  calculate: true
+  method: "permutation"
+  top_k: 30
+
+# Model interpretation
+interpretation:
+  shap_values: true
+  partial_dependence: true
+  feature_interactions: true
+
+# Monitoring settings
+monitoring:
+  drift_detection: true
+  drift_method: "ks"  # Kolmogorov-Smirnov test
+  
+  performance_monitoring:
+    track_metrics: ["mape", "mae", "rmse"]
+    alert_on_degradation: 0.15  # Alert if MAPE increases by 15%
+    
+  forecast_monitoring:
+    track_bias: true  # Monitor systematic over/under prediction
+    confidence_intervals: true
+    prediction_intervals: [0.8, 0.95]
+
+# Export settings
+export:
+  formats: ["onnx", "pmml", "pickle"]
+  quantize: false  # Keep full precision for forecasting
+  optimize_for: "accuracy"
+
+# Business rules
+business_rules:
+  min_prediction: 0  # Sales can't be negative
+  max_prediction: null  # No upper limit by default
+  round_predictions: true  # Round to integer for unit sales
+  
+  # Adjust predictions based on business knowledge
+  adjustments:
+    - type: "multiplicative"
+      condition: "is_holiday"
+      factor: 1.2
+    - type: "multiplicative"  
+      condition: "is_weekend"
+      factor: 0.9
+
+# Post-processing
+post_processing:
+  smooth_predictions: true
+  smoothing_window: 3
+  ensure_non_negative: true
+  
+# Deployment settings
+deployment:
+  auto_deploy: false
+  deployment_target: "batch"
+  batch_prediction: true
+  forecast_horizon: 30  # Forecast 30 days ahead
+  update_frequency: "daily"
+  
+# Retraining settings
+retraining:
+  schedule: "weekly"
+  trigger_on_drift: true
+  min_samples: 100
+  retrain_window: 365  # Use 1 year of data
+  
+# Backtesting
+backtesting:
+  enabled: true
+  n_windows: 6
+  window_size: 30
+  step_size: 30
+  
+# Documentation
+documentation:
+  auto_generate: true
+  include_forecast_plots: true
+  include_residual_analysis: true
+  business_summary: true
