@@ -2,16 +2,20 @@
 UI module for AutoML Platform
 =============================
 
-This module provides reusable UI components and a complete Streamlit dashboard
+This module provides a complete no-code interface and reusable UI components
 for the AutoML platform, featuring:
+- No-code dashboard for non-technical users
+- Drag-and-drop data import
+- Visual model configuration wizard
 - Interactive data quality visualizations
-- Model training and monitoring interfaces
+- Real-time model training monitoring
+- One-click deployment
 - AI-powered chat assistant
-- Comprehensive reporting tools
-- Real-time training progress tracking
+- Automated report generation
+- Multi-language support
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"  # Upgraded for no-code capabilities
 __author__ = "AutoML Platform Team"
 
 # ============================================================================
@@ -41,12 +45,8 @@ try:
     
     METRICS_AVAILABLE = True
     
-    # Create a registry for UI metrics (the metrics are already registered in ui_metrics.py)
+    # Create a registry for UI metrics
     ui_registry = CollectorRegistry()
-    
-    # Register existing metrics to our custom registry if needed
-    # Note: The metrics are already created in ui_metrics.py with the default registry
-    # We'll keep ui_registry for compatibility with the API's metrics collection
     
 except ImportError as e:
     METRICS_AVAILABLE = False
@@ -125,6 +125,14 @@ except ImportError:
     PLOTLY_AVAILABLE = False
     plotly = None
 
+# Check if Streamlit extras are available
+try:
+    from streamlit_option_menu import option_menu
+    STREAMLIT_EXTRAS_AVAILABLE = True
+except ImportError:
+    STREAMLIT_EXTRAS_AVAILABLE = False
+    option_menu = None
+
 # Import components if dependencies are available
 if STREAMLIT_AVAILABLE and PLOTLY_AVAILABLE:
     try:
@@ -196,17 +204,69 @@ else:
     create_action_buttons = None
     show_loading_animation = None
 
-# Import main Streamlit app if available
+# Import main dashboard if available
 if STREAMLIT_AVAILABLE:
     try:
-        from .streamlit_app import AutoMLDashboard
+        # Try to import the new no-code dashboard first
+        from .dashboard import main as dashboard_main, AutoMLWizard, DataConnector, SessionState
         DASHBOARD_AVAILABLE = True
+        NOCODE_DASHBOARD = True
     except ImportError:
-        DASHBOARD_AVAILABLE = False
-        AutoMLDashboard = None
+        try:
+            # Fallback to old streamlit_app if dashboard.py doesn't exist
+            from .streamlit_app import AutoMLDashboard
+            DASHBOARD_AVAILABLE = True
+            NOCODE_DASHBOARD = False
+            dashboard_main = None
+            AutoMLWizard = None
+            DataConnector = None
+            SessionState = None
+        except ImportError:
+            DASHBOARD_AVAILABLE = False
+            NOCODE_DASHBOARD = False
+            AutoMLDashboard = None
+            dashboard_main = None
+            AutoMLWizard = None
+            DataConnector = None
+            SessionState = None
 else:
     DASHBOARD_AVAILABLE = False
+    NOCODE_DASHBOARD = False
     AutoMLDashboard = None
+    dashboard_main = None
+    AutoMLWizard = None
+    DataConnector = None
+    SessionState = None
+
+# ============================================================================
+# No-Code specific imports and helpers
+# ============================================================================
+
+class NoCodeConfig:
+    """Configuration for no-code features."""
+    
+    # Default configuration
+    DEFAULT_CONFIG = {
+        'max_file_size_mb': 1000,
+        'supported_file_types': ['csv', 'xlsx', 'xls', 'parquet', 'json'],
+        'supported_databases': ['PostgreSQL', 'MySQL', 'MongoDB', 'Snowflake', 'BigQuery', 'SQL Server'],
+        'auto_save_interval': 60,  # seconds
+        'enable_chat_assistant': True,
+        'enable_auto_ml': True,
+        'default_language': 'en',
+        'theme': 'light',
+        'enable_telemetry': True
+    }
+    
+    @classmethod
+    def get(cls, key, default=None):
+        """Get configuration value."""
+        return cls.DEFAULT_CONFIG.get(key, default)
+    
+    @classmethod
+    def update(cls, config_dict):
+        """Update configuration."""
+        cls.DEFAULT_CONFIG.update(config_dict)
 
 # ============================================================================
 # Dynamically build __all__ based on available components
@@ -214,14 +274,16 @@ else:
 
 def _build_all_list():
     """Dynamically build the __all__ list based on available components."""
-    all_list = ["__version__"]
+    all_list = ["__version__", "NoCodeConfig"]
     
     # Always include availability flags
     all_list.extend([
         "STREAMLIT_AVAILABLE",
         "PLOTLY_AVAILABLE", 
+        "STREAMLIT_EXTRAS_AVAILABLE",
         "COMPONENTS_AVAILABLE",
         "DASHBOARD_AVAILABLE",
+        "NOCODE_DASHBOARD",
         "METRICS_AVAILABLE"
     ])
     
@@ -251,57 +313,54 @@ def _build_all_list():
     all_list.extend([
         "check_ui_dependencies",
         "get_ui_status",
-        "launch_dashboard"
+        "launch_dashboard",
+        "launch_wizard",
+        "quick_start"
     ])
     
-    # Add components only if they're available
-    if DASHBOARD_AVAILABLE and AutoMLDashboard is not None:
+    # Add dashboard components
+    if NOCODE_DASHBOARD:
+        if dashboard_main is not None:
+            all_list.append("dashboard_main")
+        if AutoMLWizard is not None:
+            all_list.append("AutoMLWizard")
+        if DataConnector is not None:
+            all_list.append("DataConnector")
+        if SessionState is not None:
+            all_list.append("SessionState")
+    elif DASHBOARD_AVAILABLE and AutoMLDashboard is not None:
         all_list.append("AutoMLDashboard")
     
+    # Add components only if they're available
     if COMPONENTS_AVAILABLE:
-        # Data Quality Components
-        if DataQualityVisualizer is not None:
-            all_list.append("DataQualityVisualizer")
+        components = [
+            "DataQualityVisualizer",
+            "ModelLeaderboard",
+            "FeatureImportanceVisualizer",
+            "DriftMonitor",
+            "TrainingProgressTracker",
+            "ChatInterface",
+            "ExperimentComparator",
+            "AlertsAndNotifications",
+            "ReportGenerator",
+            "DataFlowDiagram",
+            "ModelDeploymentUI",
+            "CustomMetrics",
+            "create_sidebar_filters",
+            "create_action_buttons",
+            "show_loading_animation"
+        ]
         
-        # Model Components  
-        if ModelLeaderboard is not None:
-            all_list.append("ModelLeaderboard")
-        if FeatureImportanceVisualizer is not None:
-            all_list.append("FeatureImportanceVisualizer")
-        
-        # Monitoring Components
-        if DriftMonitor is not None:
-            all_list.append("DriftMonitor")
-        if TrainingProgressTracker is not None:
-            all_list.append("TrainingProgressTracker")
-        
-        # Interactive Components
-        if ChatInterface is not None:
-            all_list.append("ChatInterface")
-        if ExperimentComparator is not None:
-            all_list.append("ExperimentComparator")
-        
-        # Alert and Report Components
-        if AlertsAndNotifications is not None:
-            all_list.append("AlertsAndNotifications")
-        if ReportGenerator is not None:
-            all_list.append("ReportGenerator")
-        
-        # Advanced Visualizations
-        if DataFlowDiagram is not None:
-            all_list.append("DataFlowDiagram")
-        if ModelDeploymentUI is not None:
-            all_list.append("ModelDeploymentUI")
-        if CustomMetrics is not None:
-            all_list.append("CustomMetrics")
-        
-        # Utility functions
-        if create_sidebar_filters is not None:
-            all_list.append("create_sidebar_filters")
-        if create_action_buttons is not None:
-            all_list.append("create_action_buttons")
-        if show_loading_animation is not None:
-            all_list.append("show_loading_animation")
+        for component in components:
+            if globals().get(component) is not None:
+                all_list.append(component)
+    
+    # Add factory functions
+    all_list.extend([
+        "create_data_quality_visualizer",
+        "create_model_leaderboard",
+        "create_chat_interface"
+    ])
     
     return all_list
 
@@ -325,35 +384,30 @@ def check_ui_dependencies():
     dependencies = {
         "streamlit": STREAMLIT_AVAILABLE,
         "plotly": PLOTLY_AVAILABLE,
+        "streamlit_extras": STREAMLIT_EXTRAS_AVAILABLE,
         "components": COMPONENTS_AVAILABLE,
         "dashboard": DASHBOARD_AVAILABLE,
+        "nocode_dashboard": NOCODE_DASHBOARD,
         "metrics": METRICS_AVAILABLE
     }
     
     # Check for additional optional dependencies
-    try:
-        import pandas
-        dependencies["pandas"] = True
-    except ImportError:
-        dependencies["pandas"] = False
+    optional_deps = [
+        ("pandas", "pandas"),
+        ("numpy", "numpy"),
+        ("sklearn", "scikit-learn"),
+        ("prometheus_client", "prometheus-client"),
+        ("reportlab", "reportlab"),
+        ("xlsxwriter", "xlsxwriter"),
+        ("streamlit_authenticator", "streamlit-authenticator")
+    ]
     
-    try:
-        import numpy
-        dependencies["numpy"] = True
-    except ImportError:
-        dependencies["numpy"] = False
-    
-    try:
-        import sklearn
-        dependencies["sklearn"] = True
-    except ImportError:
-        dependencies["sklearn"] = False
-    
-    try:
-        import prometheus_client
-        dependencies["prometheus_client"] = True
-    except ImportError:
-        dependencies["prometheus_client"] = False
+    for module_name, package_name in optional_deps:
+        try:
+            __import__(module_name)
+            dependencies[package_name] = True
+        except ImportError:
+            dependencies[package_name] = False
     
     return dependencies
 
@@ -383,8 +437,10 @@ def get_ui_status():
             "custom_metrics": CustomMetrics is not None
         },
         "dashboard_available": DASHBOARD_AVAILABLE,
+        "nocode_enabled": NOCODE_DASHBOARD,
         "metrics_enabled": METRICS_AVAILABLE,
-        "metrics_module": UIMetrics is not None
+        "metrics_module": UIMetrics is not None,
+        "config": NoCodeConfig.DEFAULT_CONFIG
     }
     
     # Calculate overall readiness
@@ -392,16 +448,26 @@ def get_ui_status():
     available_components = sum(status["components"].values())
     status["readiness"] = f"{available_components}/{total_components} components available"
     
+    # Add feature flags
+    status["features"] = {
+        "wizard": AutoMLWizard is not None,
+        "data_connector": DataConnector is not None,
+        "session_state": SessionState is not None,
+        "chat_enabled": NoCodeConfig.get('enable_chat_assistant'),
+        "auto_ml_enabled": NoCodeConfig.get('enable_auto_ml')
+    }
+    
     return status
 
 
 @track_ui_response_time("dashboard", "launch")
-def launch_dashboard(config=None, **kwargs):
+def launch_dashboard(config=None, mode="nocode", **kwargs):
     """
     Launch the Streamlit dashboard application.
     
     Args:
         config (dict, optional): Configuration dictionary
+        mode (str): Launch mode - "nocode" (default) or "classic"
         **kwargs: Additional arguments passed to the dashboard
     
     Returns:
@@ -428,9 +494,13 @@ def launch_dashboard(config=None, **kwargs):
             "Please check that all required files are present."
         )
     
+    # Update configuration if provided
+    if config:
+        NoCodeConfig.update(config)
+    
     # Track dashboard launch
     tenant_id = kwargs.get('tenant_id', 'default')
-    user_type = kwargs.get('user_type', 'admin')
+    user_type = kwargs.get('user_type', 'standard')
     
     start_ui_session(page="dashboard", user_type=user_type, tenant_id=tenant_id)
     track_page_view("dashboard", "launch", tenant_id, user_type)
@@ -440,35 +510,58 @@ def launch_dashboard(config=None, **kwargs):
     import subprocess
     from pathlib import Path
     
-    # Get the path to the streamlit app
+    # Get the path to the appropriate app
     ui_module_path = Path(__file__).parent
-    app_path = ui_module_path / "streamlit_app.py"
+    
+    if mode == "nocode" and NOCODE_DASHBOARD:
+        app_path = ui_module_path / "dashboard.py"
+    else:
+        app_path = ui_module_path / "streamlit_app.py"
     
     if not app_path.exists():
-        raise FileNotFoundError(f"Streamlit app not found at {app_path}")
+        # Try alternative path
+        alt_path = ui_module_path / ("dashboard.py" if mode == "nocode" else "streamlit_app.py")
+        if alt_path.exists():
+            app_path = alt_path
+        else:
+            raise FileNotFoundError(f"Dashboard app not found at {app_path}")
     
     # Prepare command
     cmd = [sys.executable, "-m", "streamlit", "run", str(app_path)]
     
-    # Add configuration if provided
-    if config:
-        import json
-        import tempfile
-        
-        # Save config to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(config, f)
-            config_path = f.name
-        
-        cmd.extend(["--", "--config", config_path])
+    # Add Streamlit configuration
+    streamlit_args = [
+        "--server.port", str(kwargs.get('port', 8501)),
+        "--server.address", kwargs.get('address', '0.0.0.0'),
+        "--browser.gatherUsageStats", "false",
+        "--server.fileWatcherType", "none" if kwargs.get('production', False) else "auto"
+    ]
     
-    # Add any additional arguments
-    for key, value in kwargs.items():
-        if key not in ['tenant_id', 'user_type']:  # Skip already used kwargs
-            cmd.extend([f"--{key}", str(value)])
+    cmd.extend(streamlit_args)
+    
+    # Add application arguments after "--"
+    if config or kwargs:
+        cmd.append("--")
+        
+        if config:
+            import json
+            import tempfile
+            
+            # Save config to temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(config, f)
+                config_path = f.name
+            
+            cmd.extend(["--config", config_path])
+        
+        # Add any additional arguments
+        for key, value in kwargs.items():
+            if key not in ['tenant_id', 'user_type', 'port', 'address', 'production']:
+                cmd.extend([f"--{key}", str(value)])
     
     # Launch the dashboard
-    print(f"Launching AutoML Dashboard...")
+    print(f"🚀 Launching AutoML Dashboard ({'No-Code' if mode == 'nocode' else 'Classic'} Mode)...")
+    print(f"📍 Access at: http://localhost:{kwargs.get('port', 8501)}")
     print(f"Command: {' '.join(cmd)}")
     
     try:
@@ -483,8 +576,55 @@ def launch_dashboard(config=None, **kwargs):
             ).inc()
         raise
     except KeyboardInterrupt:
-        print("\nDashboard stopped by user")
+        print("\n✋ Dashboard stopped by user")
         end_ui_session(page="dashboard", tenant_id=tenant_id)
+
+
+def launch_wizard(**kwargs):
+    """
+    Launch the AutoML wizard directly.
+    
+    Args:
+        **kwargs: Arguments passed to the wizard
+    
+    Returns:
+        None
+    """
+    if not NOCODE_DASHBOARD:
+        raise ImportError("No-code dashboard is not available. Please install required dependencies.")
+    
+    # Configure wizard mode
+    config = {
+        'start_page': 'wizard',
+        'wizard_mode': True
+    }
+    
+    return launch_dashboard(config=config, mode="nocode", **kwargs)
+
+
+def quick_start(file_path=None, target_column=None, **kwargs):
+    """
+    Quick start AutoML training with minimal configuration.
+    
+    Args:
+        file_path (str, optional): Path to data file
+        target_column (str, optional): Target column name
+        **kwargs: Additional configuration
+    
+    Returns:
+        None
+    """
+    if not NOCODE_DASHBOARD:
+        raise ImportError("No-code features are not available. Please install required dependencies.")
+    
+    config = {
+        'quick_start': True,
+        'initial_file': file_path,
+        'target_column': target_column,
+        'auto_train': kwargs.get('auto_train', True)
+    }
+    
+    return launch_dashboard(config=config, mode="nocode", **kwargs)
 
 
 # ============================================================================
@@ -545,12 +685,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 if STREAMLIT_AVAILABLE and PLOTLY_AVAILABLE:
-    if COMPONENTS_AVAILABLE:
+    if NOCODE_DASHBOARD:
+        logger.info(f"AutoML UI module v{__version__} loaded with No-Code Dashboard")
+    elif COMPONENTS_AVAILABLE:
         logger.info(f"AutoML UI module v{__version__} loaded successfully with all components")
-        if METRICS_AVAILABLE:
-            logger.info("UI metrics collection enabled via ui_metrics.py")
     else:
         logger.warning("AutoML UI module loaded but some components are unavailable")
+    
+    if METRICS_AVAILABLE:
+        logger.info("UI metrics collection enabled")
 else:
     missing_deps = []
     if not STREAMLIT_AVAILABLE:
@@ -565,31 +708,40 @@ else:
 
 # Print status if running as main module
 if __name__ == "__main__":
-    print("AutoML Platform UI Module")
-    print("=" * 50)
+    print("AutoML Platform UI Module - No-Code Edition")
+    print("=" * 60)
     print(f"Version: {__version__}")
-    print("\nDependency Status:")
+    print("\n📊 Dependency Status:")
     
     deps = check_ui_dependencies()
     for dep, available in deps.items():
-        status = "✓" if available else "✗"
+        status = "✅" if available else "❌"
         print(f"  {status} {dep}")
     
-    print("\nComponent Status:")
+    print("\n🧩 Component Status:")
     ui_status = get_ui_status()
     for component, available in ui_status["components"].items():
-        status = "✓" if available else "✗"
+        status = "✅" if available else "❌"
         print(f"  {status} {component}")
     
-    print(f"\nOverall: {ui_status['readiness']}")
+    print(f"\n📈 Overall: {ui_status['readiness']}")
+    
+    if NOCODE_DASHBOARD:
+        print("\n✨ No-Code Features:")
+        for feature, available in ui_status["features"].items():
+            status = "✅" if available else "❌"
+            print(f"  {status} {feature}")
     
     if METRICS_AVAILABLE:
-        print("\nMetrics collection: Enabled")
-        print("  Using: ui_metrics.py module")
+        print("\n📊 Metrics collection: Enabled")
     
     if DASHBOARD_AVAILABLE:
-        print("\nTo launch the dashboard, run:")
-        print("  python -m automl_platform.ui")
-        print("or in Python:")
-        print("  from automl_platform.ui import launch_dashboard")
-        print("  launch_dashboard()")
+        print("\n🚀 Quick Start Commands:")
+        print("  Launch Dashboard:  automl-dashboard")
+        print("  Launch Wizard:     automl-wizard")
+        print("  Python:           from automl_platform.ui import launch_dashboard")
+        print("                    launch_dashboard()")
+        print("\n💡 Tips:")
+        print("  - For production: launch_dashboard(production=True)")
+        print("  - Custom port:    launch_dashboard(port=8080)")
+        print("  - Quick train:    quick_start('data.csv', 'target')")
