@@ -303,6 +303,63 @@ class TemplateLoader:
         """
         template = self.get_template(name)
         if template is None:
+            raise ValueError(f"Template '{name}' not found")
+        
+        data = template.to_dict()
+        
+        if format == "yaml":
+            return yaml.dump(data, default_flow_style=False, sort_keys=False)
+        elif format == "json":
+            return json.dumps(data, indent=2)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+    
+    def get_template_info(self, name: str) -> Dict[str, Any]:
+        """
+        Get detailed information about a template.
+        
+        Args:
+            name: Template name
+            
+        Returns:
+            Template information dictionary
+        """
+        template = self.get_template(name)
+        if template is None:
+            raise ValueError(f"Template '{name}' not found")
+        
+        info = {
+            "name": template.metadata.name,
+            "description": template.metadata.description,
+            "author": template.metadata.author,
+            "version": template.metadata.version,
+            "tags": template.metadata.tags,
+            "task": template.config.get("task", "auto"),
+            "algorithms": template.config.get("algorithms", []),
+            "excluded_algorithms": template.config.get("exclude_algorithms", []),
+            "hpo_method": template.config.get("hpo", {}).get("method", "none"),
+            "cv_folds": template.config.get("cv", {}).get("n_folds", 5),
+            "ensemble_method": template.config.get("ensemble", {}).get("method", "none"),
+            "metrics": template.config.get("metrics", []),
+            "features": {
+                "preprocessing": "preprocessing" in template.config,
+                "feature_engineering": bool(template.config.get("preprocessing", {}).get("feature_engineering")),
+                "monitoring": "monitoring" in template.config,
+                "export": "export" in template.config,
+                "interpretation": "interpretation" in template.config
+            }
+        }
+        
+        # Add business rules if present
+        if "business_rules" in template.config:
+            info["has_business_rules"] = True
+            rules = template.config["business_rules"]
+            if "probability_threshold" in rules:
+                info["probability_threshold"] = rules["probability_threshold"]
+            if "cost_matrix" in rules:
+                info["cost_sensitive"] = True
+        
+        return info:
             available = ", ".join(self._templates_cache.keys())
             raise ValueError(
                 f"Template '{name}' not found. "
