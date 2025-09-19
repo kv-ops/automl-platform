@@ -1,4 +1,4 @@
-"""Enhanced configuration management for AutoML platform with Storage, Monitoring, Workers, Billing, and RGPD."""
+"""Enhanced configuration management for AutoML platform with Storage, Monitoring, Workers, Billing, RGPD, and Expert Mode."""
 
 import yaml
 from pathlib import Path
@@ -608,7 +608,7 @@ class APIConfig:
 
 @dataclass
 class AutoMLConfig:
-    """Enhanced AutoML configuration with all components."""
+    """Enhanced AutoML configuration with all components including Expert Mode."""
     
     # Component configurations
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -618,9 +618,9 @@ class AutoMLConfig:
     api: APIConfig = field(default_factory=APIConfig)
     billing: BillingConfig = field(default_factory=BillingConfig)
     rgpd: RGPDConfig = field(default_factory=RGPDConfig)
-    connectors: ConnectorConfig = field(default_factory=ConnectorConfig)  # NEW
-    streaming: StreamingConfig = field(default_factory=StreamingConfig)  # NEW
-    feature_store: FeatureStoreConfig = field(default_factory=FeatureStoreConfig)  # NEW
+    connectors: ConnectorConfig = field(default_factory=ConnectorConfig)
+    streaming: StreamingConfig = field(default_factory=StreamingConfig)
+    feature_store: FeatureStoreConfig = field(default_factory=FeatureStoreConfig)
     
     # General settings
     environment: str = "development"  # "development", "staging", "production"
@@ -628,6 +628,27 @@ class AutoMLConfig:
     random_state: int = 42
     n_jobs: int = -1
     verbose: int = 1
+    
+    # EXPERT MODE CONFIGURATION
+    expert_mode: bool = field(default=False)
+    """
+    Expert mode flag that controls visibility of advanced parameters.
+    
+    When False (default):
+    - Hides advanced algorithm selection
+    - Uses automatic HPO configuration
+    - Simplifies UI/CLI options
+    - Applies sensible defaults for all settings
+    
+    When True:
+    - Shows all algorithm choices
+    - Allows manual HPO configuration
+    - Exposes distributed computing options (Ray workers, GPU settings)
+    - Enables fine-tuning of all parameters
+    
+    Can be overridden by environment variable: AUTOML_EXPERT_MODE=true
+    Useful for SaaS deployments where different user tiers get different complexity levels.
+    """
     
     # Data preprocessing
     max_missing_ratio: float = 0.5
@@ -759,6 +780,32 @@ class AutoMLConfig:
         
         return True
     
+    def get_simplified_algorithms(self) -> List[str]:
+        """Get simplified algorithm list for non-expert mode"""
+        if self.expert_mode:
+            return self.algorithms
+        else:
+            # Return only the most reliable and easy-to-understand algorithms
+            return ["XGBoost", "RandomForest", "LogisticRegression", "LinearRegression"]
+    
+    def get_simplified_hpo_config(self) -> Dict[str, Any]:
+        """Get simplified HPO configuration for non-expert mode"""
+        if self.expert_mode:
+            return {
+                "method": self.hpo_method,
+                "n_iter": self.hpo_n_iter,
+                "time_budget": self.hpo_time_budget,
+                "early_stopping_rounds": self.early_stopping_rounds
+            }
+        else:
+            # Use optimized defaults for non-experts
+            return {
+                "method": "optuna",
+                "n_iter": 20,  # Reduced iterations for faster results
+                "time_budget": 600,  # 10 minutes max
+                "early_stopping_rounds": 10
+            }
+    
     @classmethod
     def from_yaml(cls, filepath: str) -> "AutoMLConfig":
         """Load configuration from YAML file with nested configs."""
@@ -766,6 +813,14 @@ class AutoMLConfig:
             config_dict = yaml.safe_load(f)
         
         if config_dict:
+            # Check for expert mode in environment variable first
+            expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
+            if expert_mode_env in ["true", "1", "yes", "on"]:
+                config_dict['expert_mode'] = True
+            elif expert_mode_env in ["false", "0", "no", "off"]:
+                config_dict['expert_mode'] = False
+            # Otherwise use value from YAML or default
+            
             # Handle nested configurations
             if 'storage' in config_dict and isinstance(config_dict['storage'], dict):
                 config_dict['storage'] = StorageConfig(**config_dict['storage'])
@@ -789,13 +844,13 @@ class AutoMLConfig:
                 config_dict['rgpd'] = RGPDConfig(**config_dict['rgpd'])
             
             if 'connectors' in config_dict and isinstance(config_dict['connectors'], dict):
-                config_dict['connectors'] = ConnectorConfig(**config_dict['connectors'])  # NEW
+                config_dict['connectors'] = ConnectorConfig(**config_dict['connectors'])
             
             if 'streaming' in config_dict and isinstance(config_dict['streaming'], dict):
-                config_dict['streaming'] = StreamingConfig(**config_dict['streaming'])  # NEW
+                config_dict['streaming'] = StreamingConfig(**config_dict['streaming'])
             
             if 'feature_store' in config_dict and isinstance(config_dict['feature_store'], dict):
-                config_dict['feature_store'] = FeatureStoreConfig(**config_dict['feature_store'])  # NEW
+                config_dict['feature_store'] = FeatureStoreConfig(**config_dict['feature_store'])
             
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
@@ -809,7 +864,7 @@ class AutoMLConfig:
         
         # Convert dataclasses to dicts for YAML serialization
         for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 'rgpd',
-                   'connectors', 'streaming', 'feature_store']:  # Added new configs
+                   'connectors', 'streaming', 'feature_store']:
             if key in config_dict and hasattr(config_dict[key], '__dict__'):
                 config_dict[key] = asdict(config_dict[key])
         
@@ -889,7 +944,8 @@ class AutoMLConfig:
                 "max_models_to_train": 10,
                 "worker.max_workers": 2,
                 "billing.plan_type": "trial",
-                "rgpd.enabled": False  # Disabled in dev for easier testing
+                "rgpd.enabled": False,  # Disabled in dev for easier testing
+                "expert_mode": True  # Enable expert mode in dev by default
             },
             "staging": {
                 "debug": False,
@@ -898,7 +954,8 @@ class AutoMLConfig:
                 "max_models_to_train": 30,
                 "worker.max_workers": 4,
                 "billing.plan_type": "pro",
-                "rgpd.enabled": True
+                "rgpd.enabled": True,
+                "expert_mode": False  # Simplified for staging tests
             },
             "production": {
                 "debug": False,
@@ -910,7 +967,8 @@ class AutoMLConfig:
                 "monitoring.alerting_enabled": True,
                 "billing.enable_metering": True,
                 "rgpd.enabled": True,
-                "rgpd.identity_verification_required": True
+                "rgpd.identity_verification_required": True,
+                "expert_mode": False  # Default to simplified in production
             }
         }
         
@@ -919,6 +977,13 @@ class AutoMLConfig:
     def apply_environment_config(self) -> None:
         """Apply environment-specific settings."""
         env_config = self.get_environment_config()
+        
+        # Check for expert mode in environment variable (takes precedence)
+        expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
+        if expert_mode_env in ["true", "1", "yes", "on"]:
+            env_config['expert_mode'] = True
+        elif expert_mode_env in ["false", "0", "no", "off"]:
+            env_config['expert_mode'] = False
         
         for key, value in env_config.items():
             if '.' in key:
@@ -933,8 +998,18 @@ class AutoMLConfig:
 
 
 # Convenience functions
-def load_config(filepath: str = None, environment: str = None) -> AutoMLConfig:
-    """Load configuration with environment overrides."""
+def load_config(filepath: str = None, environment: str = None, expert_mode: Optional[bool] = None) -> AutoMLConfig:
+    """
+    Load configuration with environment overrides and expert mode support.
+    
+    Args:
+        filepath: Path to YAML config file
+        environment: Environment name (development, staging, production)
+        expert_mode: Override expert mode setting (None = use env var or config)
+    
+    Returns:
+        AutoMLConfig instance with appropriate settings
+    """
     if filepath and Path(filepath).exists():
         config = AutoMLConfig.from_yaml(filepath)
     else:
@@ -944,6 +1019,23 @@ def load_config(filepath: str = None, environment: str = None) -> AutoMLConfig:
     if environment:
         config.environment = environment
         config.apply_environment_config()
+    
+    # Override expert mode if specified
+    if expert_mode is not None:
+        config.expert_mode = expert_mode
+    else:
+        # Check environment variable
+        expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
+        if expert_mode_env in ["true", "1", "yes", "on"]:
+            config.expert_mode = True
+        elif expert_mode_env in ["false", "0", "no", "off"]:
+            config.expert_mode = False
+    
+    # Log expert mode status
+    if config.expert_mode:
+        logger.info("Expert mode ENABLED - All advanced options available")
+    else:
+        logger.info("Expert mode DISABLED - Using simplified configuration")
     
     # Validate configuration
     config.validate()
