@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Main entry point for AutoML Platform CLI.
-Provides command-line interface for training and prediction with template support.
+Provides command-line interface for training and prediction with template support and expert mode.
 """
 
 import argparse
@@ -16,7 +16,7 @@ import warnings
 from tabulate import tabulate
 
 # Import platform modules
-from automl_platform.config import AutoMLConfig
+from automl_platform.config import AutoMLConfig, load_config
 from automl_platform.orchestrator import AutoMLOrchestrator
 from automl_platform.inference import load_pipeline, predict, predict_proba, save_predictions
 from automl_platform.data_prep import validate_data
@@ -52,9 +52,13 @@ logger = logging.getLogger(__name__)
 
 
 def train(args):
-    """Train AutoML model with optional template support."""
+    """Train AutoML model with optional template support and expert mode."""
     logger.info("="*80)
     logger.info("AUTOML PLATFORM - TRAINING MODE")
+    if args.expert:
+        logger.info("🎓 EXPERT MODE ENABLED - All advanced options available")
+    else:
+        logger.info("🚀 SIMPLIFIED MODE - Using optimized defaults")
     logger.info("="*80)
     
     # Initialize template loader
@@ -86,7 +90,7 @@ def train(args):
             
     elif args.config:
         logger.info(f"Loading configuration from {args.config}")
-        config = AutoMLConfig.from_yaml(args.config)
+        config = load_config(args.config, expert_mode=args.expert)
         
         # Apply template on top of config if specified
         if args.template_override:
@@ -98,23 +102,62 @@ def train(args):
                 sys.exit(1)
     else:
         logger.info("Using default configuration")
-        config = AutoMLConfig()
+        config = AutoMLConfig(expert_mode=args.expert)
     
-    # Override config with command line arguments
-    if args.cv_folds:
-        config.cv_folds = args.cv_folds
-    if args.algorithms:
-        config.algorithms = args.algorithms.split(',')
-    if args.exclude:
-        config.exclude_algorithms = args.exclude.split(',')
-    if args.hpo_method:
-        config.hpo_method = args.hpo_method
-    if args.hpo_iter:
-        config.hpo_n_iter = args.hpo_iter
-    if args.scoring:
-        config.scoring = args.scoring
-    if args.ensemble:
-        config.ensemble_method = args.ensemble
+    # Set expert mode from command line
+    config.expert_mode = args.expert
+    
+    # Handle expert mode vs simplified mode parameters
+    if args.expert:
+        # In expert mode, allow all command-line overrides
+        if args.cv_folds:
+            config.cv_folds = args.cv_folds
+        if args.algorithms:
+            config.algorithms = args.algorithms.split(',')
+        if args.exclude:
+            config.exclude_algorithms = args.exclude.split(',')
+        if args.hpo_method:
+            config.hpo_method = args.hpo_method
+        if args.hpo_iter:
+            config.hpo_n_iter = args.hpo_iter
+        if args.scoring:
+            config.scoring = args.scoring
+        if args.ensemble:
+            config.ensemble_method = args.ensemble
+        if args.n_workers:
+            config.worker.max_workers = args.n_workers
+        if args.gpu:
+            config.worker.enable_gpu_queue = True
+            config.worker.gpu_workers = args.gpu_workers if args.gpu_workers else 1
+    else:
+        # In simplified mode, use optimized defaults
+        logger.info("Using simplified configuration with optimized defaults:")
+        
+        # Apply simplified settings
+        simplified_hpo = config.get_simplified_hpo_config()
+        config.hpo_method = simplified_hpo['method']
+        config.hpo_n_iter = simplified_hpo['n_iter']
+        config.hpo_time_budget = simplified_hpo['time_budget']
+        config.early_stopping_rounds = simplified_hpo['early_stopping_rounds']
+        
+        # Use simplified algorithm list
+        config.algorithms = config.get_simplified_algorithms()
+        
+        # Set simplified defaults
+        config.cv_folds = 3  # Faster validation
+        config.ensemble_method = "voting"  # Simpler ensemble
+        config.worker.max_workers = 2  # Limited parallelism
+        
+        # Show simplified configuration
+        logger.info(f"  • Algorithms: {', '.join(config.algorithms)}")
+        logger.info(f"  • HPO iterations: {config.hpo_n_iter}")
+        logger.info(f"  • Time budget: {config.hpo_time_budget}s")
+        logger.info(f"  • CV folds: {config.cv_folds}")
+        logger.info(f"  • Workers: {config.worker.max_workers}")
+        
+        # Override with basic parameters if provided
+        if args.scoring:
+            config.scoring = args.scoring
     
     # Validate configuration
     try:
@@ -168,10 +211,21 @@ def train(args):
     output_path.mkdir(parents=True, exist_ok=True)
     config.output_dir = str(output_path)
     
-    # Save configuration (including template info)
+    # Save configuration (including template and expert mode info)
     config_path = output_path / "config.yaml"
     config.to_yaml(str(config_path))
     logger.info(f"Configuration saved to {config_path}")
+    
+    # Save mode information
+    mode_info = {
+        "expert_mode": config.expert_mode,
+        "simplified_algorithms": config.get_simplified_algorithms() if not config.expert_mode else None,
+        "simplified_hpo": config.get_simplified_hpo_config() if not config.expert_mode else None
+    }
+    mode_info_path = output_path / "mode_info.json"
+    with open(mode_info_path, 'w') as f:
+        json.dump(mode_info, f, indent=2)
+    logger.info(f"Mode information saved to {mode_info_path}")
     
     # Save template info if used
     if args.template:
@@ -189,14 +243,20 @@ def train(args):
     logger.info("="*80)
     logger.info("TRAINING CONFIGURATION")
     logger.info("="*80)
+    logger.info(f"Mode: {'Expert' if config.expert_mode else 'Simplified'}")
     logger.info(f"Task: {args.task}")
     if args.template:
         logger.info(f"Template: {args.template}")
     logger.info(f"CV Folds: {config.cv_folds}")
-    logger.info(f"HPO Method: {config.hpo_method}")
-    logger.info(f"HPO Iterations: {config.hpo_n_iter}")
+    if config.expert_mode:
+        logger.info(f"HPO Method: {config.hpo_method}")
+        logger.info(f"HPO Iterations: {config.hpo_n_iter}")
     logger.info(f"Scoring Metric: {config.scoring}")
-    logger.info(f"Ensemble Method: {config.ensemble_method}")
+    if config.expert_mode:
+        logger.info(f"Ensemble Method: {config.ensemble_method}")
+        logger.info(f"Workers: {config.worker.max_workers}")
+        if config.worker.enable_gpu_queue:
+            logger.info(f"GPU Workers: {config.worker.gpu_workers}")
     logger.info(f"Algorithms ({len(config.algorithms)}): {', '.join(config.algorithms[:5])}...")
     logger.info("="*80)
     
@@ -275,6 +335,8 @@ def train(args):
     if leaderboard is not None and len(leaderboard) > 0:
         logger.info(f"Best model: {leaderboard.iloc[0]['model']}")
         logger.info(f"Best CV score: {leaderboard.iloc[0]['cv_score']:.4f}")
+    if not config.expert_mode:
+        logger.info("\n💡 TIP: Use --expert flag to access advanced configuration options")
     logger.info("="*80)
 
 
@@ -473,6 +535,8 @@ def predict_cmd(args):
     """Make predictions using saved model."""
     logger.info("="*80)
     logger.info("AUTOML PLATFORM - PREDICTION MODE")
+    if args.expert:
+        logger.info("🎓 EXPERT MODE ENABLED")
     logger.info("="*80)
     
     # Load pipeline
@@ -489,6 +553,10 @@ def predict_cmd(args):
     # Check if model was trained with a template
     if 'template_used' in metadata:
         logger.info(f"Model was trained using template: {metadata['template_used']}")
+    
+    # Check if model was trained in expert mode
+    if 'expert_mode' in metadata:
+        logger.info(f"Model was trained in {'expert' if metadata['expert_mode'] else 'simplified'} mode")
     
     # Load data
     logger.info(f"Loading data from {args.data}")
@@ -510,9 +578,10 @@ def predict_cmd(args):
     # Make predictions
     logger.info("Generating predictions...")
     try:
-        if args.batch_size:
+        if args.expert and args.batch_size:
             from automl_platform.inference import predict_batch
             predictions = predict_batch(pipeline, df, batch_size=args.batch_size)
+            logger.info(f"Using batch prediction with size: {args.batch_size}")
         else:
             predictions = predict(pipeline, df)
     except Exception as e:
@@ -573,18 +642,28 @@ def api(args):
     """Start API server."""
     logger.info("="*80)
     logger.info("AUTOML PLATFORM - API MODE")
+    if args.expert:
+        logger.info("🎓 EXPERT MODE ENABLED - All API endpoints available")
+    else:
+        logger.info("🚀 SIMPLIFIED MODE - Core API endpoints only")
     logger.info("="*80)
     
     try:
         import uvicorn
         from automl_platform.api.api import app
+        
+        # Set expert mode in environment for API
+        import os
+        os.environ["AUTOML_EXPERT_MODE"] = "true" if args.expert else "false"
+        
     except ImportError:
         logger.error("API dependencies not installed. Run: pip install automl-platform[api]")
         sys.exit(1)
     
     logger.info(f"Starting API server on {args.host}:{args.port}")
-    logger.info(f"Workers: {args.workers}")
-    logger.info(f"Reload: {args.reload}")
+    if args.expert:
+        logger.info(f"Workers: {args.workers}")
+        logger.info(f"Reload: {args.reload}")
     
     uvicorn.run(
         "automl_platform.api.api:app",
@@ -603,6 +682,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Train with simplified mode (default)
+  %(prog)s train --data data.csv --target churn
+  
+  # Train with expert mode (all options available)
+  %(prog)s train --expert --data data.csv --target churn --algorithms XGBoost,LightGBM --hpo-iter 100
+  
   # Train with a template
   %(prog)s train --template customer_churn --data data.csv --target churn
   
@@ -615,17 +700,14 @@ Examples:
   # Create custom template
   %(prog)s create-template my_template --from-config config.yaml --description "My custom template"
   
-  # Train with custom configuration
-  %(prog)s train --data data.csv --target target_column --config config.yaml
-  
-  # Train with template override on existing config
-  %(prog)s train --data data.csv --target target --config base.yaml --template-override fraud_detection
-  
   # Make predictions
   %(prog)s predict --model model.joblib --data test.csv --output predictions.csv
   
   # Start API server
   %(prog)s api --host 0.0.0.0 --port 8000
+  
+  # Start API server in expert mode
+  %(prog)s api --expert --host 0.0.0.0 --port 8000 --workers 4
         """
     )
     
@@ -637,6 +719,8 @@ Examples:
     parser.add_argument('--log-file', help='Log to file')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug mode with full stack traces')
+    parser.add_argument('--expert', action='store_true',
+                       help='Enable expert mode to access all advanced options')
     
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
@@ -647,18 +731,12 @@ Examples:
     train_parser.add_argument('--task', default='auto',
                             choices=['auto', 'classification', 'regression', 'timeseries'],
                             help='Task type (default: auto-detect)')
-    train_parser.add_argument('--template', help='Use a predefined template (e.g., customer_churn, fraud_detection)')
+    train_parser.add_argument('--template', help='Use a predefined template')
     train_parser.add_argument('--template-override', help='Apply template on top of existing config')
     train_parser.add_argument('--config', help='Path to configuration YAML file')
-    train_parser.add_argument('--cv-folds', type=int, help='Number of CV folds')
-    train_parser.add_argument('--algorithms', help='Comma-separated list of algorithms to test')
-    train_parser.add_argument('--exclude', help='Comma-separated list of algorithms to exclude')
-    train_parser.add_argument('--hpo-method', choices=['grid', 'random', 'optuna', 'none'],
-                            help='Hyperparameter optimization method')
-    train_parser.add_argument('--hpo-iter', type=int, help='Number of HPO iterations')
+    
+    # Basic options (always visible)
     train_parser.add_argument('--scoring', help='Scoring metric')
-    train_parser.add_argument('--ensemble', choices=['voting', 'stacking', 'none'],
-                            help='Ensemble method')
     train_parser.add_argument('--output', default='./automl_output',
                             help='Output directory (default: ./automl_output)')
     train_parser.add_argument('--top-k', type=int, default=10,
@@ -667,6 +745,21 @@ Examples:
                             help='Generate HTML report')
     train_parser.add_argument('--force', action='store_true',
                             help='Force training even with data quality issues')
+    
+    # Expert options (only meaningful in expert mode)
+    expert_group = train_parser.add_argument_group('expert options', 
+                                                   'Advanced options (requires --expert flag)')
+    expert_group.add_argument('--cv-folds', type=int, help='Number of CV folds')
+    expert_group.add_argument('--algorithms', help='Comma-separated list of algorithms to test')
+    expert_group.add_argument('--exclude', help='Comma-separated list of algorithms to exclude')
+    expert_group.add_argument('--hpo-method', choices=['grid', 'random', 'optuna', 'none'],
+                            help='Hyperparameter optimization method')
+    expert_group.add_argument('--hpo-iter', type=int, help='Number of HPO iterations')
+    expert_group.add_argument('--ensemble', choices=['voting', 'stacking', 'none'],
+                            help='Ensemble method')
+    expert_group.add_argument('--n-workers', type=int, help='Number of parallel workers')
+    expert_group.add_argument('--gpu', action='store_true', help='Enable GPU acceleration')
+    expert_group.add_argument('--gpu-workers', type=int, help='Number of GPU workers')
     
     # Template commands
     template_list_parser = subparsers.add_parser('list-templates', 
@@ -698,15 +791,21 @@ Examples:
     predict_parser.add_argument('--output', help='Output file path (if not specified, prints to console)')
     predict_parser.add_argument('--proba', action='store_true',
                               help='Include probability predictions')
-    predict_parser.add_argument('--batch-size', type=int,
-                              help='Batch size for large datasets')
+    
+    # Expert option for prediction
+    predict_expert_group = predict_parser.add_argument_group('expert options')
+    predict_expert_group.add_argument('--batch-size', type=int,
+                              help='Batch size for large datasets (expert mode only)')
     
     # API command
     api_parser = subparsers.add_parser('api', help='Start API server')
     api_parser.add_argument('--host', default='0.0.0.0', help='API host')
     api_parser.add_argument('--port', type=int, default=8000, help='API port')
-    api_parser.add_argument('--workers', type=int, default=1, help='Number of workers')
-    api_parser.add_argument('--reload', action='store_true', help='Auto-reload on code changes')
+    
+    # Expert options for API
+    api_expert_group = api_parser.add_argument_group('expert options')
+    api_expert_group.add_argument('--workers', type=int, default=1, help='Number of workers')
+    api_expert_group.add_argument('--reload', action='store_true', help='Auto-reload on code changes')
     
     args = parser.parse_args()
     
@@ -714,6 +813,43 @@ Examples:
     if args.quiet:
         args.verbose = 0
     setup_logging(args.verbose, args.log_file)
+    
+    # Show expert mode warning for advanced options used without --expert flag
+    if hasattr(args, 'expert') and not args.expert:
+        expert_options_used = []
+        
+        if args.command == 'train':
+            if args.cv_folds:
+                expert_options_used.append('--cv-folds')
+            if args.algorithms:
+                expert_options_used.append('--algorithms')
+            if args.exclude:
+                expert_options_used.append('--exclude')
+            if args.hpo_method:
+                expert_options_used.append('--hpo-method')
+            if args.hpo_iter:
+                expert_options_used.append('--hpo-iter')
+            if args.ensemble:
+                expert_options_used.append('--ensemble')
+            if hasattr(args, 'n_workers') and args.n_workers:
+                expert_options_used.append('--n-workers')
+            if hasattr(args, 'gpu') and args.gpu:
+                expert_options_used.append('--gpu')
+        elif args.command == 'predict':
+            if hasattr(args, 'batch_size') and args.batch_size:
+                expert_options_used.append('--batch-size')
+        elif args.command == 'api':
+            if hasattr(args, 'workers') and args.workers != 1:
+                expert_options_used.append('--workers')
+            if hasattr(args, 'reload') and args.reload:
+                expert_options_used.append('--reload')
+        
+        if expert_options_used:
+            logger.warning("="*80)
+            logger.warning("⚠️  EXPERT OPTIONS IGNORED")
+            logger.warning(f"The following options require --expert flag: {', '.join(expert_options_used)}")
+            logger.warning("Add --expert to enable these advanced options")
+            logger.warning("="*80)
     
     # Execute command
     if args.command == 'train':
