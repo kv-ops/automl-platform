@@ -10,7 +10,7 @@ services:
     image: postgres:15-alpine
     container_name: automl_postgres
     environment:
-      POSTGRES_MULTIPLE_DATABASES: automl,keycloak,airflow
+      POSTGRES_MULTIPLE_DATABASES: automl,keycloak,airflow,metadata
       POSTGRES_DB: automl
       POSTGRES_USER: ${POSTGRES_USER:-automl}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-automl_secret}
@@ -50,15 +50,18 @@ services:
       timeout: 5s
       retries: 5
 
-  # MinIO - S3-compatible object storage
+  # MinIO - S3-compatible object storage for datasets and artifacts
   minio:
     image: minio/minio:RELEASE.2024-01-01T16-36-33Z
     container_name: automl_minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      # Credentials for object storage
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
       MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+      # Multi-tenant buckets configuration
+      MINIO_DEFAULT_BUCKETS: models,datasets,artifacts,reports,backups,user-uploads
     volumes:
       - minio_data:/data
     ports:
@@ -72,7 +75,7 @@ services:
       timeout: 20s
       retries: 3
 
-  # Create MinIO buckets
+  # Create MinIO buckets - Initialize storage structure
   minio-init:
     image: minio/mc:RELEASE.2024-01-01T16-36-33Z
     container_name: automl_minio_init
@@ -81,17 +84,239 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin123};
       /usr/bin/mc mb -p myminio/models;
       /usr/bin/mc mb -p myminio/datasets;
       /usr/bin/mc mb -p myminio/artifacts;
       /usr/bin/mc mb -p myminio/reports;
       /usr/bin/mc mb -p myminio/backups;
+      /usr/bin/mc mb -p myminio/user-uploads;
       /usr/bin/mc policy set public myminio/reports;
+      /usr/bin/mc admin user add myminio automl-service ${MINIO_SERVICE_PASSWORD:-service123};
+      /usr/bin/mc admin policy set myminio readwrite user=automl-service;
       exit 0;
       "
     networks:
       - automl_network
+
+  # ============================================================================
+  # SSO Authentication Services
+  # ============================================================================
+
+  # Keycloak - Enterprise SSO and identity management
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: automl_keycloak
+    environment:
+      # Database configuration
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER:-automl}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-automl_secret}
+      # Admin credentials
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin123}
+      # Features
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_FEATURES: token-exchange,admin-fine-grained-authz
+      # SSO Configuration
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-localhost}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    command: ["start-dev", "--import-realm"]
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:ro
+      - keycloak_data:/opt/keycloak/data
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    networks:
+      - automl_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ============================================================================
+  # AutoML Platform Services - SaaS Mode
+  # ============================================================================
+
+  # API Backend Service - FastAPI
+  api:
+    build:
+      context: .
+      dockerfile: ${API_DOCKERFILE:-Dockerfile}
+      target: api
+      args:
+        - INSTALL_MODE=saas
+        - ENABLE_GPU=${ENABLE_GPU:-false}
+    container_name: automl_api
+    environment:
+      # Operation Mode
+      AUTOML_MODE: ${AUTOML_MODE:-saas}
+      AUTOML_EXPERT_MODE: ${AUTOML_EXPERT_MODE:-false}
+      
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
+      METADATA_DB_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/metadata
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+      
+      # Object Storage (MinIO)
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      S3_BUCKET_MODELS: models
+      S3_BUCKET_DATASETS: datasets
+      S3_BUCKET_ARTIFACTS: artifacts
+      
+      # MLflow
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      
+      # SSO Authentication
+      SSO_ENABLED: ${SSO_ENABLED:-true}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-this-in-production}
+      KEYCLOAK_ENABLED: ${KEYCLOAK_ENABLED:-true}
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-automl}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-automl-platform}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-secret}
+      
+      # Alternative SSO Providers (optional)
+      AUTH0_ENABLED: ${AUTH0_ENABLED:-false}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      
+      OKTA_ENABLED: ${OKTA_ENABLED:-false}
+      OKTA_DOMAIN: ${OKTA_DOMAIN:-}
+      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID:-}
+      OKTA_CLIENT_SECRET: ${OKTA_CLIENT_SECRET:-}
+      
+      # LLM APIs for AI assistants
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ENABLE_AI_ASSISTANT: ${ENABLE_AI_ASSISTANT:-true}
+      
+      # Billing & Subscription
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      BILLING_ENABLED: ${BILLING_ENABLED:-true}
+      
+      # Multi-tenant configuration
+      MULTI_TENANT_ENABLED: ${MULTI_TENANT_ENABLED:-true}
+      DEFAULT_TENANT_PLAN: ${DEFAULT_TENANT_PLAN:-trial}
+      
+      # Environment
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8501}
+      
+      # Performance
+      MAX_WORKERS: ${API_MAX_WORKERS:-4}
+      WORKER_CLASS: ${API_WORKER_CLASS:-uvicorn.workers.UvicornWorker}
+    volumes:
+      - ./automl_platform:/app/automl_platform:ro
+      - api_data:/app/data
+      - shared_models:/app/models
+      - api_logs:/app/logs
+      - ./config:/app/config:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - automl_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # Web UI - No-Code Interface (Streamlit/Gradio)
+  ui:
+    build:
+      context: .
+      dockerfile: ${UI_DOCKERFILE:-Dockerfile}
+      target: ui
+      args:
+        - UI_FRAMEWORK=${UI_FRAMEWORK:-streamlit}
+    container_name: automl_ui
+    environment:
+      # API Connection
+      API_BASE_URL: http://api:8000
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      
+      # MLflow Integration
+      MLFLOW_URL: http://mlflow:5000
+      PUBLIC_MLFLOW_URL: ${PUBLIC_MLFLOW_URL:-http://localhost:5000}
+      
+      # Redis for session management
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/1
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-ui-session-secret}
+      
+      # SSO Configuration
+      SSO_ENABLED: ${SSO_ENABLED:-true}
+      KEYCLOAK_URL: ${PUBLIC_KEYCLOAK_URL:-http://localhost:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-automl}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-automl-platform}
+      
+      # UI Configuration
+      UI_TITLE: ${UI_TITLE:-AutoML Platform}
+      UI_THEME: ${UI_THEME:-light}
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      STREAMLIT_SERVER_MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-1000}
+      STREAMLIT_THEME_PRIMARY_COLOR: "#1E88E5"
+      STREAMLIT_THEME_BACKGROUND_COLOR: "#FFFFFF"
+      STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR: "#F0F2F6"
+      
+      # Features toggles
+      ENABLE_CHAT_ASSISTANT: ${ENABLE_CHAT_ASSISTANT:-true}
+      ENABLE_AUTO_ML: ${ENABLE_AUTO_ML:-true}
+      ENABLE_EXPERT_MODE: ${ENABLE_EXPERT_MODE:-false}
+      ENABLE_COLLABORATION: ${ENABLE_COLLABORATION:-true}
+      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-en}
+      
+      # Multi-tenant
+      MULTI_TENANT_UI: ${MULTI_TENANT_ENABLED:-true}
+      SHOW_TENANT_SELECTOR: ${SHOW_TENANT_SELECTOR:-false}
+    volumes:
+      - ./automl_platform:/app/automl_platform:ro
+      - ./ui:/app/ui:ro
+      - ui_data:/app/data
+      - shared_models:/app/models:ro
+      - uploaded_files:/app/uploads
+      - reports:/app/reports
+      - ui_logs:/app/logs
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    networks:
+      - automl_network
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   # ============================================================================
   # MLOps Services
@@ -104,10 +329,14 @@ services:
     environment:
       BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
       ARTIFACT_ROOT: s3://models/
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       MLFLOW_S3_IGNORE_TLS: "true"
+      # Authentication
+      MLFLOW_AUTH_CONFIG: ${MLFLOW_AUTH_CONFIG:-basic}
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_USER:-mlflow}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:-mlflow123}
     ports:
       - "${MLFLOW_PORT:-5000}:5000"
     networks:
@@ -132,157 +361,14 @@ services:
       retries: 3
 
   # ============================================================================
-  # Authentication Services (Optional)
+  # Worker Services for Processing
   # ============================================================================
 
-  # Keycloak - SSO and identity management
-  keycloak:
-    image: quay.io/keycloak/keycloak:23.0
-    container_name: automl_keycloak
-    environment:
-      KC_DB: postgres
-      KC_DB_URL_HOST: postgres
-      KC_DB_URL_DATABASE: keycloak
-      KC_DB_USERNAME: ${POSTGRES_USER:-automl}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-automl_secret}
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin123}
-      KC_HEALTH_ENABLED: "true"
-      KC_METRICS_ENABLED: "true"
-    command: ["start-dev", "--import-realm"]
-    volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:ro
-    ports:
-      - "${KEYCLOAK_PORT:-8080}:8080"
-    networks:
-      - automl_network
-    depends_on:
-      postgres:
-        condition: service_healthy
-    profiles:
-      - auth
-
-  # ============================================================================
-  # AutoML Platform Services (Using Multi-stage Dockerfile)
-  # ============================================================================
-
-  # API Backend Service
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: api
-    container_name: automl_api
-    environment:
-      # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
-      # Redis
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      # MinIO
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      # MLflow
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      # Authentication
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-this}
-      KEYCLOAK_URL: http://keycloak:8080
-      KEYCLOAK_REALM: automl
-      KEYCLOAK_CLIENT_ID: automl-platform
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-secret}
-      # LLM APIs
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Billing
-      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      BILLING_ENABLED: ${BILLING_ENABLED:-false}
-      # Environment
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    volumes:
-      - ./automl_platform:/app/automl_platform:ro
-      - api_data:/app/data
-      - shared_models:/app/models
-      - api_logs:/app/logs
-    ports:
-      - "${API_PORT:-8000}:8000"
-    networks:
-      - automl_network
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      mlflow:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-
-  # No-Code UI Dashboard
-  ui:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: ui
-    container_name: automl_ui
-    environment:
-      # API Connection
-      API_BASE_URL: http://api:8000
-      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
-      # MLflow
-      MLFLOW_URL: http://mlflow:5000
-      PUBLIC_MLFLOW_URL: ${PUBLIC_MLFLOW_URL:-http://localhost:5000}
-      # Redis (for session management)
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/1
-      # Streamlit Configuration
-      STREAMLIT_SERVER_PORT: 8501
-      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
-      STREAMLIT_SERVER_MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-1000}
-      STREAMLIT_THEME_PRIMARY_COLOR: "#1E88E5"
-      STREAMLIT_THEME_BACKGROUND_COLOR: "#FFFFFF"
-      STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR: "#F0F2F6"
-      # Features
-      ENABLE_CHAT_ASSISTANT: ${ENABLE_CHAT_ASSISTANT:-true}
-      ENABLE_AUTO_ML: ${ENABLE_AUTO_ML:-true}
-      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-en}
-    volumes:
-      - ./automl_platform:/app/automl_platform:ro
-      - ui_data:/app/data
-      - shared_models:/app/models:ro
-      - uploaded_files:/app/uploads
-      - reports:/app/reports
-      - ui_logs:/app/logs
-    ports:
-      - "${UI_PORT:-8501}:8501"
-    networks:
-      - automl_network
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-
-  # ============================================================================
-  # Worker Services
-  # ============================================================================
-
-  # CPU Worker (Standard tasks)
+  # CPU Worker for standard ML tasks
   worker-cpu:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ${WORKER_DOCKERFILE:-Dockerfile}
       target: worker
     container_name: automl_worker_cpu
     command: >
@@ -298,12 +384,15 @@ services:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
       DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
+      
       # Storage
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      
       # MLflow
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      
       # Worker config
       WORKER_TYPE: CPU
       MAX_MEMORY_GB: ${CPU_WORKER_MEMORY:-8}
@@ -332,116 +421,11 @@ services:
           cpus: "2"
           memory: 4G
 
-  # GPU Worker (Deep learning tasks) - Optional
-  worker-gpu:
-    build:
-      context: .
-      dockerfile: Dockerfile.gpu
-      target: worker
-    container_name: automl_worker_gpu
-    runtime: nvidia
-    command: >
-      celery -A automl_platform.worker.celery_app worker
-      --loglevel=${LOG_LEVEL:-info}
-      --concurrency=1
-      --queues=gpu,gpu_training,gpu_inference,deep_learning
-      --hostname=worker-gpu@%h
-      --pool=solo
-      --max-tasks-per-child=10
-    environment:
-      # Connections
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
-      # Storage
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      # MLflow
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      # GPU config
-      WORKER_TYPE: GPU
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:512
-      TF_FORCE_GPU_ALLOW_GROWTH: "true"
-    volumes:
-      - ./automl_platform:/app/automl_platform:ro
-      - worker_data:/app/data
-      - shared_models:/app/models
-      - worker_logs:/app/logs
-    networks:
-      - automl_network
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    profiles:
-      - gpu
-    deploy:
-      replicas: ${GPU_WORKER_REPLICAS:-1}
-      resources:
-        limits:
-          cpus: "8"
-          memory: 32G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
-  # Priority Worker (LLM and priority tasks)
-  worker-priority:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: worker
-    container_name: automl_worker_priority
-    command: >
-      celery -A automl_platform.worker.celery_app worker
-      --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${PRIORITY_WORKER_CONCURRENCY:-2}
-      --queues=priority,llm,streaming,realtime
-      --hostname=worker-priority@%h
-      --max-tasks-per-child=50
-    environment:
-      # Connections
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
-      # LLM APIs
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Worker config
-      WORKER_TYPE: PRIORITY
-      MAX_MEMORY_GB: ${PRIORITY_WORKER_MEMORY:-16}
-      MAX_CPU_CORES: ${PRIORITY_WORKER_CORES:-8}
-    volumes:
-      - ./automl_platform:/app/automl_platform:ro
-      - worker_data:/app/data
-      - shared_models:/app/models
-      - worker_logs:/app/logs
-    networks:
-      - automl_network
-    depends_on:
-      redis:
-        condition: service_healthy
-    profiles:
-      - premium
-    deploy:
-      replicas: ${PRIORITY_WORKER_REPLICAS:-1}
-      resources:
-        limits:
-          cpus: "${PRIORITY_WORKER_CORES:-8}"
-          memory: ${PRIORITY_WORKER_MEMORY:-16}G
-
-  # Celery Beat (Scheduler)
+  # Celery Beat for scheduled tasks
   celery-beat:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ${WORKER_DOCKERFILE:-Dockerfile}
       target: worker
     container_name: automl_celery_beat
     command: celery -A automl_platform.worker.celery_app beat --loglevel=${LOG_LEVEL:-info}
@@ -458,11 +442,11 @@ services:
       redis:
         condition: service_healthy
 
-  # Flower (Celery monitoring)
+  # Flower for Celery monitoring
   flower:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ${WORKER_DOCKERFILE:-Dockerfile}
       target: worker
     container_name: automl_flower
     command: >
@@ -482,10 +466,10 @@ services:
         condition: service_healthy
 
   # ============================================================================
-  # Monitoring Stack
+  # Monitoring Stack (Prometheus + Grafana)
   # ============================================================================
 
-  # Prometheus
+  # Prometheus for metrics collection
   prometheus:
     image: prom/prometheus:v2.48.1
     container_name: automl_prometheus
@@ -501,10 +485,13 @@ services:
       - "${PROMETHEUS_PORT:-9090}:9090"
     networks:
       - automl_network
-    profiles:
-      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # Grafana
+  # Grafana for visualization
   grafana:
     image: grafana/grafana:10.3.1
     container_name: automl_grafana
@@ -513,6 +500,15 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
       GF_INSTALL_PLUGINS: redis-datasource,plotly-panel
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/automl-overview.json
+      # SSO integration
+      GF_AUTH_GENERIC_OAUTH_ENABLED: ${GRAFANA_SSO_ENABLED:-true}
+      GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-automl-platform}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-secret}
+      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://${KEYCLOAK_HOSTNAME:-localhost}:${KEYCLOAK_PORT:-8080}/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/auth
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/token
+      GF_AUTH_GENERIC_OAUTH_API_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/userinfo
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
@@ -523,14 +519,17 @@ services:
       - automl_network
     depends_on:
       - prometheus
-    profiles:
-      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ============================================================================
-  # Optional Services
+  # Optional Production Services
   # ============================================================================
 
-  # Nginx Reverse Proxy
+  # Nginx Reverse Proxy for production
   nginx:
     image: nginx:alpine
     container_name: automl_nginx
@@ -546,37 +545,9 @@ services:
     depends_on:
       - api
       - ui
+      - keycloak
     profiles:
       - production
-
-  # Airflow (Workflow orchestration)
-  airflow:
-    image: apache/airflow:2.8.1
-    container_name: automl_airflow
-    environment:
-      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-      AIRFLOW__CELERY__BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/2
-      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/airflow
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/airflow
-      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-your-fernet-key}
-      AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER:-admin}
-      AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin123}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-secret}
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-    ports:
-      - "${AIRFLOW_PORT:-8082}:8080"
-    networks:
-      - automl_network
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    profiles:
-      - orchestration
 
 # ============================================================================
 # Networks
@@ -605,6 +576,10 @@ volumes:
   
   # Object Storage
   minio_data:
+    driver: local
+  
+  # SSO
+  keycloak_data:
     driver: local
   
   # MLflow
