@@ -65,7 +65,7 @@ skl2onnx>=1.16.0,<2.0.0           # Sklearn to ONNX converter
 mlflow>=2.9.0,<3.0.0              # Experiment tracking & model registry
 
 # ---------- Data Quality & Validation ----------
-great-expectations>=0.18.0        # Data validation
+deepchecks>=0.17.0                # Data validation (replaces great-expectations)
 evidently>=0.4.0                  # Drift detection
 
 # ---------- Security (Essential) ----------
@@ -80,7 +80,7 @@ prometheus-client>=0.19.0         # Metrics export
 streamlit>=1.30.0                 # Interactive dashboards
 streamlit-option-menu>=0.3.6      # Navigation menu
 plotly>=5.18.0                    # Interactive plots
-altair>=5.2.0                     # Declarative visualization
+altair>=4.2.1,<5.0.0              # Declarative visualization (compatible version)
 matplotlib>=3.8.0                 # Static plotting
 seaborn>=0.13.0                   # Statistical visualization
 
@@ -151,17 +151,11 @@ sphinx>=7.2.0                     # Documentation generator
 sphinx-rtd-theme>=2.0.0           # ReadTheDocs theme
 myst-parser>=2.0.0                # Markdown support
 
-# ---------- Development Tools (Python version adaptive) ----------
-# IPython - Use version compatible with Python version
-ipython>=7.34.0,<8.0.0 ; python_version == "3.9"
-ipython>=8.12.0 ; python_version >= "3.10"
-
-# Jupyter tools - Compatible with Python 3.9+
+# ---------- Development Tools ----------
+ipython>=8.12.0                   # Enhanced Python shell (works on 3.9+)
 jupyter>=1.0.0                    # Notebook interface
-notebook>=6.5.0,<7.0.0 ; python_version == "3.9"
-notebook>=7.0.0 ; python_version >= "3.10"
-jupyterlab>=3.6.0,<4.0.0 ; python_version == "3.9"
-jupyterlab>=4.0.0 ; python_version >= "3.10"
+notebook>=7.0.0                   # Jupyter notebook
+jupyterlab>=4.0.0                 # JupyterLab
 
 # ---------- Production Deployment ----------
 gunicorn>=21.2.0                  # WSGI HTTP Server
