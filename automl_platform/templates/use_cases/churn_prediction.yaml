@@ -1,0 +1,155 @@
+# Template for Customer Churn Prediction
+# Optimized for binary classification with imbalanced data
+
+name: "customer_churn"
+description: "Template for predicting customer churn with focus on recall"
+author: "AutoML Platform Team"
+version: "1.0.0"
+tags: ["classification", "churn", "customer", "imbalanced"]
+
+# Task configuration
+task: "classification"
+task_settings:
+  problem_type: "binary"
+  primary_metric: "f1"
+  class_imbalance_handling: true
+
+# Data preprocessing
+preprocessing:
+  handle_missing:
+    strategy: "smart"  # Uses median for numeric, mode for categorical
+    threshold: 0.3  # Drop columns with >30% missing
+  
+  handle_outliers:
+    method: "iqr"
+    factor: 1.5
+    
+  feature_engineering:
+    - create_ratios: true  # Create ratio features from numeric columns
+    - date_features: true  # Extract date components if date columns exist
+    - text_features: false  # No text processing for churn
+    - interaction_features: true  # Create top interactions
+    
+  encoding:
+    categorical_method: "target"  # Target encoding for high cardinality
+    max_cardinality: 50
+
+# Model selection
+algorithms:
+  # Tree-based models work well for churn
+  - "XGBoost"
+  - "LightGBM"
+  - "CatBoost"
+  - "RandomForest"
+  - "ExtraTrees"
+  # Linear models for interpretability
+  - "LogisticRegression"
+  # Neural network for complex patterns
+  - "NeuralNetwork"
+
+exclude_algorithms:
+  - "GaussianNB"  # Usually poor for churn
+  - "KNN"  # Doesn't handle imbalance well
+
+# Hyperparameter optimization
+hpo:
+  method: "optuna"
+  n_iter: 50
+  timeout: 1800  # 30 minutes
+  
+  # Churn-specific search spaces
+  search_spaces:
+    XGBoost:
+      scale_pos_weight: [1, 10]  # Handle imbalance
+      max_depth: [3, 10]
+      learning_rate: [0.01, 0.3]
+      n_estimators: [100, 500]
+      subsample: [0.6, 1.0]
+      colsample_bytree: [0.6, 1.0]
+      
+    LightGBM:
+      is_unbalance: true
+      num_leaves: [31, 127]
+      learning_rate: [0.01, 0.3]
+      n_estimators: [100, 500]
+      feature_fraction: [0.6, 1.0]
+      bagging_fraction: [0.6, 1.0]
+      
+    LogisticRegression:
+      class_weight: "balanced"
+      C: [0.001, 100]
+      penalty: ["l1", "l2", "elasticnet"]
+
+# Cross-validation
+cv:
+  strategy: "stratified"
+  n_folds: 5
+  shuffle: true
+
+# Ensemble configuration
+ensemble:
+  method: "voting"
+  voting: "soft"  # Use probabilities
+  weights: "auto"  # Optimize weights
+
+# Scoring metrics (for evaluation)
+metrics:
+  - "f1"
+  - "roc_auc"
+  - "precision"
+  - "recall"
+  - "average_precision"
+
+# Feature importance
+feature_importance:
+  calculate: true
+  method: "permutation"
+  top_k: 20
+
+# Model interpretation
+interpretation:
+  shap_values: true
+  partial_dependence: true
+  lime_explanations: false
+
+# Monitoring settings
+monitoring:
+  drift_detection: true
+  drift_method: "psi"  # Population Stability Index
+  alert_threshold: 0.2
+  
+  performance_monitoring:
+    track_metrics: ["f1", "recall", "precision"]
+    alert_on_degradation: 0.1  # Alert if metric drops by 10%
+
+# Export settings
+export:
+  formats: ["onnx", "pmml"]
+  quantize: true
+  optimize_for: "latency"  # vs "throughput"
+
+# Business rules
+business_rules:
+  probability_threshold: 0.3  # Lower threshold to catch more churners
+  cost_matrix:
+    false_positive: 1  # Cost of incorrectly predicting churn
+    false_negative: 5  # Cost of missing a churner (5x worse)
+  
+# Deployment settings
+deployment:
+  auto_deploy: false
+  deployment_target: "api"
+  batch_prediction: true
+  real_time_scoring: true
+  
+# Retraining settings
+retraining:
+  schedule: "weekly"
+  trigger_on_drift: true
+  min_samples: 1000
+  
+# Documentation
+documentation:
+  auto_generate: true
+  include_shap: true
+  business_summary: true
