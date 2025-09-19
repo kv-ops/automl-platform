@@ -1,0 +1,163 @@
+# =============================================================================
+# AutoML Platform SaaS - All-in-one Docker Image
+# =============================================================================
+# This Dockerfile builds a complete SaaS image with API + UI + Workers
+# Usage: docker build -f dockerfile.saas -t automl-platform:saas .
+
+# -----------------------------------------------------------------------------
+# Stage 1: Base Python environment
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS base
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    curl \
+    build-essential \
+    libpq-dev \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app user for security
+RUN groupadd -r automl && useradd -r -g automl automl
+
+# Set working directory
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# Stage 2: Dependencies installation
+# -----------------------------------------------------------------------------
+FROM base AS dependencies
+
+# Copy requirements first for better caching
+COPY requirements.txt requirements-ui.txt requirements-worker.txt ./
+
+# Install all Python dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+    -r requirements.txt \
+    -r requirements-ui.txt \
+    -r requirements-worker.txt
+
+# Install additional UI frameworks
+RUN pip install --no-cache-dir \
+    streamlit==1.31.0 \
+    gradio==4.16.0 \
+    plotly==5.18.0 \
+    streamlit-ace==0.1.1 \
+    streamlit-aggrid==1.0.4 \
+    streamlit-authenticator==0.3.1 \
+    streamlit-elements==0.1.0
+
+# -----------------------------------------------------------------------------
+# Stage 3: Application code
+# -----------------------------------------------------------------------------
+FROM dependencies AS app
+
+# Copy application code
+COPY automl_platform/ /app/automl_platform/
+COPY ui/ /app/ui/
+COPY config/ /app/config/
+COPY scripts/ /app/scripts/
+
+# Copy setup files
+COPY setup.py README.md LICENSE ./
+
+# Install the package in development mode
+RUN pip install -e .
+
+# Create necessary directories
+RUN mkdir -p /app/data /app/logs /app/uploads /app/models /app/reports /app/cache && \
+    chown -R automl:automl /app
+
+# -----------------------------------------------------------------------------
+# Stage 4: Production runtime
+# -----------------------------------------------------------------------------
+FROM app AS runtime
+
+# Environment variables with defaults
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    AUTOML_MODE=saas \
+    ENVIRONMENT=production \
+    LOG_LEVEL=info \
+    # API settings
+    API_HOST=0.0.0.0 \
+    API_PORT=8000 \
+    API_WORKERS=4 \
+    # UI settings
+    UI_HOST=0.0.0.0 \
+    UI_PORT=8501 \
+    UI_FRAMEWORK=streamlit \
+    # Worker settings
+    WORKER_CONCURRENCY=4 \
+    WORKER_QUEUES=default,cpu,training,prediction \
+    # Database
+    DATABASE_URL=postgresql://automl:automl_secret@postgres:5432/automl \
+    # Redis
+    REDIS_URL=redis://:redis_secret@redis:6379/0 \
+    # MinIO
+    MINIO_ENDPOINT=minio:9000 \
+    MINIO_ACCESS_KEY=minioadmin \
+    MINIO_SECRET_KEY=minioadmin123 \
+    # SSO
+    SSO_ENABLED=true \
+    KEYCLOAK_ENABLED=true \
+    KEYCLOAK_URL=http://keycloak:8080 \
+    # MLflow
+    MLFLOW_TRACKING_URI=http://mlflow:5000
+
+# Copy startup script
+COPY scripts/start_saas.sh /app/scripts/start_saas.sh
+RUN chmod +x /app/scripts/start_saas.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${API_PORT}/health && \
+        curl -f http://localhost:${UI_PORT}/_stcore/health || exit 1
+
+# Expose ports
+EXPOSE 8000 8501
+
+# Switch to non-root user
+USER automl
+
+# Default command - starts all services
+CMD ["/app/scripts/start_saas.sh"]
+
+# -----------------------------------------------------------------------------
+# Stage 5: Development mode (optional)
+# -----------------------------------------------------------------------------
+FROM runtime AS development
+
+# Switch back to root for development tools
+USER root
+
+# Install development dependencies
+RUN pip install --no-cache-dir \
+    pytest==8.0.0 \
+    pytest-cov==4.1.0 \
+    pytest-asyncio==0.21.1 \
+    black==24.1.0 \
+    flake8==7.0.0 \
+    mypy==1.8.0 \
+    ipdb==0.13.13 \
+    jupyter==1.0.0 \
+    notebook==7.0.7
+
+# Create Jupyter config
+RUN jupyter notebook --generate-config && \
+    echo "c.NotebookApp.token = ''" >> /root/.jupyter/jupyter_notebook_config.py && \
+    echo "c.NotebookApp.password = ''" >> /root/.jupyter/jupyter_notebook_config.py
+
+# Expose additional development ports
+EXPOSE 8888 5678
+
+# Development volumes
+VOLUME ["/app/notebooks", "/app/experiments"]
+
+# Development command
+CMD ["bash"]
