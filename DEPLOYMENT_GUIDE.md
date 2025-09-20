@@ -1,418 +1,615 @@
-# Guide de Déploiement MLOps - Plateforme AutoML
+# AutoML Platform - Guide de Déploiement SaaS
 
-## 📋 Table des Matières
-1. [Architecture MLOps](#architecture-mlops)
-2. [Installation et Configuration](#installation-et-configuration)
-3. [Utilisation des Fonctionnalités](#utilisation-des-fonctionnalités)
-4. [API Endpoints](#api-endpoints)
-5. [Monitoring et Maintenance](#monitoring-et-maintenance)
+## Table des matières
 
----
+1. [Vue d'ensemble](#vue-densemble)
+2. [Prérequis](#prérequis)
+3. [Installation rapide](#installation-rapide)
+4. [Configuration détaillée](#configuration-détaillée)
+5. [Déploiement en production](#déploiement-en-production)
+6. [Configuration SSO](#configuration-sso)
+7. [Stockage et persistance](#stockage-et-persistance)
+8. [Monitoring et supervision](#monitoring-et-supervision)
+9. [Intégration MLOps](#intégration-mlops)
+10. [Sauvegarde et restauration](#sauvegarde-et-restauration)
+11. [Dépannage](#dépannage)
 
-## 🏗️ Architecture MLOps
+## Vue d'ensemble
 
-### Composants Principaux
+L'AutoML Platform en mode SaaS est une solution complète prête à déployer qui comprend :
 
-```
-automl_platform/
-├── mlflow_registry.py      # Gestion des versions avec MLflow
-├── retraining_service.py   # Retraining automatique (Airflow/Prefect)
-├── export_service.py       # Export ONNX/PMML/Edge
-├── orchestrator.py         # Orchestrateur principal (mis à jour)
-├── api/
-│   └── mlops_endpoints.py  # Endpoints REST pour MLOps
-└── examples/
-    └── mlops_integration.py # Exemple d'intégration complète
-```
+- **API Backend** : FastAPI avec authentification JWT et SSO (fichier `main.py` avec commande `api`)
+- **Interface Web** : Application Streamlit no-code pour les utilisateurs non techniques
+- **Workers** : Traitement distribué avec Celery pour l'entraînement des modèles
+- **Stockage** : MinIO (S3-compatible) pour les datasets et modèles
+- **Base de données** : PostgreSQL avec support multi-bases (automl, keycloak, airflow, metadata)
+- **Cache** : Redis pour les sessions et la communication inter-services
+- **SSO** : Keycloak pour l'authentification d'entreprise (intégré via `auth.py` et `sso_service.py`)
+- **MLOps** : MLflow pour le tracking et registry des modèles
+- **Monitoring** : Prometheus + Grafana pour la supervision
 
-### Stack Technologique
+## Prérequis
 
-- **Model Registry**: MLflow (avec fallback local)
-- **Workflow Orchestration**: Airflow ou Prefect
-- **Model Export**: ONNX, PMML, TensorFlow Lite
-- **A/B Testing**: Intégré avec analyse statistique
-- **Storage**: MinIO/S3 compatible
-- **API**: FastAPI
+### Configuration système minimale
 
----
+- **CPU** : 4 cœurs minimum (8 recommandés)
+- **RAM** : 8 GB minimum (16 GB recommandés)
+- **Stockage** : 50 GB d'espace libre
+- **OS** : Linux (Ubuntu 20.04+, CentOS 8+) ou macOS
+- **Réseau** : Ports 80, 443, 8000, 8501, 5000, 8080 disponibles
 
-## 🚀 Installation et Configuration
-
-### 1. Installation des Dépendances
-
-```bash
-# Core MLOps
-pip install mlflow>=2.0.0
-pip install onnx onnxruntime skl2onnx
-pip install sklearn2pmml
-
-# Orchestration (choisir un)
-pip install apache-airflow  # Option 1: Airflow
-pip install prefect         # Option 2: Prefect
-
-# Optionnel pour fonctionnalités avancées
-pip install tensorflow       # Pour export TFLite
-pip install coremltools      # Pour export iOS
-```
-
-### 2. Configuration MLflow
+### Logiciels requis
 
 ```bash
-# Démarrer MLflow server
-mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db
+# Docker (version 20.10+)
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 
-# Ou avec PostgreSQL
-mlflow server --backend-store-uri postgresql://user:pass@host/db \
-              --default-artifact-root s3://bucket/path \
-              --host 0.0.0.0
+# Docker Compose (version 2.0+)
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# Git
+sudo apt-get update && sudo apt-get install -y git
+
+# OpenSSL pour génération de mots de passe
+sudo apt-get install -y openssl
 ```
 
-### 3. Configuration Airflow
+### Support GPU (optionnel)
+
+Pour le support GPU avec NVIDIA :
 
 ```bash
-# Initialiser Airflow
-export AIRFLOW_HOME=~/airflow
-airflow db init
-airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+# NVIDIA Container Toolkit
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
 
-# Démarrer les services
-airflow webserver -p 8080 &
-airflow scheduler &
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo systemctl restart docker
 ```
 
-### 4. Configuration Prefect (Alternative)
+## Installation rapide
+
+### 1. Cloner le dépôt
 
 ```bash
-# Démarrer Prefect server
-prefect server start
-
-# Créer work queue
-prefect work-queue create ml-retraining-queue
+git clone https://github.com/your-org/automl-platform.git
+cd automl-platform
 ```
 
-### 5. Configuration dans config.yaml
+### 2. Déploiement automatique
 
-```yaml
-# config.yaml
-mlflow_tracking_uri: "http://localhost:5000"
-enable_ab_testing: true
-enable_auto_retraining: true
+Le script `deploy_saas.sh` automatise complètement le déploiement :
 
-billing:
-  enabled: true
-  plan_type: "pro"
+```bash
+# Déploiement production standard
+./scripts/deploy_saas.sh --env prod
 
-monitoring:
-  drift_detection_enabled: true
-  drift_threshold: 0.3
-  
-worker:
-  backend: "celery"  # ou "prefect"
-  max_workers: 4
+# Déploiement avec monitoring
+./scripts/deploy_saas.sh --env prod --monitoring
+
+# Déploiement avec GPU
+./scripts/deploy_saas.sh --env prod --gpu
+
+# Déploiement complet avec toutes les options
+./scripts/deploy_saas.sh --env prod --monitoring --gpu --scale 4
 ```
 
----
+### 3. Accès à la plateforme
 
-## 💡 Utilisation des Fonctionnalités
+Une fois le déploiement terminé (environ 2-3 minutes), accédez à :
 
-### 1. Training et Registration de Modèle
+- **Interface Web** : http://localhost:8501
+- **API** : http://localhost:8000
+- **Documentation API** : http://localhost:8000/docs
+- **MLflow** : http://localhost:5000
+- **Keycloak Admin** : http://localhost:8080/admin
+- **MinIO Console** : http://localhost:9001
+- **Flower (Celery)** : http://localhost:5555
+
+## Configuration détaillée
+
+### Variables d'environnement
+
+Le script `deploy_saas.sh` crée automatiquement un fichier `.env` à partir de `.env.example` avec :
+- Génération automatique de mots de passe sécurisés
+- Configuration du mode SaaS (`AUTOML_MODE=saas`)
+- Désactivation du mode expert (`AUTOML_EXPERT_MODE=false`)
+- Activation du SSO et multi-tenant
+
+Pour personnaliser, modifiez le fichier `.env` généré :
+
+```env
+# Mode de déploiement
+ENVIRONMENT=production
+AUTOML_MODE=saas                    # Mode SaaS activé
+AUTOML_EXPERT_MODE=false            # Interface simplifiée pour non-techniques
+
+# SSO Configuration
+SSO_ENABLED=true
+KEYCLOAK_ENABLED=true
+KEYCLOAK_HOSTNAME=localhost         # Changer pour votre domaine
+KEYCLOAK_PORT=8080
+KEYCLOAK_REALM=automl
+KEYCLOAK_CLIENT_ID=automl-platform
+
+# Multi-tenant
+MULTI_TENANT_ENABLED=true
+DEFAULT_TENANT_PLAN=trial
+TRIAL_DURATION_DAYS=14
+
+# Quotas par défaut
+DEFAULT_MAX_WORKERS=2
+DEFAULT_MAX_CONCURRENT_JOBS=2
+DEFAULT_STORAGE_QUOTA_GB=10
+```
+
+### Configuration Docker Compose
+
+Le fichier `docker-compose.yml` est préconfiguré avec tous les services. Les services principaux :
+
+- **postgres** : Base de données avec script `init-multi-db.sh` pour créer les bases (automl, keycloak, metadata, airflow)
+- **redis** : Cache et broker de messages
+- **minio** : Stockage S3-compatible avec buckets préconfigurés
+- **keycloak** : SSO avec realm import automatique
+- **api** : Backend FastAPI (utilise `main.py` existant)
+- **ui** : Interface Streamlit
+- **mlflow** : Tracking et registry des modèles
+- **worker-cpu** : Workers Celery pour le traitement
+- **prometheus/grafana** : Stack de monitoring (optionnel)
+
+## Déploiement en production
+
+### 1. Préparation du serveur
+
+```bash
+# Mise à jour système
+sudo apt-get update && sudo apt-get upgrade -y
+
+# Configuration firewall
+sudo ufw allow 22/tcp    # SSH
+sudo ufw allow 80/tcp    # HTTP
+sudo ufw allow 443/tcp   # HTTPS
+sudo ufw allow 8000/tcp  # API
+sudo ufw allow 8501/tcp  # UI
+sudo ufw allow 5000/tcp  # MLflow
+sudo ufw allow 8080/tcp  # Keycloak
+sudo ufw enable
+
+# Configuration swap (recommandé)
+sudo fallocate -l 8G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+### 2. Configuration HTTPS avec Let's Encrypt
+
+```bash
+# Installation Certbot
+sudo apt-get install -y certbot
+
+# Génération certificat
+sudo certbot certonly --standalone -d yourdomain.com -d api.yourdomain.com
+
+# Mise à jour .env avec les domaines
+sed -i 's|PUBLIC_API_URL=.*|PUBLIC_API_URL=https://api.yourdomain.com|' .env
+sed -i 's|PUBLIC_UI_URL=.*|PUBLIC_UI_URL=https://yourdomain.com|' .env
+sed -i 's|KEYCLOAK_HOSTNAME=.*|KEYCLOAK_HOSTNAME=auth.yourdomain.com|' .env
+
+# Activer Nginx reverse proxy
+docker-compose --profile production up -d nginx
+```
+
+### 3. Déploiement avec Docker Swarm (haute disponibilité)
+
+```bash
+# Initialiser Swarm
+docker swarm init --advertise-addr <MANAGER-IP>
+
+# Déployer la stack
+docker stack deploy -c docker-compose.yml automl
+
+# Scaler les services
+docker service scale automl_worker-cpu=5
+docker service scale automl_api=3
+```
+
+### 4. Configuration DNS
+
+Configurez vos enregistrements DNS :
+
+```
+A    @              -> YOUR_SERVER_IP
+A    api            -> YOUR_SERVER_IP
+A    app            -> YOUR_SERVER_IP  
+A    mlflow         -> YOUR_SERVER_IP
+A    auth           -> YOUR_SERVER_IP  # Pour Keycloak
+```
+
+### 5. Démarrage des services
+
+Le fichier `dockerfile.saas` contient un script de démarrage intégré qui lance automatiquement :
+- L'API sur le port 8000 (utilisant `main.py api`)
+- L'interface UI sur le port 8501
+
+```bash
+# Les conteneurs démarrent automatiquement avec CMD intégré
+docker-compose up -d
+
+# Vérifier les logs
+docker-compose logs -f api
+docker-compose logs -f ui
+```
+
+## Configuration SSO
+
+### Keycloak
+
+L'authentification SSO est gérée par les modules `automl_platform/auth.py` et `automl_platform/sso_service.py` qui supportent :
+- Keycloak (par défaut)
+- Auth0
+- Okta
+- Azure AD
+- SAML
+
+#### Configuration automatique
+
+Le script `deploy_saas.sh` configure automatiquement Keycloak. Pour une configuration manuelle :
+
+1. **Accéder à la console admin** : http://localhost:8080/admin
+   - User: `admin` (défini dans `KEYCLOAK_ADMIN`)
+   - Password: Voir votre fichier `.env`
+
+2. **Le realm est créé automatiquement** avec :
+   - Nom : `automl`
+   - Client : `automl-platform`
+   - Redirect URIs configurées
+
+3. **Rôles préconfigurés** (dans `auth.py`) :
+   - `admin` : Accès complet
+   - `data_scientist` : Création et gestion de projets ML
+   - `viewer` : Lecture seule  
+   - `trial` : Accès limité (4 workers max, comme DataRobot)
+
+4. **Script d'initialisation via API** :
+   ```bash
+   # Configuration automatique via l'API Admin de Keycloak
+   docker exec -it automl_keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+     --server http://localhost:8080 \
+     --realm master \
+     --user admin \
+     --password ${KEYCLOAK_ADMIN_PASSWORD}
+   
+   # Créer/mettre à jour le realm
+   docker exec -it automl_keycloak /opt/keycloak/bin/kcadm.sh create realms \
+     -s realm=automl \
+     -s enabled=true
+   ```
+
+### Multi-tenant et RBAC
+
+Le système multi-tenant est intégré dans `auth.py` avec :
+- Isolation par tenant (base de données, buckets MinIO, namespaces)
+- Plans de tarification (FREE, TRIAL, PRO, ENTERPRISE)
+- Quotas par plan (workers, storage, compute minutes)
+- Rate limiting par plan
+
+### Auth0 (Alternative)
+
+Pour utiliser Auth0 au lieu de Keycloak :
+
+1. Définir dans `.env` :
+   ```env
+   KEYCLOAK_ENABLED=false
+   AUTH0_ENABLED=true
+   AUTH0_DOMAIN=your-tenant.auth0.com
+   AUTH0_CLIENT_ID=your-client-id
+   AUTH0_CLIENT_SECRET=your-client-secret
+   ```
+
+2. Le module `sso_service.py` gère automatiquement Auth0
+
+## Stockage et persistance
+
+### Configuration MinIO
+
+MinIO est configuré automatiquement avec les buckets :
+- `models` : Modèles MLflow
+- `datasets` : Datasets uploadés
+- `artifacts` : Artefacts de training
+- `reports` : Rapports générés (public)
+- `backups` : Sauvegardes
+- `user-uploads` : Fichiers utilisateurs
+
+Accès console : http://localhost:9001
+- User: Voir `MINIO_ACCESS_KEY` dans `.env`
+- Password: Voir `MINIO_SECRET_KEY` dans `.env`
+
+### Base de données PostgreSQL
+
+Le script `init-multi-db.sh` crée automatiquement :
+- **automl** : Base principale avec schéma et extensions
+- **keycloak** : Base pour SSO
+- **metadata** : Métadonnées des modèles avec tables préconfigurées
+- **airflow** : Orchestration des workflows (si activé)
+
+Optimisations appliquées :
+- Extensions : uuid-ossp, pgcrypto, pg_stat_statements
+- Utilisateur monitoring en lecture seule
+- Paramètres de performance optimisés
+- Autovacuum configuré
+
+## Monitoring et supervision
+
+### Stack de monitoring
+
+Activée avec `--monitoring` lors du déploiement :
+
+```bash
+./scripts/deploy_saas.sh --env prod --monitoring
+```
+
+### Prometheus
+
+- URL : http://localhost:9090
+- Métriques collectées depuis tous les services
+- Configuration dans `monitoring/prometheus.yml`
+
+### Grafana  
+
+- URL : http://localhost:3000
+- SSO intégré avec Keycloak
+- Dashboards préconfigurés pour AutoML
+
+### Métriques exposées
+
+L'API expose des métriques sur `/metrics` :
+- `model_predictions_total` : Nombre de prédictions
+- `model_inference_time_seconds` : Temps d'inférence
+- `model_drift_score` : Score de drift
+- `auth_attempts_total` : Tentatives d'authentification
+- `api_calls_total` : Appels API par endpoint
+
+## Intégration MLOps
+
+### MLflow
+
+MLflow est intégré pour le tracking et le model registry :
+
+- URL : http://localhost:5000
+- Backend : PostgreSQL
+- Artifacts : MinIO (S3-compatible)
+- Authentification basique activée
+
+### Utilisation depuis le code
 
 ```python
+# Le module orchestrator.py utilise automatiquement MLflow
 from automl_platform.orchestrator import AutoMLOrchestrator
 from automl_platform.config import AutoMLConfig
 
-# Configuration
 config = AutoMLConfig()
 config.mlflow_tracking_uri = "http://localhost:5000"
 
-# Training avec registration automatique
 orchestrator = AutoMLOrchestrator(config)
-orchestrator.fit(
-    X_train, 
-    y_train,
-    register_best_model=True,
-    model_name="my_model"
-)
+orchestrator.fit(X_train, y_train, register_best_model=True)
 ```
 
-### 2. A/B Testing
+### A/B Testing et Retraining
 
-```python
-from automl_platform.mlflow_registry import ABTestingService
+Voir `DEPLOYMENT_GUIDE.md` pour les détails sur :
+- A/B Testing avec analyse statistique
+- Retraining automatique avec Airflow/Prefect
+- Export de modèles (ONNX, PMML, TFLite)
 
-# Créer un test A/B
-ab_service = ABTestingService(registry)
-test_id = ab_service.create_ab_test(
-    model_name="my_model",
-    champion_version=1,
-    challenger_version=2,
-    traffic_split=0.2  # 20% au challenger
-)
+## Sauvegarde et restauration
 
-# Analyser les résultats
-results = ab_service.get_test_results(test_id)
-print(f"Champion: {results['champion']['success_rate']:.2%}")
-print(f"Challenger: {results['challenger']['success_rate']:.2%}")
-
-# Conclure et promouvoir le gagnant
-ab_service.conclude_test(test_id, promote_winner=True)
-```
-
-### 3. Export de Modèle
-
-```python
-# Export ONNX avec quantization
-result = orchestrator.export_best_model(
-    format="onnx",
-    sample_data=X_sample
-)
-
-# Export pour Edge (multiple formats)
-edge_result = orchestrator.export_best_model(
-    format="edge",
-    sample_data=X_sample
-)
-```
-
-### 4. Retraining Automatique
-
-```python
-from automl_platform.retraining_service import RetrainingService
-
-# Vérifier si retraining nécessaire
-should_retrain, reason, metrics = retraining.should_retrain("my_model")
-
-if should_retrain:
-    # Déclencher retraining
-    result = await retraining.retrain_model(
-        "my_model", 
-        X_new, 
-        y_new,
-        reason=reason
-    )
-
-# Créer schedule automatique
-schedule = retraining.create_retraining_schedule()
-```
-
----
-
-## 🌐 API Endpoints
-
-### Model Registry
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/mlops/models/register` | POST | Enregistrer un nouveau modèle |
-| `/api/v1/mlops/models/promote` | POST | Promouvoir un modèle (Staging/Production) |
-| `/api/v1/mlops/models/{name}/versions` | GET | Historique des versions |
-| `/api/v1/mlops/models/{name}/compare` | GET | Comparer deux versions |
-| `/api/v1/mlops/models/{name}/rollback` | POST | Rollback vers version précédente |
-
-### A/B Testing
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/mlops/ab-tests/create` | POST | Créer test A/B |
-| `/api/v1/mlops/ab-tests/{id}/results` | GET | Résultats du test |
-| `/api/v1/mlops/ab-tests/{id}/conclude` | POST | Conclure test et promouvoir |
-| `/api/v1/mlops/ab-tests/active` | GET | Tests actifs |
-
-### Model Export
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/mlops/models/export` | POST | Exporter modèle (ONNX/PMML/Edge) |
-| `/api/v1/mlops/models/export/{name}/{version}/download` | GET | Télécharger modèle exporté |
-
-### Automated Retraining
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/mlops/retraining/check` | POST | Vérifier besoin de retraining |
-| `/api/v1/mlops/retraining/trigger/{name}` | POST | Déclencher retraining manuel |
-| `/api/v1/mlops/retraining/schedule` | POST | Créer schedule automatique |
-| `/api/v1/mlops/retraining/history` | GET | Historique des retrainings |
-
-### Exemple d'Appel API
+### Sauvegarde automatique
 
 ```bash
-# Enregistrer un modèle
-curl -X POST http://localhost:8000/api/v1/mlops/models/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model_name": "customer_churn",
-    "description": "XGBoost model v2",
-    "metrics": {"accuracy": 0.92, "f1": 0.89}
-  }'
+# Créer une sauvegarde avant mise à jour
+./scripts/deploy_saas.sh --backup
 
-# Créer A/B test
-curl -X POST http://localhost:8000/api/v1/mlops/ab-tests/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model_name": "customer_churn",
-    "champion_version": 1,
-    "challenger_version": 2,
-    "traffic_split": 0.1
-  }'
-
-# Exporter en ONNX
-curl -X POST http://localhost:8000/api/v1/mlops/models/export \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model_name": "customer_churn",
-    "version": 2,
-    "format": "onnx",
-    "quantize": true
-  }'
+# Les sauvegardes sont stockées dans ./backups/
 ```
 
----
+### Sauvegarde manuelle
 
-## 📊 Monitoring et Maintenance
-
-### 1. Monitoring des Modèles
-
-```python
-# Dashboard de monitoring
-from automl_platform.monitoring import ModelMonitor
-
-monitor = ModelMonitor(config)
-
-# Drift detection
-drift_score = monitor.get_drift_score("my_model")
-if drift_score > 0.3:
-    logger.warning(f"High drift detected: {drift_score}")
-
-# Performance tracking
-perf_metrics = monitor.get_performance_metrics("my_model")
+```bash
+# Sauvegarde complète des volumes
+docker run --rm \
+  -v automl_postgres_data:/postgres \
+  -v automl_minio_data:/minio \
+  -v automl_redis_data:/redis \
+  -v ./backups:/backup \
+  alpine tar czf /backup/backup_$(date +%Y%m%d_%H%M%S).tar.gz \
+  /postgres /minio /redis
 ```
 
-### 2. Métriques Prometheus
+### Restauration
 
-Les métriques sont exposées sur `/metrics`:
-
-- `model_predictions_total` - Nombre total de prédictions
-- `model_inference_time_seconds` - Temps d'inférence
-- `model_drift_score` - Score de drift actuel
-- `model_accuracy` - Accuracy en production
-- `retraining_runs_total` - Nombre de retrainings
-
-### 3. Alertes
-
-Configuration des alertes dans `config.yaml`:
-
-```yaml
-monitoring:
-  alerting_enabled: true
-  alert_channels: ["log", "email", "slack"]
-  slack_webhook_url: "https://hooks.slack.com/..."
-  accuracy_alert_threshold: 0.8
-  drift_alert_threshold: 0.5
+```bash
+# Restaurer depuis une sauvegarde
+./scripts/deploy_saas.sh --restore backup_20240101_120000.tar.gz
 ```
 
-### 4. Logs Structurés
+## Dépannage
 
-```python
-import logging
-import json
+### Problèmes courants
 
-# Configuration des logs JSON
-class JSONFormatter(logging.Formatter):
-    def format(self, record):
-        log_obj = {
-            "timestamp": self.formatTime(record),
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "module": record.module,
-            "model_name": getattr(record, 'model_name', None),
-            "version": getattr(record, 'version', None)
-        }
-        return json.dumps(log_obj)
+#### 1. Services ne démarrent pas
 
-handler = logging.StreamHandler()
-handler.setFormatter(JSONFormatter())
-logger.addHandler(handler)
+```bash
+# Vérifier les logs
+docker-compose logs -f api
+docker-compose logs -f ui
+
+# Vérifier l'état des conteneurs
+docker-compose ps
+
+# Redémarrer un service spécifique
+docker-compose restart api
 ```
 
----
+#### 2. Erreurs de connexion à la base de données
 
-## 🔧 Troubleshooting
+```bash
+# Vérifier PostgreSQL
+docker exec -it automl_postgres psql -U automl -d automl -c "\l"
 
-### Problèmes Courants
+# Réinitialiser si nécessaire
+docker-compose down -v
+docker-compose up -d postgres
+# Attendre 30 secondes
+docker-compose up -d
+```
 
-1. **MLflow connection error**
-   ```bash
-   # Vérifier que MLflow server est lancé
-   curl http://localhost:5000/health
-   ```
+#### 3. Problèmes SSO/Keycloak
 
-2. **ONNX export fails**
-   ```python
-   # Vérifier les dépendances
-   import onnx
-   import skl2onnx
-   print(f"ONNX: {onnx.__version__}")
-   print(f"skl2onnx: {skl2onnx.__version__}")
-   ```
+```bash
+# Vérifier le statut de Keycloak
+curl http://localhost:8080/health/ready
 
-3. **Airflow DAG not visible**
-   ```bash
-   # Recharger les DAGs
-   airflow dags list
-   airflow dags unpause model_retraining
-   ```
+# Réinitialiser Keycloak
+docker-compose stop keycloak
+docker volume rm automl_keycloak_data
+docker-compose up -d keycloak
 
-4. **A/B test not routing correctly**
-   ```python
-   # Vérifier les tests actifs
-   active_tests = ab_testing.get_active_tests()
-   print(f"Active tests: {active_tests}")
-   ```
+# Vérifier la configuration du realm
+curl http://localhost:8080/realms/automl/.well-known/openid-configuration
+```
 
----
+#### 4. Espace disque insuffisant
 
-## 🎯 Best Practices
+```bash
+# Nettoyer Docker
+docker system prune -a -f
+docker volume prune -f
 
-### 1. Versioning Strategy
-- Utiliser semantic versioning pour les modèles
-- Taguer les modèles avec métadonnées pertinentes
-- Garder historique des 10 dernières versions minimum
+# Vérifier l'utilisation
+docker system df
+df -h
+```
 
-### 2. A/B Testing
-- Commencer avec 5-10% de trafic pour challenger
-- Minimum 1000 échantillons pour significance statistique
-- Durée minimum de 7 jours pour patterns hebdomadaires
+#### 5. Problèmes de performance
 
-### 3. Retraining
-- Schedule pendant heures creuses (2-4 AM)
-- Validation systématique avant promotion
-- Garder modèle de fallback en cas d'échec
+```bash
+# Augmenter les workers
+docker-compose up -d --scale worker-cpu=4
 
-### 4. Export et Déploiement
-- Toujours quantizer pour edge deployment
-- Tester inference time sur hardware cible
-- Versionner les exports avec le modèle source
+# Vérifier l'utilisation des ressources
+docker stats
 
----
+# Ajuster les limites dans docker-compose.yml
+```
 
-## 📚 Références
+### Logs et debugging
 
-- [MLflow Documentation](https://mlflow.org/docs/latest/)
-- [ONNX Runtime](https://onnxruntime.ai/)
-- [Airflow Best Practices](https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html)
-- [Prefect Documentation](https://docs.prefect.io/)
+```bash
+# Tous les logs en temps réel
+docker-compose logs -f
 
----
+# Logs d'un service spécifique
+docker-compose logs -f api --tail=100
 
-## 🤝 Support
+# Activer le mode debug
+sed -i 's/LOG_LEVEL=info/LOG_LEVEL=debug/' .env
+docker-compose restart api
+```
 
-Pour toute question ou problème:
+### Validation de l'installation
+
+Le script `deploy_saas.sh` effectue automatiquement des health checks. Pour vérifier manuellement :
+
+```bash
+# API
+curl http://localhost:8000/health
+
+# UI  
+curl http://localhost:8501/_stcore/health
+
+# MLflow
+curl http://localhost:5000/health
+
+# Keycloak
+curl http://localhost:8080/health/ready
+
+# MinIO
+curl http://localhost:9000/minio/health/live
+```
+
+### Architecture complète
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Nginx (Reverse Proxy)                      │
+└────────────┬────────────────────────────────┬────────────────┘
+             │                                │
+             ▼                                ▼
+┌─────────────────────┐          ┌─────────────────────┐
+│    UI (Streamlit)   │          │   API (FastAPI)     │
+│    Port: 8501       │          │    Port: 8000      │
+│  (Démarrage auto)   │          │  (main.py api)      │
+└──────────┬──────────┘          └──────────┬──────────┘
+           │                                 │
+           └────────────┬────────────────────┘
+                        │
+                        ▼
+         ┌──────────────────────────────┐
+         │  Keycloak SSO + Auth Service │
+         │  (auth.py + sso_service.py)  │
+         └──────────┬───────────────────┘
+                    │
+         ┌──────────────────────────────┐
+         │      Message Broker          │
+         │         (Redis)              │
+         └──────────┬───────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+┌───────────────┐      ┌───────────────┐
+│  CPU Workers  │      │  GPU Workers  │
+│   (Celery)    │      │  (Optional)   │
+└───────────────┘      └───────────────┘
+        │                       │
+        └───────────┬───────────┘
+                    ▼
+    ┌───────────────────────────────────┐
+    │         Storage Layer             │
+    ├───────────────────────────────────┤
+    │  PostgreSQL │ MinIO │ MLflow      │
+    │  (Multi-DB) │ (S3)  │ (Registry)  │
+    └───────────────────────────────────┘
+```
+
+**Note** : L'API et l'UI démarrent automatiquement via le script intégré dans le Dockerfile. L'authentification SSO est gérée par les modules `auth.py` et `sso_service.py` existants.
+
+### Checklist de production
+
+- [ ] Variables d'environnement sécurisées (générées automatiquement)
+- [ ] HTTPS configuré avec certificats valides
+- [ ] Sauvegardes automatiques activées
+- [ ] Monitoring en place (Prometheus + Grafana)
+- [ ] Logs centralisés configurés
+- [ ] SSO configuré et testé
+- [ ] Firewall configuré
+- [ ] Limites de ressources définies dans docker-compose.yml
+- [ ] Health checks validés
+- [ ] Documentation à jour
+- [ ] Plan de reprise d'activité testé
+
+## Support
+
+Pour toute question ou problème :
+- Consulter `DEPLOYMENT_GUIDE.md` pour les détails MLOps
 - Créer une issue sur le repository
-- Contacter l'équipe MLOps
-- Consulter les logs dans `/logs/mlops/`
+- Consulter les logs dans `/app/logs/` ou via `docker-compose logs`
 
 ---
 
-*Document mis à jour le: 2024*
-*Version: 1.0.0*
+*Document mis à jour pour la version SaaS*
+*Dernière modification : 2024*
