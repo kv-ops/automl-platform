@@ -288,18 +288,19 @@ class TemplateLoader:
         """
         return self._templates_cache.get(name)
     
-    def load_template(self, name: str) -> Dict[str, Any]:
+    def load_template(self, name: str, format: str = "dict") -> Union[Dict[str, Any], str]:
         """
         Load a template configuration by name.
         
         Args:
             name: Template name
+            format: Return format ('dict', 'yaml', or 'json')
             
         Returns:
-            Template configuration dictionary
+            Template configuration in requested format
             
         Raises:
-            ValueError: If template not found
+            ValueError: If template not found or invalid format
         """
         template = self.get_template(name)
         if template is None:
@@ -307,7 +308,9 @@ class TemplateLoader:
         
         data = template.to_dict()
         
-        if format == "yaml":
+        if format == "dict":
+            return data
+        elif format == "yaml":
             return yaml.dump(data, default_flow_style=False, sort_keys=False)
         elif format == "json":
             return json.dumps(data, indent=2)
@@ -326,7 +329,11 @@ class TemplateLoader:
         """
         template = self.get_template(name)
         if template is None:
-            raise ValueError(f"Template '{name}' not found")
+            available = ", ".join(self._templates_cache.keys())
+            raise ValueError(
+                f"Template '{name}' not found. "
+                f"Available templates: {available}"
+            )
         
         info = {
             "name": template.metadata.name,
@@ -359,14 +366,7 @@ class TemplateLoader:
             if "cost_matrix" in rules:
                 info["cost_sensitive"] = True
         
-        return info:
-            available = ", ".join(self._templates_cache.keys())
-            raise ValueError(
-                f"Template '{name}' not found. "
-                f"Available templates: {available}"
-            )
-        
-        return template.config
+        return info
     
     def apply_template(self, 
                       name: str,
@@ -604,4 +604,14 @@ class TemplateLoader:
             Template as string
         """
         template = self.get_template(name)
-        if template is None
+        if template is None:
+            raise ValueError(f"Template '{name}' not found")
+        
+        data = template.to_dict()
+        
+        if format == "yaml":
+            return yaml.dump(data, default_flow_style=False, sort_keys=False)
+        elif format == "json":
+            return json.dumps(data, indent=2)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
