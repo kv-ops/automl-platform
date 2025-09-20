@@ -3,15 +3,20 @@ Template Loader Module for AutoML Platform
 Manages and loads predefined use case templates for common ML scenarios.
 """
 
+from __future__ import annotations
+
 import os
 import yaml
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 import copy
+
+if TYPE_CHECKING:
+    from automl_platform.config import AutoMLConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +50,7 @@ class TemplateConfig:
             "config": self.config
         }
     
-    def apply_to_config(self, automl_config: 'AutoMLConfig') -> 'AutoMLConfig':
+    def apply_to_config(self, automl_config: AutoMLConfig) -> AutoMLConfig:
         """Apply template settings to an AutoMLConfig instance."""
         # Import here to avoid circular imports
         from automl_platform.config import AutoMLConfig
@@ -370,7 +375,7 @@ class TemplateLoader:
     
     def apply_template(self, 
                       name: str,
-                      base_config: Optional['AutoMLConfig'] = None) -> 'AutoMLConfig':
+                      base_config: Optional[AutoMLConfig] = None) -> AutoMLConfig:
         """
         Apply a template to create or modify an AutoMLConfig.
         
