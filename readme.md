@@ -351,7 +351,221 @@ python main.py template-info customer_churn
 # - Customization suggestions
 ```
 
-## 🆕 New in v3.2 - Extended Data Connectors
+## 🎓 Expert Mode vs Simplified Mode
+
+The platform features a **dual-mode interface** to accommodate both beginners and advanced users:
+
+### Mode Selection
+
+#### Command Line Interface (CLI)
+```bash
+# Use simplified mode (default)
+python main.py train --data data.csv --target target
+
+# Activate expert mode for full control
+python main.py train --expert --data data.csv --target target
+
+# Expert mode with all options
+python main.py train --expert \
+    --data data.csv \
+    --target target \
+    --algorithms XGBoost,LightGBM,CatBoost \
+    --hpo-method optuna \
+    --hpo-iter 100 \
+    --cv-folds 10
+```
+
+#### Web Interface (Dashboard)
+1. Launch the dashboard:
+   ```bash
+   streamlit run automl_platform/ui/dashboard.py
+   ```
+
+2. Toggle expert mode:
+   - Click the **"🎓 Activer le mode Expert"** checkbox in the sidebar
+   - The interface dynamically adapts to show/hide advanced options
+   - Mode persists across sessions
+
+#### Environment Variable
+Set default mode via environment:
+```bash
+# Enable expert mode by default
+export AUTOML_EXPERT_MODE=true
+
+# Or in .env file
+AUTOML_EXPERT_MODE=true
+```
+
+### Feature Comparison
+
+| Feature | Simplified Mode | Expert Mode |
+|---------|----------------|-------------|
+| **Algorithm Selection** | Auto (3-5 best) | Manual (15+ available) |
+| **HPO Iterations** | 10-30 | Up to 500 |
+| **HPO Methods** | Random | Grid, Random, Optuna, Bayesian |
+| **Cross-Validation** | 3 folds | 2-10 folds, multiple strategies |
+| **Preprocessing** | Automatic | Full control |
+| **Feature Engineering** | Basic | Advanced options |
+| **Ensemble Methods** | Voting only | Voting, Stacking, Blending |
+| **Template Customization** | Use as-is | Full modification |
+| **Parallel Processing** | 2 workers | Up to 16 workers |
+| **GPU Support** | No | Yes |
+| **Monitoring** | Basic metrics | Advanced metrics + drift |
+| **Export Formats** | Basic | ONNX, PMML, custom |
+
+### Simplified Mode (Default)
+
+Perfect for beginners and quick prototypes:
+
+```python
+# Everything is optimized automatically
+from automl_platform import AutoMLOrchestrator
+
+orchestrator = AutoMLOrchestrator()  # Uses optimized defaults
+orchestrator.fit(X, y)
+predictions = orchestrator.predict(X_test)
+```
+
+Dashboard features in simplified mode:
+- One-click optimization levels: "Rapide", "Équilibré", "Maximum"
+- Pre-selected algorithm combinations
+- Automatic preprocessing
+- Simple metrics display
+- Guided workflow
+
+### Expert Mode
+
+Full control for ML engineers and data scientists:
+
+```python
+from automl_platform import AutoMLOrchestrator, AutoMLConfig
+
+# Detailed configuration
+config = AutoMLConfig(
+    expert_mode=True,
+    algorithms=["XGBoost", "LightGBM", "CatBoost", "RandomForest"],
+    hpo_method="optuna",
+    hpo_n_iter=100,
+    cv_strategy="stratified",
+    cv_folds=10,
+    ensemble_method="stacking",
+    feature_engineering=True,
+    handle_imbalance=True,
+    gpu_enabled=True
+)
+
+orchestrator = AutoMLOrchestrator(config)
+orchestrator.fit(X, y)
+```
+
+Dashboard features in expert mode:
+- Full algorithm selection (15+ algorithms)
+- Detailed HPO configuration
+- Custom validation strategies
+- Advanced preprocessing options
+- Template modification
+- Performance profiling
+- Drift detection settings
+- Custom metrics
+- Parallel processing control
+
+### Mode-Specific Examples
+
+#### Simplified Mode Workflow
+```bash
+# 1. Quick training with template
+python main.py train --template customer_churn --data data.csv --target churn
+
+# 2. Basic prediction
+python main.py predict --model model.joblib --data test.csv
+
+# 3. Simple API deployment
+python main.py api
+```
+
+#### Expert Mode Workflow
+```bash
+# 1. Advanced training with full control
+python main.py train --expert \
+    --template customer_churn \
+    --data data.csv \
+    --target churn \
+    --algorithms XGBoost,LightGBM,CatBoost,RandomForest,ExtraTrees \
+    --hpo-method optuna \
+    --hpo-iter 200 \
+    --cv-folds 10 \
+    --ensemble stacking \
+    --gpu \
+    --n-workers 8
+
+# 2. Batch prediction with optimization
+python main.py predict --expert \
+    --model model.joblib \
+    --data test.csv \
+    --batch-size 10000 \
+    --output predictions.csv
+
+# 3. Production API with scaling
+python main.py api --expert \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 4 \
+    --reload
+```
+
+### Dashboard Mode Toggle
+
+The web interface provides an interactive toggle:
+
+1. **Sidebar Toggle**: 
+   - Located in the sidebar under "⚙️ Configuration"
+   - Checkbox: "🎓 Activer le mode Expert"
+   - Instant UI update without page reload
+
+2. **Visual Indicators**:
+   - **Simplified Mode**: Green badge "🚀 Mode Simplifié"
+   - **Expert Mode**: Gold badge "🎓 Mode Expert"
+
+3. **Dynamic UI Changes**:
+   - Simplified: Shows optimization slider (Rapide/Équilibré/Maximum)
+   - Expert: Shows detailed tabs (Algorithmes/Hyperparamètres/Validation/Avancé)
+
+### Best Practices
+
+#### When to Use Simplified Mode:
+- First-time users
+- Quick prototypes
+- Standard use cases with templates
+- When optimal defaults are sufficient
+- Time-constrained projects
+
+#### When to Use Expert Mode:
+- Custom algorithm requirements
+- Specific HPO strategies needed
+- Advanced preprocessing required
+- Custom validation strategies
+- Production optimization
+- Research projects
+- When you need full control
+
+### Tips for Transitioning
+
+Start with simplified mode and gradually move to expert:
+
+1. **Phase 1**: Use simplified mode with templates
+2. **Phase 2**: Try simplified mode with custom data
+3. **Phase 3**: Enable expert mode but use mostly defaults
+4. **Phase 4**: Fully customize in expert mode
+
+### Performance Impact
+
+| Metric | Simplified Mode | Expert Mode (Optimized) |
+|--------|----------------|------------------------|
+| Training Time | 5-15 min | 15-60+ min |
+| Model Count | 3-5 | 10-50+ |
+| Accuracy Gain | Baseline | +2-5% typical |
+| Resource Usage | Low-Medium | Medium-High |
+| Complexity | Low | High |
 
 [Rest of the original README content continues here...]
 
