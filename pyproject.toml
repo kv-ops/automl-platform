@@ -24,9 +24,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "automl-platform"
-version = "3.1.0"
+version = "3.2.0"
 description = "Enterprise AutoML platform with MLOps, distributed training, and production deployment"
-readme = { file = "README.md" }
+readme = "README.md"
 requires-python = ">=3.9,<3.13"
 license = { text = "MIT" }
 authors = [
