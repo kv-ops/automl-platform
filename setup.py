@@ -1,555 +1,642 @@
 """
-AutoML Platform No-Code Dashboard with Expert Mode Toggle
-==========================================================
-
-Interface web intuitive avec bascule dynamique entre modes:
-- Mode simplifié par défaut pour utilisateurs non techniques
-- Mode expert activable via toggle dans la sidebar
-- Import facile de données (drag & drop, Excel, Google Sheets, CRM)
-- Configuration visuelle des modèles avec options avancées en mode expert
-- Suivi en temps réel des entraînements
-- Déploiement en un clic
-- Génération automatique de rapports
+Setup script for AutoML Platform
+Version 3.2.0 - Enterprise Edition with No-Code UI and Extended Connectors
 """
 
-import streamlit as st
-from streamlit_option_menu import option_menu
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import json
+from setuptools import setup, find_packages
 from pathlib import Path
-import tempfile
-import requests
-import time
-from typing import Dict, List, Optional, Any, Tuple
-import io
-import base64
-from uuid import uuid4
 import os
 
-# Import des composants existants si disponibles
-try:
-    from .components import (
-        DataQualityVisualizer,
-        ModelLeaderboard,
-        FeatureImportanceVisualizer,
-        TrainingProgressTracker,
-        AlertsAndNotifications,
-        ReportGenerator
-    )
-    COMPONENTS_AVAILABLE = True
-except ImportError:
-    COMPONENTS_AVAILABLE = False
+# Read the contents of README.md
+this_directory = Path(__file__).parent
+long_description = (this_directory / "README.md").read_text() if (this_directory / "README.md").exists() else ""
 
-# Import des métriques si disponibles
-try:
-    from .ui_metrics import UIMetrics, track_streamlit_page, track_streamlit_action
-    METRICS_AVAILABLE = True
-except ImportError:
-    METRICS_AVAILABLE = False
+# Read version from version file
+version = "3.2.1"  # Updated version for extended connectors
+version_file = this_directory / "automl_platform" / "__version__.py"
+if version_file.exists():
+    with open(version_file) as f:
+        exec(f.read())
 
-# Import des nouveaux connecteurs
-try:
-    from ..api.connectors import (
-        ExcelConnector,
-        GoogleSheetsConnector, 
-        CRMConnector,
-        ConnectionConfig,
-        read_excel,
-        read_google_sheet,
-        fetch_crm_data
-    )
-    CONNECTORS_AVAILABLE = True
-except ImportError:
-    CONNECTORS_AVAILABLE = False
-    # Message d'information supprimé ou transformé en debug
-    print("Debug: Connecteurs avancés non disponibles")
+# Core requirements (essential dependencies for basic functionality)
+install_requires = [
+    # Core ML libraries
+    "pandas>=2.0.0,<3.0.0",
+    "numpy>=1.24.0,<2.0.0",
+    "scikit-learn>=1.3.0,<2.0.0",
+    "scipy>=1.11.0,<2.0.0",
+    "joblib>=1.3.0",
 
-# Import du template loader
-try:
-    from ..template_loader import TemplateLoader
-    TEMPLATES_AVAILABLE = True
-except ImportError:
-    TEMPLATES_AVAILABLE = False
+    # Configuration & Validation
+    "pyyaml>=6.0.1",
+    "pydantic>=2.5.0,<3.0.0",
+    "python-dotenv>=1.0.0",
 
-# Configuration de l'API backend avec fallback sur variables d'environnement
-def get_config_value(key: str, default: str = None) -> str:
-    """
-    Récupère une valeur de configuration depuis les secrets Streamlit ou les variables d'environnement.
+    # AutoML Core
+    "optuna>=3.4.0,<4.0.0",
+    "xgboost>=2.0.0,<3.0.0",
+    "lightgbm>=4.0.0,<5.0.0",
+    "catboost>=1.2.0,<2.0.0",
+    "imbalanced-learn>=0.10.0,<1.0.0",
+
+    # API Framework (Essential)
+    "fastapi>=0.104.0,<1.0.0",
+    "uvicorn[standard]>=0.24.0,<1.0.0",
+    "starlette>=0.27.0",
+
+    # HTTP & Core Auth
+    "httpx>=0.25.0",
+    "authlib>=1.2.0",
+    "requests>=2.31.0",
+
+    # Storage (Essential)
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "redis>=5.0.0",
+
+    # Security (Essential)
+    "cryptography>=41.0.0",
+    "pyjwt>=2.8.0",
+    "passlib[bcrypt]>=1.7.4",
+
+    # MLOps (Essential)
+    "mlflow>=2.9.0,<3.0.0",
+
+    # UI Framework (Essential for no-code)
+    "streamlit>=1.30.0",
+    "plotly>=5.18.0",
+    "streamlit-option-menu>=0.3.6",
+
+    # Utilities
+    "tqdm>=4.66.0",
+    "click>=8.1.0",
+    "prometheus-client>=0.19.0",
+
+    # Additional utilities
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.2.0",
+    "aiohttp>=3.9.0",
+    "tabulate>=0.9.0",
+    "tenacity>=8.2.0",
+    "psutil>=5.9.6",
     
-    Args:
-        key: La clé de configuration à récupérer
-        default: La valeur par défaut si non trouvée
+    # NEW: Essential connectors for Excel and Google Sheets
+    "openpyxl>=3.1.0",           # Pour Excel avancé
+    "xlsxwriter>=3.1.0",          # Pour l'export Excel
+    "gspread>=5.7.2",             # Pour Google Sheets
+    "google-auth>=2.14.1",        # Pour l'authentification Google
+    "google-auth-oauthlib>=1.0.0", # Pour OAuth Google
+    "pyarrow>=14.0.0",            # Pour Parquet
+]
+
+# Optional dependencies organized by feature
+extras_require = {
+    # Extended connectors bundle (now mostly included in core)
+    "connectors": [
+        # Excel support (déjà dans core maintenant)
+        "xlrd>=2.0.1",  # Pour lire les anciens fichiers Excel
         
-    Returns:
-        La valeur de configuration
-    """
-    # Essayer d'abord les secrets Streamlit
-    try:
-        if hasattr(st, 'secrets') and key in st.secrets:
-            return st.secrets[key]
-    except Exception:
-        pass
-    
-    # Fallback sur les variables d'environnement
-    env_key = key.upper()
-    env_value = os.getenv(env_key)
-    if env_value:
-        return env_value
-    
-    # Retourner la valeur par défaut
-    return default
-
-# Configuration avec fallback
-API_BASE_URL = get_config_value("api_base_url", "http://localhost:8000")
-MLFLOW_URL = get_config_value("mlflow_tracking_uri", "http://localhost:5000")
-EXPERT_MODE_DEFAULT = get_config_value("expert_mode_default", "false").lower() in ["true", "1", "yes", "on"]
-
-# ============================================================================
-# Helpers et Utilitaires
-# ============================================================================
-
-class SessionState:
-    """Gestionnaire d'état de session amélioré avec mode expert."""
-    
-    @staticmethod
-    def initialize():
-        """Initialise l'état de la session."""
-        defaults = {
-            'current_project': None,
-            'uploaded_data': None,
-            'data_preview': None,
-            'selected_target': None,
-            'selected_template': None,  # Template sélectionné
-            'training_config': {},
-            'current_experiment': None,
-            'training_status': 'idle',
-            'deployed_models': [],
-            'user_profile': {'name': 'Utilisateur', 'role': 'analyst'},
-            'notifications': [],
-            'api_token': None,
-            'wizard_step': 0,
-            'expert_mode': EXPERT_MODE_DEFAULT,  # Utilise la config par défaut
-            'google_sheets_creds': None,  # Credentials Google Sheets
-            'crm_config': {}  # Configuration CRM
-        }
+        # Google Sheets support (déjà dans core maintenant)
+        "google-auth-httplib2>=0.2.0",
+        "pygsheets>=2.0.6",  # Alternative à gspread
         
-        # Vérifier la variable d'environnement pour le mode expert initial
-        expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
-        if expert_mode_env in ["true", "1", "yes", "on"]:
-            defaults['expert_mode'] = True
+        # CRM connectors
+        "hubspot-api-client>=8.2.0",  # HubSpot
+        "simple-salesforce>=1.12.5",  # Salesforce
+        "pipedrive-python-lib>=1.2.0",  # Pipedrive
+        "zoho-crm>=0.5.0",  # Zoho CRM
         
-        for key, value in defaults.items():
-            if key not in st.session_state:
-                st.session_state[key] = value
+        # Database connectors (extended)
+        "snowflake-connector-python>=3.7.0",
+        "google-cloud-bigquery>=3.15.0",
+        "databricks-connect>=14.1.0",
+        "pyodbc>=5.0.1",
+        "cx_Oracle>=8.3.0",
+        "pymongo>=4.6.0",
+        "cassandra-driver>=3.29.0",
+        "elasticsearch>=8.12.0",
+        "influxdb-client>=1.40.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
+    ],
+    
+    # Enhanced UI/Dashboard components
+    "ui_advanced": [
+        "streamlit-extras>=0.3.6",
+        "streamlit-aggrid>=0.3.4",
+        "streamlit-authenticator>=0.2.3",
+        "streamlit-chat>=0.1.1",
+        "streamlit-elements>=0.1.0",
+        "streamlit-lottie>=0.0.5",
+        "streamlit-drawable-canvas>=0.9.3",
+        "streamlit-autorefresh>=1.0.1",
+        "streamlit-webrtc>=0.47.0",
+        "streamlit-folium>=0.15.0",
+        "streamlit-ace>=0.1.1",
+        "streamlit-tags>=1.2.8",
+        "streamlit-tree-select>=0.0.5",
+    ],
 
-class DataConnector:
-    """Gestionnaire de connexion aux données avec support étendu."""
-    
-    @staticmethod
-    def load_from_file(uploaded_file) -> Optional[pd.DataFrame]:
-        """Charge les données depuis un fichier uploadé."""
-        if uploaded_file is None:
-            return None
-        
-        try:
-            file_extension = uploaded_file.name.split('.')[-1].lower()
-            
-            if file_extension == 'csv':
-                df = pd.read_csv(uploaded_file)
-            elif file_extension in ['xlsx', 'xls']:
-                df = pd.read_excel(uploaded_file)
-            elif file_extension == 'parquet':
-                df = pd.read_parquet(uploaded_file)
-            elif file_extension == 'json':
-                df = pd.read_json(uploaded_file)
-            else:
-                st.error(f"Format de fichier non supporté: {file_extension}")
-                return None
-            
-            return df
-            
-        except Exception as e:
-            st.error(f"Erreur lors du chargement du fichier: {str(e)}")
-            return None
-    
-    @staticmethod
-    def connect_to_database(config: Dict) -> Optional[pd.DataFrame]:
-        """Connexion à une base de données."""
-        try:
-            from sqlalchemy import create_engine
-            
-            engine = create_engine(config['connection_string'])
-            df = pd.read_sql(config['query'], engine)
-            return df
-            
-        except Exception as e:
-            st.error(f"Erreur de connexion à la base de données: {str(e)}")
-            return None
+    # Report generation
+    "reporting": [
+        "reportlab>=4.0.0",
+        "python-docx>=1.1.0",
+        "xlsxwriter>=3.1.0",
+        "fpdf2>=2.7.0",
+        "jinja2>=3.1.0",
+        "weasyprint>=60.0",
+        "python-pptx>=0.6.0",
+    ],
 
-class AutoMLWizard:
-    """Assistant de configuration AutoML guidé avec mode expert, templates et connecteurs."""
-    
-    def __init__(self):
-        self.steps = [
-            "📤 Chargement des données",
-            "🎯 Sélection de l'objectif",
-            "📋 Template (optionnel)",  # Nouvelle étape
-            "⚙️ Configuration du modèle",
-            "🚀 Entraînement",
-            "📊 Résultats"
+    # Enhanced Authentication & SSO
+    "auth": [
+        "python-keycloak>=3.7.0",
+        "python-saml>=1.15.0",
+        "okta>=2.9.0",
+        "python-jose[cryptography]>=3.3.0",
+        "msal>=1.26.0",  # Microsoft Authentication
+        "google-auth>=2.27.0",
+        "oauthlib>=3.2.0",
+    ],
+
+    # GPU Computing & Acceleration
+    "gpu": [
+        "cupy-cuda11x>=12.0.0,<13.0.0",
+        "numba[cuda]>=0.58.0",
+        "gputil>=1.4.0",
+        "nvidia-ml-py3>=7.352.0",
+        "pynvml>=11.5.0",
+        "gpustat>=1.1.1",
+        "onnxruntime-gpu>=1.16.0,<2.0.0",
+        "pytorch-memlab>=0.3.0",
+        "torch-tb-profiler>=0.4.0",
+    ],
+
+    # Advanced distributed GPU training
+    "distributed_gpu": [
+        "horovod>=0.28.0,<1.0.0",
+        "fairscale>=0.4.0,<1.0.0",
+        "deepspeed>=0.12.0,<1.0.0",
+        "ray[train]>=2.8.0",
+    ],
+
+    # Hyperparameter optimization
+    "hpo": [
+        "optuna-dashboard>=0.13.0",
+        "hyperopt>=0.2.7",
+        "scikit-optimize>=0.9.0",
+        "nevergrad>=0.6.0",
+    ],
+
+    # Deep learning
+    "deep": [
+        "tensorflow>=2.15.0,<3.0.0",
+        "torch>=2.1.0,<3.0.0",
+        "torchvision>=0.16.0,<1.0.0",
+        "torchaudio>=2.1.0,<3.0.0",
+        "pytorch-tabnet>=4.1.0",
+        "pytorch-lightning>=2.1.0",
+        "transformers>=4.36.0",
+    ],
+
+    # Model explainability
+    "explain": [
+        "shap>=0.43.0",
+        "lime>=0.2.0",
+        "eli5>=0.13.0",
+        "interpret>=0.4.0",
+        "alibi>=0.9.0",
+        "captum>=0.7.0",
+    ],
+
+    # Time series
+    "timeseries": [
+        "statsmodels>=0.14.0",
+        "prophet>=1.1.5",
+        "pmdarima>=2.0.0",
+        "sktime>=0.24.0",
+        "tsfresh>=0.20.0",
+        "darts>=0.26.0",
+        "neuralforecast>=1.6.0",
+    ],
+
+    # NLP
+    "nlp": [
+        "sentence-transformers>=2.2.0",
+        "nltk>=3.8.0",
+        "spacy>=3.7.0",
+        "gensim>=4.3.0",
+        "textblob>=0.17.0",
+        "langdetect>=1.0.9",
+        "textstat>=0.7.3",
+    ],
+
+    # Computer Vision
+    "vision": [
+        "opencv-python>=4.8.0",
+        "pillow>=10.0.0",
+        "albumentations>=1.3.0",
+        "torchvision>=0.16.0",
+        "supervision>=0.17.0",
+        "ultralytics>=8.1.0",
+    ],
+
+    # Enhanced API features
+    "api": [
+        "python-multipart>=0.0.6",
+        "aiofiles>=23.2.0",
+        "websockets>=12.0",
+        "slowapi>=0.1.9",
+        "gunicorn>=21.2.0",
+        "python-socketio>=5.11.0",
+        "fastapi-limiter>=0.1.5",
+        "fastapi-versioning>=0.10.0",
+    ],
+
+    # Database & Storage (updated with connectors)
+    "storage": [
+        "alembic>=1.13.0",
+        "pymongo>=4.6.0",
+        "minio>=7.2.0",
+        "boto3>=1.34.0",
+        "google-cloud-storage>=2.10.0",
+        "azure-storage-blob>=12.19.0",
+        "aioboto3>=12.0.0",
+        # Database connectors now included here too
+        "snowflake-connector-python>=3.7.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
+    ],
+
+    # Distributed Computing
+    "distributed": [
+        "ray[default,train,tune]>=2.8.0,<3.0.0",
+        "dask[complete]>=2023.12.0",
+        "celery[redis]>=5.3.0",
+        "flower>=2.0.0",
+        "dramatiq[redis]>=1.15.0",
+    ],
+
+    # MLOps & Model Management
+    "mlops": [
+        "dvc>=3.48.0",
+        "wandb>=0.16.0",
+        "neptune-client>=1.8.0",
+        "bentoml>=1.1.0",
+        "evidently>=0.4.0",
+        "great-expectations>=0.18.0",
+        "deepchecks>=0.17.0",
+    ],
+
+    # Workflow Orchestration
+    "orchestration": [
+        "apache-airflow>=2.8.0",
+        "prefect>=2.14.0",
+        "dagster>=1.6.0",
+        "kedro>=0.19.0",
+        "luigi>=3.5.0",
+    ],
+
+    # Model Export & Serving
+    "export": [
+        "onnx>=1.15.0,<2.0.0",
+        "onnxruntime>=1.16.0,<2.0.0",
+        "skl2onnx>=1.16.0,<2.0.0",
+        "sklearn2pmml>=0.104.0",
+        "tensorflow-lite>=2.15.0",
+        "coremltools>=7.1",
+        "tensorflowjs>=4.17.0",
+    ],
+
+    # Streaming & Real-time
+    "streaming": [
+        "kafka-python>=2.0.2",
+        "confluent-kafka>=2.3.0",
+        "pulsar-client>=3.4.0",
+        "redis-py-cluster>=2.1.0",
+        "faust-streaming>=0.10.0",
+        "aiokafka>=0.10.0",
+    ],
+
+    # Feature Store
+    "feature_store": [
+        "feast>=0.36.0",
+        "featuretools>=1.28.0",
+        "featureform>=1.12.0",
+    ],
+
+    # Monitoring & Observability
+    "monitoring": [
+        "opentelemetry-api>=1.22.0",
+        "opentelemetry-sdk>=1.22.0",
+        "opentelemetry-instrumentation-fastapi>=0.43b0",
+        "jaeger-client>=4.8.0",
+        "sentry-sdk>=1.40.0",
+        "datadog>=0.49.0",
+        "prometheus-fastapi-instrumentator>=6.1.0",
+    ],
+
+    # LLM Integration
+    "llm": [
+        "openai>=1.10.0",
+        "anthropic>=0.8.0",
+        "langchain>=0.1.0",
+        "langchain-community>=0.0.20",
+        "llama-index>=0.10.0",
+        "chromadb>=0.4.22",
+        "tiktoken>=0.6.0",
+        "instructor>=0.5.0",
+    ],
+
+    # Visualization
+    "viz": [
+        "matplotlib>=3.8.0",
+        "seaborn>=0.13.0",
+        "plotly>=5.18.0",
+        "altair>=5.2.0",
+        "bokeh>=3.3.0",
+        "holoviews>=1.18.0",
+        "panel>=1.3.0",
+        "hvplot>=0.9.0",
+    ],
+
+    # Development & Testing
+    "dev": [
+        "pytest>=8.0.0",
+        "pytest-cov>=4.1.0",
+        "pytest-asyncio>=0.23.0",
+        "pytest-mock>=3.12.0",
+        "pytest-benchmark>=4.0.0",
+        "hypothesis>=6.98.0",
+        "faker>=22.0.0",
+        "factory-boy>=3.3.0",
+        "black>=24.0.0",
+        "ruff>=0.2.0",
+        "mypy>=1.8.0",
+        "isort>=5.13.0",
+        "pre-commit>=3.6.0",
+        "bandit>=1.7.0",
+        "safety>=3.0.0",
+        "locust>=2.20.0",
+    ],
+
+    # Documentation
+    "docs": [
+        "sphinx>=7.2.0",
+        "sphinx-rtd-theme>=2.0.0",
+        "sphinx-autodoc-typehints>=1.25.0",
+        "sphinx-copybutton>=0.5.0",
+        "myst-parser>=2.0.0",
+        "jupyter-book>=0.15.0",
+        "mkdocs>=1.5.0",
+        "mkdocs-material>=9.5.0",
+    ],
+
+    # Cloud providers
+    "cloud": [
+        "boto3>=1.34.0",
+        "s3fs>=2024.2.0",
+        "google-cloud-bigquery>=3.15.0",
+        "google-cloud-storage>=2.10.0",
+        "azure-storage-blob>=12.19.0",
+        "azure-identity>=1.15.0",
+        "snowflake-connector-python>=3.7.0",
+        "databricks-sql-connector>=2.9.0",
+    ],
+}
+
+# No-code bundle - Everything needed for non-technical users (updated)
+extras_require["nocode"] = list(set([
+    *extras_require["connectors"],  # Include all connectors
+    *extras_require["ui_advanced"],
+    *extras_require["reporting"],
+    *extras_require["viz"],
+    "jupyter>=1.0.0",
+    "notebook>=7.0.0",
+    "voila>=0.5.0",
+    "papermill>=2.5.0",
+]))
+
+# Enterprise edition includes production essentials (updated)
+extras_require["enterprise"] = list(set([
+    *extras_require["api"],
+    *extras_require["storage"],
+    *extras_require["distributed"],
+    *extras_require["mlops"],
+    *extras_require["monitoring"],
+    *extras_require["auth"],
+    *extras_require["orchestration"],
+    *extras_require["export"],
+    *extras_require["streaming"],
+    *extras_require["cloud"],
+    *extras_require["nocode"],
+    *extras_require["connectors"],  # Include connectors
+]))
+
+# Combine all extras for complete installation
+all_extras = []
+for extra in extras_require.values():
+    all_extras.extend(extra)
+extras_require["all"] = list(set(all_extras))
+
+# Production deployment essentials
+extras_require["production"] = [
+    "gunicorn>=21.2.0",
+    "supervisor>=4.2.0",
+    "docker>=7.0.0",
+    "kubernetes>=29.0.0",
+    "nginx>=0.2.0",
+]
+
+# Setup configuration
+setup(
+    # Package metadata
+    name="automl-platform",
+    version=version,
+    author="AutoML Platform Team",
+    author_email="team@automl-platform.com",
+    description="Enterprise AutoML platform with no-code UI, extended connectors, MLOps, distributed training, and production deployment",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/automl-platform/automl-platform",
+    license="MIT",
+
+    # Package configuration
+    packages=find_packages(
+        include=["automl_platform", "automl_platform.*"],
+        exclude=["tests", "tests.*", "docs", "docs.*", "examples", "examples.*"]
+    ),
+    package_dir={
+        "automl_platform": "automl_platform",
+    },
+    include_package_data=True,
+    package_data={
+        "automl_platform": [
+            "*.yaml",
+            "*.yml",
+            "*.json",
+            "*.toml",
+            "templates/**/*",
+            "static/**/*",
+            "migrations/**/*",
+            "configs/**/*",
+            "ui/assets/**/*",
+            "ui/components/**/*",
+            "ui/pages/**/*",
         ]
-    
-    def render(self):
-        """Affiche l'assistant étape par étape."""
-        # Barre de progression
-        progress = st.session_state.wizard_step / (len(self.steps) - 1)
-        st.progress(progress)
-        
-        # Affichage des étapes
-        cols = st.columns(len(self.steps))
-        for idx, (col, step) in enumerate(zip(cols, self.steps)):
-            with col:
-                if idx < st.session_state.wizard_step:
-                    st.success(step, icon="✅")
-                elif idx == st.session_state.wizard_step:
-                    st.info(step, icon="👉")
-                else:
-                    st.text(step)
-        
-        st.divider()
-        
-        # Contenu de l'étape actuelle
-        if st.session_state.wizard_step == 0:
-            self._step_data_loading()
-        elif st.session_state.wizard_step == 1:
-            self._step_target_selection()
-        elif st.session_state.wizard_step == 2:
-            self._step_template_selection()
-        elif st.session_state.wizard_step == 3:
-            self._step_model_configuration()
-        elif st.session_state.wizard_step == 4:
-            self._step_training()
-        elif st.session_state.wizard_step == 5:
-            self._step_results()
-    
-    def _step_data_loading(self):
-        """Étape 1: Chargement des données."""
-        st.header("📤 Chargement des données")
-        
-        # Sélection de la source de données
-        data_source = st.selectbox(
-            "Source de données",
-            ["📁 Fichier local", "📊 Excel", "📋 Google Sheets", "🤝 CRM", "🗄️ Base de données"]
-        )
-        
-        if data_source == "📁 Fichier local":
-            uploaded_file = st.file_uploader(
-                "Choisir un fichier",
-                type=['csv', 'xlsx', 'xls', 'parquet', 'json']
-            )
-            if uploaded_file:
-                df = DataConnector.load_from_file(uploaded_file)
-                if df is not None:
-                    st.session_state.uploaded_data = df
-                    st.success(f"✅ {len(df)} lignes chargées")
-                    st.dataframe(df.head())
-        
-        elif data_source == "📋 Google Sheets":
-            if CONNECTORS_AVAILABLE:
-                st.info("Configuration Google Sheets")
-                sheet_url = st.text_input("URL du Google Sheet")
-                if st.button("Connecter"):
-                    st.info("Connexion en cours...")
-                    # Implémenter la logique de connexion
-            else:
-                st.warning("Connecteur Google Sheets non disponible. Installation requise.")
-        
-        # Boutons de navigation
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col3:
-            if st.session_state.uploaded_data is not None:
-                if st.button("Suivant ➡️", type="primary", use_container_width=True):
-                    st.session_state.wizard_step = 1
-                    st.rerun()
-    
-    def _step_target_selection(self):
-        """Étape 2: Sélection de la cible."""
-        st.header("🎯 Sélection de l'objectif")
-        
-        if st.session_state.uploaded_data is None:
-            st.warning("Veuillez d'abord charger des données")
-            if st.button("⬅️ Retour", use_container_width=True):
-                st.session_state.wizard_step = 0
-                st.rerun()
-            return
-        
-        df = st.session_state.uploaded_data
-        columns = df.columns.tolist()
-        
-        # Sélection de la colonne cible
-        target_col = st.selectbox(
-            "Colonne cible (à prédire)",
-            columns,
-            help="Sélectionnez la colonne que vous souhaitez prédire"
-        )
-        
-        if target_col:
-            st.session_state.selected_target = target_col
+    },
+
+    # Dependencies
+    python_requires=">=3.9,<3.13",
+    install_requires=install_requires,
+    extras_require=extras_require,
+
+    # Entry points
+    entry_points={
+        "console_scripts": [
+            # Main CLI
+            "automl=automl_platform.cli.main:cli",
+
+            # UI Dashboard
+            "automl-ui=automl_platform.ui.dashboard:main",
+            "automl-dashboard=automl_platform.ui.dashboard:main",
+
+            # Training & Prediction
+            "automl-train=automl_platform.cli.train:train_cli",
+            "automl-predict=automl_platform.cli.predict:predict_cli",
+            "automl-evaluate=automl_platform.cli.evaluate:evaluate_cli",
+            "automl-wizard=automl_platform.cli.wizard:wizard_cli",
+
+            # API Server
+            "automl-api=automl_platform.api.api:main",
+            "automl-worker=automl_platform.worker.celery_app:main",
+
+            # MLOps
+            "automl-mlflow=automl_platform.mlops.mlflow_server:main",
+            "automl-monitor=automl_platform.monitoring.monitor:main",
+            "automl-retrain=automl_platform.mlops.retrainer:main",
+
+            # Data Management
+            "automl-data=automl_platform.cli.data:data_cli",
+            "automl-feature=automl_platform.cli.feature:feature_cli",
+            "automl-connect=automl_platform.cli.connect:connect_cli",
+
+            # Export & Deployment
+            "automl-export=automl_platform.cli.export:export_cli",
+            "automl-deploy=automl_platform.cli.deploy:deploy_cli",
+            "automl-serve=automl_platform.serving.server:main",
+
+            # Admin & Management
+            "automl-admin=automl_platform.cli.admin:admin_cli",
+            "automl-migrate=automl_platform.cli.migrate:migrate_cli",
+            "automl-backup=automl_platform.cli.backup:backup_cli",
+            "automl-config=automl_platform.cli.config:config_cli",
+
+            # Reports & Analytics
+            "automl-report=automl_platform.cli.report:report_cli",
+            "automl-analytics=automl_platform.cli.analytics:analytics_cli",
             
-            # Détection automatique du type de tâche
-            unique_values = df[target_col].nunique()
-            if unique_values == 2:
-                task_type = "Classification binaire"
-            elif unique_values < 10:
-                task_type = "Classification multi-classes"
-            else:
-                task_type = "Régression"
-            
-            st.info(f"Type de tâche détecté: **{task_type}**")
-            
-            # Affichage des statistiques de la cible
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Valeurs uniques", unique_values)
-            with col2:
-                st.metric("Valeurs manquantes", df[target_col].isna().sum())
-        
-        # Navigation
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("⬅️ Retour", use_container_width=True):
-                st.session_state.wizard_step = 0
-                st.rerun()
-        with col3:
-            if st.session_state.selected_target:
-                if st.button("Suivant ➡️", type="primary", use_container_width=True):
-                    st.session_state.wizard_step = 2
-                    st.rerun()
-    
-    def _step_template_selection(self):
-        """Nouvelle étape : Sélection d'un template de cas d'usage."""
-        st.header("📋 Sélection d'un template (optionnel)")
-        
-        if not TEMPLATES_AVAILABLE:
-            st.info("Templates non disponibles. Configuration manuelle uniquement.")
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                if st.button("⬅️ Retour", use_container_width=True):
-                    st.session_state.wizard_step = 1
-                    st.rerun()
-            with col3:
-                if st.button("Passer ➡️", type="primary", use_container_width=True):
-                    st.session_state.wizard_step = 3
-                    st.rerun()
-            return
-        
-        # Charger les templates
-        template_loader = TemplateLoader()
-        templates = template_loader.list_templates()
-        
-        # Option pour ne pas utiliser de template
-        use_template = st.checkbox("Utiliser un template pré-configuré", value=True)
-        
-        if use_template:
-            # Sélection du template
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                template_names = ["Aucun"] + [t['name'] for t in templates]
-                selected_template = st.selectbox(
-                    "Choisir un template",
-                    template_names,
-                    help="Les templates sont des configurations optimisées pour des cas d'usage spécifiques"
-                )
-            
-            with col2:
-                if selected_template != "Aucun":
-                    # Afficher les tags
-                    template_info = next((t for t in templates if t['name'] == selected_template), None)
-                    if template_info:
-                        st.write("**Tags:**")
-                        for tag in template_info.get('tags', []):
-                            st.badge(tag)
-            
-            # Description du template sélectionné
-            if selected_template != "Aucun":
-                template_info = next((t for t in templates if t['name'] == selected_template), None)
-                if template_info:
-                    st.info(f"**Description:** {template_info['description']}")
-                    
-                    # Détails du template
-                    with st.expander("📊 Détails du template"):
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.write("**Task:** " + template_info.get('task', 'N/A'))
-                            st.write("**Temps estimé:** " + str(template_info.get('estimated_time', 'N/A')) + " min")
-                        
-                        with col2:
-                            st.write("**Algorithmes:**")
-                            for algo in template_info.get('algorithms', [])[:5]:
-                                st.write(f"• {algo}")
-                        
-                        with col3:
-                            st.write("**Version:** " + template_info.get('version', 'N/A'))
-                            if st.button("🔍 Plus de détails"):
-                                # Afficher tous les détails
-                                full_info = template_loader.get_template_info(selected_template)
-                                st.json(full_info)
-                    
-                    st.session_state.selected_template = selected_template
-            else:
-                st.session_state.selected_template = None
-        else:
-            st.session_state.selected_template = None
-            st.info("Configuration manuelle sélectionnée")
-        
-        # Navigation
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("⬅️ Retour", use_container_width=True):
-                st.session_state.wizard_step = 1
-                st.rerun()
-        with col3:
-            if st.button("Suivant ➡️", type="primary", use_container_width=True):
-                st.session_state.wizard_step = 3
-                st.rerun()
-    
-    def _step_model_configuration(self):
-        """Étape 4: Configuration du modèle avec options selon le mode."""
-        st.header("⚙️ Configuration du modèle")
-        
-        # Appliquer le template si sélectionné
-        if st.session_state.get('selected_template') and TEMPLATES_AVAILABLE:
-            st.info(f"📋 Template appliqué: **{st.session_state.selected_template}**")
-            
-            # Charger la configuration du template
-            template_loader = TemplateLoader()
-            template_config = template_loader.load_template(st.session_state.selected_template)
-            
-            # Options de personnalisation en mode expert uniquement
-            if st.session_state.expert_mode:
-                with st.expander("🔧 Personnaliser le template"):
-                    st.info("Mode expert: vous pouvez modifier les paramètres du template")
-                    
-                    # Permettre la modification des algorithmes
-                    algorithms = template_config['config'].get('algorithms', [])
-                    selected_algos = st.multiselect(
-                        "Algorithmes à utiliser",
-                        algorithms,
-                        default=algorithms
-                    )
-                    
-                    # HPO settings
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        hpo_iter = st.number_input(
-                            "Iterations HPO",
-                            value=template_config['config'].get('hpo', {}).get('n_iter', 20),
-                            min_value=5,
-                            max_value=200
-                        )
-                    with col2:
-                        cv_folds = st.number_input(
-                            "CV Folds",
-                            value=template_config['config'].get('cv', {}).get('n_folds', 5),
-                            min_value=2,
-                            max_value=10
-                        )
-        else:
-            # Configuration manuelle
-            if st.session_state.expert_mode:
-                # Mode expert : toutes les options
-                st.subheader("🎓 Configuration avancée (Mode Expert)")
-                
-                tabs = st.tabs(["Algorithmes", "Hyperparamètres", "Validation", "Avancé"])
-                
-                with tabs[0]:
-                    st.write("**Sélection des algorithmes**")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.checkbox("XGBoost", value=True, key="algo_xgboost")
-                        st.checkbox("LightGBM", value=True, key="algo_lightgbm")
-                        st.checkbox("CatBoost", value=False, key="algo_catboost")
-                        st.checkbox("Random Forest", value=True, key="algo_rf")
-                    
-                    with col2:
-                        st.checkbox("Logistic Regression", value=True, key="algo_lr")
-                        st.checkbox("SVM", value=False, key="algo_svm")
-                        st.checkbox("Neural Network", value=False, key="algo_nn")
-                        st.checkbox("Extra Trees", value=False, key="algo_et")
-                
-                with tabs[1]:
-                    st.write("**Optimisation des hyperparamètres**")
-                    hpo_method = st.selectbox(
-                        "Méthode HPO",
-                        ["Optuna", "Grid Search", "Random Search", "Bayesian"],
-                        help="Optuna recommandé pour la plupart des cas"
-                    )
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        hpo_iter = st.number_input("Nombre d'itérations", value=50, min_value=10, max_value=500)
-                        early_stopping = st.checkbox("Early stopping", value=True)
-                    
-                    with col2:
-                        time_budget = st.number_input("Budget temps (min)", value=30, min_value=5)
-                        parallel_jobs = st.number_input("Jobs parallèles", value=4, min_value=1, max_value=16)
-                
-                with tabs[2]:
-                    st.write("**Stratégie de validation**")
-                    cv_strategy = st.selectbox(
-                        "Type de validation croisée",
-                        ["Stratified K-Fold", "K-Fold", "Time Series Split", "Group K-Fold"]
-                    )
-                    cv_folds = st.slider("Nombre de folds", min_value=2, max_value=10, value=5)
-                    
-                    test_size = st.slider("Taille du test (%)", min_value=10, max_value=40, value=20)
-                
-                with tabs[3]:
-                    st.write("**Options avancées**")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.checkbox("Gestion automatique du déséquilibre", value=True)
-                        st.checkbox("Feature engineering automatique", value=True)
-                        st.checkbox("Ensemble learning", value=True)
-                    
-                    with col2:
-                        st.checkbox("Détection de drift", value=False)
-                        st.checkbox("Explainability (SHAP)", value=True)
-                        st.checkbox("GPU acceleration", value=False)
-            else:
-                # Mode simplifié : options de base uniquement
-                st.subheader("🚀 Configuration simplifiée")
-                
-                optimization_level = st.select_slider(
-                    "Niveau d'optimisation",
-                    options=["Rapide", "Équilibré", "Maximum"],
-                    value="Équilibré",
-                    help="Rapide: 5 min | Équilibré: 15 min | Maximum: 45+ min"
-                )
-                
-                # Traduction en configuration
-                if optimization_level == "Rapide":
-                    st.info("⚡ Configuration rapide: 3 algorithmes, 10 itérations HPO")
-                    config = {
-                        "algorithms": ["XGBoost", "LightGBM", "LogisticRegression"],
-                        "hpo_iter": 10,
-                        "cv_folds": 3
-                    }
-                elif optimization_level == "Équilibré":
-                    st.info("⚖️ Configuration équilibrée: 5 algorithmes, 30 itérations HPO")
-                    config = {
-                        "algorithms": ["XGBoost", "LightGBM", "RandomForest", "LogisticRegression", "CatBoost"],
-                        "hpo_iter": 30,
-                        "cv_folds": 5
-                    }
-                else:  # Maximum
-                    st.info("🚀 Configuration maximale: 8 algorithmes, 100 itérations HPO")
-                    config = {
-                        "algorithms": ["XGBoost", "LightGBM", "CatBoost", "RandomForest
+            # Connector utilities
+            "automl-excel=automl_platform.cli.connectors:excel_cli",
+            "automl-gsheets=automl_platform.cli.connectors:gsheets_cli",
+            "automl-crm=automl_platform.cli.connectors:crm_cli",
+        ],
+    },
+
+    # Classifiers
+    classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "Intended Audience :: Information Technology",
+        "Intended Audience :: End Users/Desktop",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+        "Topic :: System :: Distributed Computing",
+        "Topic :: Office/Business :: Financial :: Spreadsheet",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Operating System :: OS Independent",
+        "Environment :: Console",
+        "Environment :: Web Environment",
+        "Framework :: FastAPI",
+        "Framework :: Jupyter",
+        "Natural Language :: English",
+        "Natural Language :: French",
+    ],
+
+    # Keywords (updated)
+    keywords=[
+        "automl",
+        "machine-learning",
+        "deep-learning",
+        "no-code",
+        "low-code",
+        "data-science",
+        "artificial-intelligence",
+        "mlops",
+        "distributed-computing",
+        "feature-engineering",
+        "hyperparameter-optimization",
+        "model-deployment",
+        "ensemble-learning",
+        "automated-machine-learning",
+        "production-ml",
+        "enterprise-ml",
+        "dashboard",
+        "streamlit",
+        "visualization",
+        "reporting",
+        "authentication",
+        "sso",
+        "oauth",
+        "oidc",
+        "gpu",
+        "cuda",
+        "excel",
+        "google-sheets",
+        "crm",
+        "hubspot",
+        "salesforce",
+        "data-connectors",
+    ],
+
+    # Project URLs
+    project_urls={
+        "Documentation": "https://docs.automl-platform.com",
+        "API Reference": "https://api.automl-platform.com/docs",
+        "Dashboard": "https://dashboard.automl-platform.com",
+        "Bug Tracker": "https://github.com/automl-platform/automl-platform/issues",
+        "Source Code": "https://github.com/automl-platform/automl-platform",
+        "Changelog": "https://github.com/automl-platform/automl-platform/blob/main/CHANGELOG.md",
+        "Docker Hub": "https://hub.docker.com/r/automl-platform/automl",
+        "Helm Charts": "https://charts.automl-platform.com",
+        "Demo": "https://demo.automl-platform.com",
+        "Tutorials": "https://tutorials.automl-platform.com",
+        "YouTube": "https://youtube.com/@automl-platform",
+        "Slack Community": "https://automl-platform.slack.com",
+        "Commercial Support": "https://automl-platform.com/support",
+        "Enterprise": "https://automl-platform.com/enterprise",
+        "Connectors Guide": "https://docs.automl-platform.com/connectors",
+    },
+
+    # Testing
+    test_suite="tests",
+    tests_require=[
+        "pytest>=8.0.0",
+        "pytest-cov>=4.1.0",
+        "pytest-asyncio>=0.23.0",
+        "pytest-mock>=3.12.0",
+    ],
+
+    # Additional options
+    zip_safe=False,
+    platforms="any",
+
+    # Extra metadata
+    provides=["automl_platform"],
+)
