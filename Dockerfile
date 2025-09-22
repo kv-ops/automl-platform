@@ -86,6 +86,16 @@ COPY . /app
 # Install the package in development mode
 RUN pip install -e .
 
+# Install additional connector dependencies explicitly
+# This ensures they are available even if not in requirements.txt
+RUN pip install --no-cache-dir \
+    openpyxl>=3.1.0 \
+    gspread>=5.7.2 \
+    google-auth>=2.14.1 \
+    google-auth-oauthlib>=1.0.0 \
+    xlsxwriter>=3.1.0 \
+    xlrd>=2.0.1
+
 # Create necessary directories
 RUN mkdir -p /app/data \
     /app/models \
@@ -155,6 +165,12 @@ ENV STREAMLIT_DEVELOPMENT_MODE=true \
 # ============================================================================
 FROM runtime as api
 
+# Install additional API dependencies if needed
+RUN pip install --no-cache-dir \
+    openpyxl>=3.1.0 \
+    gspread>=5.7.2 \
+    google-auth>=2.14.1
+
 # Switch to non-root user
 USER automl
 
@@ -179,6 +195,14 @@ CMD ["uvicorn", "automl_platform.api.api:app", \
 # ============================================================================
 FROM runtime as ui
 
+# Ensure connectors are installed for UI
+RUN pip install --no-cache-dir \
+    openpyxl>=3.1.0 \
+    gspread>=5.7.2 \
+    google-auth>=2.14.1 \
+    google-auth-oauthlib>=1.0.0 \
+    xlsxwriter>=3.1.0
+
 # Switch to non-root user
 USER automl
 
@@ -188,6 +212,11 @@ EXPOSE 8501
 # Health check for UI
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+# Set environment variables for fallback configuration
+ENV API_BASE_URL=${API_BASE_URL:-http://localhost:8000} \
+    MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://localhost:5000} \
+    AUTOML_EXPERT_MODE=${AUTOML_EXPERT_MODE:-false}
 
 # Default command for UI
 CMD ["streamlit", "run", \
@@ -203,6 +232,12 @@ CMD ["streamlit", "run", \
 # Stage 5c: Worker (Celery)
 # ============================================================================
 FROM runtime as worker
+
+# Install connector dependencies for worker
+RUN pip install --no-cache-dir \
+    openpyxl>=3.1.0 \
+    gspread>=5.7.2 \
+    google-auth>=2.14.1
 
 # Switch to non-root user
 USER automl
@@ -224,6 +259,20 @@ USER root
 RUN apt-get update && apt-get install -y supervisor && \
     rm -rf /var/lib/apt/lists/*
 
+# Ensure all connectors are installed
+RUN pip install --no-cache-dir \
+    openpyxl>=3.1.0 \
+    gspread>=5.7.2 \
+    google-auth>=2.14.1 \
+    google-auth-oauthlib>=1.0.0 \
+    xlsxwriter>=3.1.0 \
+    xlrd>=2.0.1
+
+# Set environment variables for all services
+ENV API_BASE_URL=${API_BASE_URL:-http://localhost:8000} \
+    MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://localhost:5000} \
+    AUTOML_EXPERT_MODE=${AUTOML_EXPERT_MODE:-false}
+
 # Create supervisor configuration
 RUN echo '\
 [supervisord]\n\
@@ -238,6 +287,7 @@ autostart=true\n\
 autorestart=true\n\
 stderr_logfile=/app/logs/api.err.log\n\
 stdout_logfile=/app/logs/api.out.log\n\
+environment=API_BASE_URL="%(ENV_API_BASE_URL)s",MLFLOW_TRACKING_URI="%(ENV_MLFLOW_TRACKING_URI)s"\n\
 \n\
 [program:ui]\n\
 command=/opt/venv/bin/streamlit run automl_platform/ui/dashboard.py --server.port=8501 --server.address=0.0.0.0\n\
@@ -247,6 +297,7 @@ autostart=true\n\
 autorestart=true\n\
 stderr_logfile=/app/logs/ui.err.log\n\
 stdout_logfile=/app/logs/ui.out.log\n\
+environment=API_BASE_URL="%(ENV_API_BASE_URL)s",MLFLOW_TRACKING_URI="%(ENV_MLFLOW_TRACKING_URI)s",AUTOML_EXPERT_MODE="%(ENV_AUTOML_EXPERT_MODE)s"\n\
 \n\
 [program:worker]\n\
 command=/opt/venv/bin/celery -A automl_platform.worker.celery_app worker --loglevel=info\n\
