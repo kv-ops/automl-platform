@@ -91,13 +91,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY . /app
 
+# The .streamlit folder is already at the root level from COPY . /app
+# Ensure it's also in the home directory for Streamlit to find it
+RUN cp -r /app/.streamlit ~/.streamlit 2>/dev/null || true
+
 # Install the package in development mode
 # This will use setup.py which now includes all connectors in install_requires
 RUN pip install -e .
-
-# NOTE: Verification removed - packages are installed via setup.py
-# The following line was causing build failures and has been removed:
-# RUN python -c "import openpyxl, gspread, google.auth; print('Connectors OK')"
 
 # Create necessary directories
 RUN mkdir -p /app/data \
@@ -107,48 +107,13 @@ RUN mkdir -p /app/data \
     /app/reports \
     /app/cache \
     /app/mlflow \
-    /app/artifacts \
-    ~/.streamlit \
-    /app/.streamlit
+    /app/artifacts
 
-# Configure Streamlit with optimized settings
-RUN echo '\
-[general]\n\
-email = ""\n\
-\n\
-[server]\n\
-headless = true\n\
-enableCORS = false\n\
-port = 8501\n\
-maxUploadSize = 1000\n\
-enableXsrfProtection = true\n\
-runOnSave = false\n\
-\n\
-[browser]\n\
-gatherUsageStats = false\n\
-serverAddress = "0.0.0.0"\n\
-serverPort = 8501\n\
-\n\
-[theme]\n\
-primaryColor = "#1E88E5"\n\
-backgroundColor = "#FFFFFF"\n\
-secondaryBackgroundColor = "#F0F2F6"\n\
-textColor = "#262730"\n\
-font = "sans serif"\n\
-\n\
-[runner]\n\
-magicEnabled = true\n\
-installTracer = false\n\
-fixMatplotlib = true\n\
-fastReruns = true\n\
-\n\
-[client]\n\
-showErrorDetails = false\n\
-toolbarMode = "minimal"\n\
-' > ~/.streamlit/config.toml
-
-# Copy config to app directory too
-RUN cp ~/.streamlit/config.toml /app/.streamlit/config.toml
+# Set consistent environment variables for Streamlit
+ENV STREAMLIT_SERVER_ENABLE_CORS=true \
+    STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true \
+    STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 # Create non-root user for security
 RUN useradd -m -u 1000 -s /bin/bash automl && \
@@ -205,7 +170,7 @@ CMD ["sh", "-c", "uvicorn automl_platform.api.api:app \
      --log-level info"]
 
 # ============================================================================
-# Stage 5b: UI Dashboard (Streamlit)
+# Stage 5b: UI Dashboard (Streamlit) - FIXED CONFIG
 # ============================================================================
 FROM runtime as ui
 
@@ -215,10 +180,12 @@ USER automl
 # Expose Streamlit port
 EXPOSE 8501
 
-# Set environment variables for configuration
+# Set environment variables for configuration - ALIGNED WITH XSRF
 ENV STREAMLIT_SERVER_PORT=8501 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_SERVER_ENABLE_CORS=true \
+    STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     API_BASE_URL=${API_BASE_URL:-http://localhost:8000} \
     MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://localhost:5000} \
@@ -228,15 +195,13 @@ ENV STREAMLIT_SERVER_PORT=8501 \
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
-# Default command for UI
+# Default command for UI - REMOVED conflicting CLI flags
 CMD ["streamlit", "run", \
      "automl_platform/ui/dashboard.py", \
      "--server.port=8501", \
      "--server.address=0.0.0.0", \
      "--server.fileWatcherType=none", \
-     "--browser.gatherUsageStats=false", \
-     "--server.enableCORS=false", \
-     "--server.enableXsrfProtection=true"]
+     "--browser.gatherUsageStats=false"]
 
 # ============================================================================
 # Stage 5c: Worker (Celery)
@@ -304,7 +269,7 @@ CMD ["celery", "-A", "automl_platform.worker.celery_app", \
      "--broker_api=${CELERY_BROKER_URL}"]
 
 # ============================================================================
-# Stage 5f: All-in-one (Development/Demo)
+# Stage 5f: All-in-one (Development/Demo) - FIXED SUPERVISOR CONFIG
 # ============================================================================
 FROM runtime as all-in-one
 
@@ -313,14 +278,16 @@ USER root
 RUN apt-get update && apt-get install -y supervisor && \
     rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for all services
+# Set environment variables for all services - ALIGNED
 ENV API_BASE_URL=${API_BASE_URL:-http://localhost:8000} \
     MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://localhost:5000} \
     AUTOML_EXPERT_MODE=${AUTOML_EXPERT_MODE:-false} \
     CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://localhost:6379/0} \
-    CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://localhost:6379/0}
+    CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://localhost:6379/0} \
+    STREAMLIT_SERVER_ENABLE_CORS=true \
+    STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
 
-# Create supervisor configuration with proper environment passing
+# Create supervisor configuration with proper environment passing - FIXED UI COMMAND
 RUN echo '\
 [supervisord]\n\
 nodaemon=true\n\
@@ -357,7 +324,7 @@ autostart=true\n\
 autorestart=true\n\
 stdout_logfile=/app/logs/ui.out.log\n\
 stderr_logfile=/app/logs/ui.err.log\n\
-environment=PATH="/opt/venv/bin:%(ENV_PATH)s",API_BASE_URL="%(ENV_API_BASE_URL)s",MLFLOW_TRACKING_URI="%(ENV_MLFLOW_TRACKING_URI)s",AUTOML_EXPERT_MODE="%(ENV_AUTOML_EXPERT_MODE)s"\n\
+environment=PATH="/opt/venv/bin:%(ENV_PATH)s",API_BASE_URL="%(ENV_API_BASE_URL)s",MLFLOW_TRACKING_URI="%(ENV_MLFLOW_TRACKING_URI)s",AUTOML_EXPERT_MODE="%(ENV_AUTOML_EXPERT_MODE)s",STREAMLIT_SERVER_ENABLE_CORS="true",STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION="true"\n\
 priority=20\n\
 \n\
 [program:worker]\n\
@@ -433,7 +400,7 @@ USER automl
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Default to UI service
+# Default to UI service - FIXED: No conflicting flags
 CMD ["streamlit", "run", "automl_platform/ui/dashboard.py"]
 
 # ============================================================================
