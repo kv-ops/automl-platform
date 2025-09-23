@@ -120,6 +120,10 @@ xlrd>=2.0.0                       # Legacy Excel
 celery[redis]>=5.3.0              # Distributed task queue
 flower>=2.0.0                     # Celery monitoring
 
+# ---------- Template Support (NEW) ----------
+chevron>=0.14.0                   # Mustache templates
+jsonschema>=4.20.0                # JSON schema validation
+
 # ---------- Utilities ----------
 tqdm>=4.66.0                      # Progress bars
 click>=8.1.0                      # CLI framework
