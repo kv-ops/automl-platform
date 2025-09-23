@@ -38,6 +38,26 @@ def load_pipeline(filepath: Union[str, Path]) -> Tuple[Any, Dict]:
             logger.info(f"Loaded metadata: task={metadata.get('task')}, "
                        f"best_model={metadata.get('best_model')}")
     
+    # Also check for metadata.json in the same directory (for compatibility)
+    alt_metadata_path = filepath.parent / "metadata.json"
+    if not metadata and alt_metadata_path.exists():
+        with open(alt_metadata_path, 'r') as f:
+            metadata = json.load(f)
+    
+    # Check for template info
+    template_info_path = filepath.parent / "template_info.json"
+    if template_info_path.exists():
+        with open(template_info_path, 'r') as f:
+            template_info = json.load(f)
+            metadata['template_used'] = template_info.get('name', 'unknown')
+    
+    # Check for mode info
+    mode_info_path = filepath.parent / "mode_info.json"
+    if mode_info_path.exists():
+        with open(mode_info_path, 'r') as f:
+            mode_info = json.load(f)
+            metadata['expert_mode'] = mode_info.get('expert_mode', False)
+    
     logger.info(f"Pipeline loaded from {filepath}")
     return pipeline, metadata
 
