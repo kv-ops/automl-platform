@@ -10,7 +10,7 @@ address = "0.0.0.0"
 port = 8501
 headless = true
 
-# CORS and Security - ALIGNED CONFIGURATION
+# CORS and Security - ALIGNED CONFIGURATION (FIX DU WARNING)
 enableCORS = true
 enableXsrfProtection = true
 
@@ -21,7 +21,7 @@ maxUploadSize = 1000
 runOnSave = false
 fileWatcherType = "none"
 
-# WebSocket settings (optional)
+# WebSocket settings
 enableWebsocketCompression = true
 
 [browser]
