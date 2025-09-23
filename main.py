@@ -21,7 +21,7 @@ from automl_platform.orchestrator import AutoMLOrchestrator
 from automl_platform.inference import load_pipeline, predict, predict_proba, save_predictions
 from automl_platform.data_prep import validate_data
 from automl_platform.metrics import calculate_metrics
-from automl_platform.template_loader import TemplateLoader
+from automl_platform.templates.template_loader import TemplateLoader
 
 # Setup logging
 def setup_logging(verbose: int = 1, log_file: Optional[str] = None):
