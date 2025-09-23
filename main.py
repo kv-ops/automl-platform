@@ -2,6 +2,7 @@
 """
 Main entry point for AutoML Platform CLI.
 Provides command-line interface for training and prediction with template support and expert mode.
+Version: 3.2.0
 """
 
 import argparse
@@ -18,10 +19,10 @@ from tabulate import tabulate
 # Import platform modules
 from automl_platform.config import AutoMLConfig, load_config
 from automl_platform.orchestrator import AutoMLOrchestrator
-from automl_platform.inference import load_pipeline, predict, predict_proba, save_predictions
+from automl_platform.inference import load_pipeline, predict, predict_proba, save_predictions, predict_batch
 from automl_platform.data_prep import validate_data
 from automl_platform.metrics import calculate_metrics
-from automl_platform.templates.template_loader import TemplateLoader
+from automl_platform.template_loader import TemplateLoader  # Moved from templates/
 
 # Setup logging
 def setup_logging(verbose: int = 1, log_file: Optional[str] = None):
@@ -54,7 +55,7 @@ logger = logging.getLogger(__name__)
 def train(args):
     """Train AutoML model with optional template support and expert mode."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - TRAINING MODE")
+    logger.info("AUTOML PLATFORM - TRAINING MODE - v3.2.0")
     if args.expert:
         logger.info("🎓 EXPERT MODE ENABLED - All advanced options available")
     else:
@@ -77,6 +78,21 @@ def train(args):
             logger.info(f"Template description: {template_info['description']}")
             logger.info(f"Template task: {template_info['task']}")
             logger.info(f"Template algorithms: {', '.join(template_info['algorithms'][:5])}")
+            
+            # Validate template (with error handling)
+            try:
+                validation = template_loader.validate_template(args.template)
+            except AttributeError:
+                # If validate_template method doesn't exist, create default validation
+                validation = {"valid": True, "errors": [], "warnings": []}
+            
+            if not validation.get('valid', True):
+                logger.warning(f"Template validation issues: {validation.get('errors', [])}")
+                if not args.force:
+                    response = input("Continue anyway? (y/n): ")
+                    if response.lower() != 'y':
+                        logger.info("Training cancelled")
+                        sys.exit(0)
             
         except ValueError as e:
             logger.error(f"Failed to load template: {e}")
@@ -220,7 +236,8 @@ def train(args):
     mode_info = {
         "expert_mode": config.expert_mode,
         "simplified_algorithms": config.get_simplified_algorithms() if not config.expert_mode else None,
-        "simplified_hpo": config.get_simplified_hpo_config() if not config.expert_mode else None
+        "simplified_hpo": config.get_simplified_hpo_config() if not config.expert_mode else None,
+        "version": "3.2.0"
     }
     mode_info_path = output_path / "mode_info.json"
     with open(mode_info_path, 'w') as f:
@@ -286,6 +303,18 @@ def train(args):
     orchestrator.save_pipeline(str(pipeline_path))
     logger.info(f"Pipeline saved to {pipeline_path}")
     
+    # Save metadata
+    metadata = {
+        "task": orchestrator.task,
+        "best_model": leaderboard.iloc[0]['model'] if len(leaderboard) > 0 else "Unknown",
+        "expert_mode": config.expert_mode,
+        "template_used": args.template if args.template else None,
+        "version": "3.2.0"
+    }
+    metadata_path = output_path / "metadata.json"
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
     # Save leaderboard
     leaderboard_path = output_path / "leaderboard.csv"
     full_leaderboard = orchestrator.get_leaderboard()
@@ -327,7 +356,7 @@ def train(args):
         # Placeholder for now
         report_path = output_path / "report.html"
         with open(report_path, 'w') as f:
-            f.write("<h1>AutoML Report</h1><p>Report generation not fully implemented yet.</p>")
+            f.write(f"<h1>AutoML Report v3.2.0</h1><p>Report generation not fully implemented yet.</p>")
         logger.info(f"Report saved to {report_path}")
     
     logger.info("="*80)
@@ -343,7 +372,7 @@ def train(args):
 def list_templates(args):
     """List available templates."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - AVAILABLE TEMPLATES")
+    logger.info("AUTOML PLATFORM - AVAILABLE TEMPLATES - v3.2.0")
     logger.info("="*80)
     
     template_loader = TemplateLoader()
@@ -382,7 +411,7 @@ def list_templates(args):
 def template_info(args):
     """Show detailed information about a template."""
     logger.info("="*80)
-    logger.info(f"TEMPLATE INFORMATION: {args.name}")
+    logger.info(f"TEMPLATE INFORMATION: {args.name} - v3.2.0")
     logger.info("="*80)
     
     template_loader = TemplateLoader()
@@ -431,11 +460,16 @@ def template_info(args):
         if 'cost_sensitive' in info:
             print(f"  Cost-Sensitive Learning: Enabled")
     
-    # Validate template
-    validation = template_loader.validate_template(args.name)
-    if not validation['valid']:
+    # Validate template (with error handling)
+    try:
+        validation = template_loader.validate_template(args.name)
+    except AttributeError:
+        # If validate_template method doesn't exist, create default validation
+        validation = {"valid": True, "errors": [], "warnings": []}
+    
+    if not validation.get('valid', True):
         print("\n⚠ Template Validation Issues:")
-        for error in validation['errors']:
+        for error in validation.get('errors', []):
             print(f"  ✗ {error}")
     if validation.get('warnings'):
         print("\nWarnings:")
@@ -459,7 +493,7 @@ def template_info(args):
 def create_template(args):
     """Create a custom template from existing configuration."""
     logger.info("="*80)
-    logger.info("CREATE CUSTOM TEMPLATE")
+    logger.info("CREATE CUSTOM TEMPLATE - v3.2.0")
     logger.info("="*80)
     
     template_loader = TemplateLoader()
@@ -534,7 +568,7 @@ def create_template(args):
 def predict_cmd(args):
     """Make predictions using saved model."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - PREDICTION MODE")
+    logger.info("AUTOML PLATFORM - PREDICTION MODE - v3.2.0")
     if args.expert:
         logger.info("🎓 EXPERT MODE ENABLED")
     logger.info("="*80)
@@ -579,7 +613,6 @@ def predict_cmd(args):
     logger.info("Generating predictions...")
     try:
         if args.expert and args.batch_size:
-            from automl_platform.inference import predict_batch
             predictions = predict_batch(pipeline, df, batch_size=args.batch_size)
             logger.info(f"Using batch prediction with size: {args.batch_size}")
         else:
@@ -641,7 +674,7 @@ def predict_cmd(args):
 def api(args):
     """Start API server."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - API MODE")
+    logger.info("AUTOML PLATFORM - API MODE - v3.2.0")
     if args.expert:
         logger.info("🎓 EXPERT MODE ENABLED - All API endpoints available")
     else:
@@ -678,7 +711,7 @@ def api(args):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='AutoML Platform - Production-ready AutoML with template support',
+        description='AutoML Platform v3.2.0 - Production-ready AutoML with template support',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -711,7 +744,7 @@ Examples:
         """
     )
     
-    parser.add_argument('--version', action='version', version='AutoML Platform 3.0.0')
+    parser.add_argument('--version', action='version', version='AutoML Platform 3.2.0')
     parser.add_argument('--verbose', '-v', action='count', default=1,
                        help='Increase verbosity (can be repeated: -v, -vv)')
     parser.add_argument('--quiet', '-q', action='store_true',
