@@ -1,0 +1,59 @@
+# Streamlit Configuration File
+# Place in: .streamlit/config.toml (at project root)
+
+[general]
+email = ""
+
+[server]
+# Network configuration
+address = "0.0.0.0"
+port = 8501
+headless = true
+
+# CORS and Security - ALIGNED CONFIGURATION
+enableCORS = true
+enableXsrfProtection = true
+
+# Upload settings
+maxUploadSize = 1000
+
+# Development settings
+runOnSave = false
+fileWatcherType = "none"
+
+# WebSocket settings (optional)
+enableWebsocketCompression = true
+
+[browser]
+# Usage stats
+gatherUsageStats = false
+
+# Server connection
+serverAddress = "0.0.0.0"
+serverPort = 8501
+
+[theme]
+# Professional color scheme
+primaryColor = "#1E88E5"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+
+[runner]
+# Execution settings
+magicEnabled = true
+installTracer = false
+fixMatplotlib = true
+fastReruns = true
+
+[client]
+# Error handling
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[deprecation]
+# Disable deprecation warnings in production
+showfileUploaderEncoding = false
+showImageFormat = false
+showPyplotGlobalUse = false
