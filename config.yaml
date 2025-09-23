@@ -1,6 +1,7 @@
 # ==============================================================================
 # Configuration AutoML Platform
 # Compatible with automl_platform structure
+# Version: 3.2.0
 # ==============================================================================
 
 # Environment settings
@@ -155,7 +156,8 @@ max_features_generated: 50
 task: auto  # Options: classification, regression, auto
 cv_folds: 5
 scoring: auto
-algorithms: ["all"]  # Use all available algorithms
+# Fixed: Use specific algorithm list instead of "all"
+algorithms: ["XGBoost", "RandomForest", "LogisticRegression", "LightGBM", "CatBoost"]
 exclude_algorithms: []
 
 # Hyperparameter optimization
