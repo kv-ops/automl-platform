@@ -650,6 +650,22 @@ class AutoMLConfig:
     Useful for SaaS deployments where different user tiers get different complexity levels.
     """
     
+    # ================ AJOUT DU FLAG INTELLIGENT CLEANING ================
+    enable_intelligent_cleaning: bool = field(default=False)
+    """
+    Flag pour activer le nettoyage intelligent via l'API Python.
+
+    Quand False (défaut):
+    - Utilise le preprocessing standard existant
+    - Compatible avec les pipelines actuels
+
+    Quand True:
+    - Active le nettoyage intelligent avec le context utilisateur
+    - Orchestre profiling → schema → outliers → encodage selon le secteur d'activité
+    - Intègre la protection contre le leakage des données
+    """
+    # ====================================================================
+    
     # Data preprocessing
     max_missing_ratio: float = 0.5
     rare_category_threshold: float = 0.01
@@ -945,7 +961,8 @@ class AutoMLConfig:
                 "worker.max_workers": 2,
                 "billing.plan_type": "trial",
                 "rgpd.enabled": False,  # Disabled in dev for easier testing
-                "expert_mode": True  # Enable expert mode in dev by default
+                "expert_mode": True,  # Enable expert mode in dev by default
+                "enable_intelligent_cleaning": False  # Disabled by default in dev
             },
             "staging": {
                 "debug": False,
@@ -955,7 +972,8 @@ class AutoMLConfig:
                 "worker.max_workers": 4,
                 "billing.plan_type": "pro",
                 "rgpd.enabled": True,
-                "expert_mode": False  # Simplified for staging tests
+                "expert_mode": False,  # Simplified for staging tests
+                "enable_intelligent_cleaning": True  # Enabled in staging
             },
             "production": {
                 "debug": False,
@@ -968,7 +986,8 @@ class AutoMLConfig:
                 "billing.enable_metering": True,
                 "rgpd.enabled": True,
                 "rgpd.identity_verification_required": True,
-                "expert_mode": False  # Default to simplified in production
+                "expert_mode": False,  # Default to simplified in production
+                "enable_intelligent_cleaning": True  # Enabled in production
             }
         }
         
