@@ -9,7 +9,7 @@ import numpy as np
 import asyncio
 import os
 import yaml
-from typing import Optional, List, Tuple, Union, Dict, Any
+from typing import Optional, List, Tuple, Union, Dict, Any, TYPE_CHECKING
 from dataclasses import asdict
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -25,6 +25,10 @@ from scipy.stats import ks_2samp, chi2_contingency
 import logging
 import warnings
 warnings.filterwarnings('ignore')
+
+# Import AutoMLConfig uniquement pour le type checking
+if TYPE_CHECKING:
+    from .config import AutoMLConfig
 
 logger = logging.getLogger(__name__)
 
