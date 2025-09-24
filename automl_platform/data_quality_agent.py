@@ -1,6 +1,7 @@
 """
-Data Quality Agent - Conversational data cleaning inspired by Akkio's GPT-4 approach
-References: Akkio's chat-based cleaning and DataRobot's Data Quality Assessment
+Data Quality Agent - Enhanced with Agent-First Integration
+Conversational data cleaning inspired by Akkio's GPT-4 approach
+Integrated with Universal ML Agent for intelligent context detection
 """
 
 import pandas as pd
@@ -27,34 +28,57 @@ class DataQualityAssessment:
     drift_risk: str  # "low", "medium", "high"
     target_leakage_risk: bool
     visualization_data: Dict[str, Any]  # Data for visual quality assessment
+    ml_context: Optional[Dict[str, Any]] = None  # Agent-First ML context
 
 
 class AkkioStyleCleaningAgent:
     """
     Conversational data cleaning agent inspired by Akkio's GPT-4 chatbot.
-    Allows users to clean data through natural dialogue.
+    Enhanced with Agent-First context awareness.
     """
     
-    def __init__(self, llm_provider):
+    def __init__(self, llm_provider, enable_agent_first: bool = False):
         self.llm = llm_provider
         self.conversation_history = []
         self.cleaning_actions = []
         self.undo_stack = []
+        self.enable_agent_first = enable_agent_first
+        self.ml_context = None
+        self.context_detector = None
         
+        if enable_agent_first:
+            self._init_agent_first()
+    
+    def _init_agent_first(self):
+        """Initialize Agent-First components."""
+        try:
+            from automl_platform.agents import IntelligentContextDetector
+            self.context_detector = IntelligentContextDetector()
+            logger.info("Agent-First context detector initialized for cleaning agent")
+        except ImportError:
+            logger.warning("Agent-First components not available for cleaning agent")
+            self.enable_agent_first = False
+    
     async def chat_clean(self, user_message: str, df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
         """
-        Akkio-style conversational cleaning.
+        Akkio-style conversational cleaning with Agent-First context awareness.
         User can say things like:
         - "Remove outliers from the price column"
         - "Fill missing values with median"
         - "Combine first_name and last_name columns"
         - "Format dates to YYYY-MM-DD"
+        - "Prepare this for fraud detection" (Agent-First)
         """
         
         # Add to conversation history
         self.conversation_history.append({"role": "user", "message": user_message})
         
-        # Analyze user intent
+        # Detect ML context if Agent-First is enabled
+        if self.enable_agent_first and self.context_detector:
+            if "prepare" in user_message.lower() or "detection" in user_message.lower() or "prediction" in user_message.lower():
+                self.ml_context = await self._detect_ml_context(df, user_message)
+        
+        # Analyze user intent with context awareness
         intent = await self._analyze_cleaning_intent(user_message, df)
         
         # Generate cleaning code
@@ -63,9 +87,19 @@ class AkkioStyleCleaningAgent:
         # Preview changes
         preview = self._preview_changes(df, cleaning_code)
         
-        # Generate response
+        # Generate response with ML context if available
+        context_info = ""
+        if self.ml_context:
+            context_info = f"""
+**ML Context Detected:**
+- Problem Type: {self.ml_context.get('problem_type', 'Unknown')}
+- Confidence: {self.ml_context.get('confidence', 0):.1%}
+- Business Sector: {self.ml_context.get('business_sector', 'General')}
+
+"""
+        
         response = f"""
-I understand you want to {intent['action']}. Here's what I'll do:
+{context_info}I understand you want to {intent['action']}. Here's what I'll do:
 
 **Action:** {intent['description']}
 **Affected:** {preview['affected_rows']} rows, {preview['affected_columns']} columns
@@ -85,13 +119,52 @@ Shall I apply these changes?
             "timestamp": datetime.now(),
             "intent": intent,
             "code": cleaning_code,
-            "preview": preview
+            "preview": preview,
+            "ml_context": self.ml_context
         })
         
         return df, response
     
+    async def _detect_ml_context(self, df: pd.DataFrame, user_message: str) -> Dict[str, Any]:
+        """Detect ML context using Agent-First approach."""
+        if not self.context_detector:
+            return {}
+        
+        try:
+            # Extract target column from message if mentioned
+            target_col = None
+            for col in df.columns:
+                if col.lower() in user_message.lower():
+                    target_col = col
+                    break
+            
+            # Detect context
+            context = await self.context_detector.detect_ml_context(df, target_col)
+            
+            return {
+                "problem_type": context.problem_type,
+                "confidence": context.confidence,
+                "business_sector": context.business_sector,
+                "temporal_aspect": context.temporal_aspect,
+                "imbalance_detected": context.imbalance_detected
+            }
+        except Exception as e:
+            logger.error(f"ML context detection failed: {e}")
+            return {}
+    
     async def _analyze_cleaning_intent(self, message: str, df: pd.DataFrame) -> Dict:
-        """Analyze user's cleaning intent using LLM."""
+        """Analyze user's cleaning intent using LLM with ML context awareness."""
+        
+        context_prompt = ""
+        if self.ml_context:
+            context_prompt = f"""
+ML Context:
+- Problem Type: {self.ml_context.get('problem_type')}
+- Business Sector: {self.ml_context.get('business_sector')}
+- Imbalance: {self.ml_context.get('imbalance_detected')}
+
+Consider this context when analyzing the cleaning request.
+"""
         
         prompt = f"""
 Analyze this data cleaning request:
@@ -102,11 +175,14 @@ Dataset info:
 - Shape: {df.shape}
 - Types: {df.dtypes.to_dict()}
 
+{context_prompt}
+
 Extract:
-1. Action type (remove, fill, transform, combine, format, filter)
+1. Action type (remove, fill, transform, combine, format, filter, prepare_for_ml)
 2. Target columns
 3. Specific parameters
 4. Safety concerns
+5. ML-specific preparations if applicable
 
 Return as JSON.
 """
@@ -115,6 +191,11 @@ Return as JSON.
         
         try:
             intent = json.loads(response.content)
+            
+            # Add ML-specific intents if context detected
+            if self.ml_context and intent.get("action") == "prepare_for_ml":
+                intent["ml_preparations"] = self._get_ml_preparations(self.ml_context)
+                
         except:
             intent = {
                 "action": "unknown",
@@ -125,12 +206,51 @@ Return as JSON.
         
         return intent
     
+    def _get_ml_preparations(self, ml_context: Dict[str, Any]) -> List[str]:
+        """Get ML-specific data preparations based on context."""
+        preparations = []
+        
+        problem_type = ml_context.get('problem_type', '')
+        
+        if problem_type == 'fraud_detection':
+            preparations = [
+                "Create velocity features",
+                "Handle class imbalance with SMOTE",
+                "Engineer time-based features",
+                "Normalize monetary amounts"
+            ]
+        elif problem_type == 'churn_prediction':
+            preparations = [
+                "Create RFM features",
+                "Handle missing customer data",
+                "Engineer engagement metrics",
+                "Balance classes if needed"
+            ]
+        elif problem_type == 'sales_forecasting':
+            preparations = [
+                "Create lag features",
+                "Add seasonal indicators",
+                "Handle missing time periods",
+                "Engineer trend features"
+            ]
+        
+        return preparations
+    
     async def _generate_cleaning_code(self, intent: Dict, df: pd.DataFrame) -> str:
-        """Generate Python code for the cleaning action."""
+        """Generate Python code for the cleaning action with ML awareness."""
+        
+        ml_context_prompt = ""
+        if self.ml_context and intent.get("ml_preparations"):
+            ml_context_prompt = f"""
+Include these ML-specific preparations:
+{json.dumps(intent['ml_preparations'])}
+"""
         
         prompt = f"""
 Generate pandas code for this data cleaning task:
 Intent: {json.dumps(intent)}
+
+{ml_context_prompt}
 
 Requirements:
 - Use df as the dataframe variable
@@ -138,6 +258,7 @@ Requirements:
 - Preserve data types where possible
 - Add error handling
 - Make it efficient
+- Include ML-specific preprocessing if applicable
 
 Return only executable Python code.
 """
@@ -201,6 +322,11 @@ Return only executable Python code.
             df_cleaned = local_vars.get("df", df)
             
             logger.info(f"Applied cleaning: {action['intent']['description']}")
+            
+            # Log ML context if present
+            if action.get("ml_context"):
+                logger.info(f"ML Context: {action['ml_context']['problem_type']}")
+            
             return df_cleaned
             
         except Exception as e:
@@ -213,15 +339,37 @@ Return only executable Python code.
         if self.undo_stack:
             return self.undo_stack.pop()
         return df
+    
+    def get_cleaning_suggestions(self, df: pd.DataFrame) -> List[str]:
+        """Get cleaning suggestions based on ML context."""
+        suggestions = []
+        
+        if self.ml_context:
+            problem_type = self.ml_context.get('problem_type', '')
+            
+            if problem_type:
+                suggestions.append(f"Detected {problem_type} problem. Consider:")
+                suggestions.extend(self._get_ml_preparations(self.ml_context))
+        
+        # General suggestions
+        missing_cols = df.columns[df.isnull().any()].tolist()
+        if missing_cols:
+            suggestions.append(f"Handle missing values in: {', '.join(missing_cols[:5])}")
+        
+        # Check for duplicates
+        if df.duplicated().any():
+            suggestions.append(f"Remove {df.duplicated().sum()} duplicate rows")
+        
+        return suggestions
 
 
 class DataRobotStyleQualityMonitor:
     """
     DataRobot-style Data Quality Assessment with visual indicators.
-    Provides comprehensive quality metrics and recommendations.
+    Enhanced with Agent-First ML context awareness.
     """
     
-    def __init__(self):
+    def __init__(self, enable_agent_first: bool = False):
         self.quality_thresholds = {
             "missing_critical": 0.5,  # >50% missing is critical
             "missing_warning": 0.2,   # >20% missing is warning
@@ -230,6 +378,50 @@ class DataRobotStyleQualityMonitor:
             "correlation_high": 0.95, # >0.95 correlation suggests redundancy
             "imbalance_severe": 20    # >20:1 class ratio is severe
         }
+        self.enable_agent_first = enable_agent_first
+        self.context_detector = None
+        
+        if enable_agent_first:
+            self._init_agent_first()
+    
+    def _init_agent_first(self):
+        """Initialize Agent-First components."""
+        try:
+            from automl_platform.agents import IntelligentContextDetector
+            self.context_detector = IntelligentContextDetector()
+            logger.info("Agent-First context detector initialized for quality monitor")
+        except ImportError:
+            logger.warning("Agent-First components not available for quality monitor")
+            self.enable_agent_first = False
+    
+    async def assess_quality_with_context(self, df: pd.DataFrame, target_column: Optional[str] = None) -> DataQualityAssessment:
+        """
+        Comprehensive quality assessment with ML context detection.
+        Agent-First enhanced version.
+        """
+        # Get standard assessment
+        assessment = self.assess_quality(df, target_column)
+        
+        # Add ML context if Agent-First enabled
+        if self.enable_agent_first and self.context_detector:
+            try:
+                context = await self.context_detector.detect_ml_context(df, target_column)
+                assessment.ml_context = {
+                    "problem_type": context.problem_type,
+                    "confidence": context.confidence,
+                    "business_sector": context.business_sector,
+                    "temporal_aspect": context.temporal_aspect,
+                    "imbalance_detected": context.imbalance_detected
+                }
+                
+                # Add context-specific recommendations
+                context_recommendations = self._get_context_recommendations(assessment.ml_context)
+                assessment.recommendations.extend(context_recommendations)
+                
+            except Exception as e:
+                logger.error(f"ML context detection failed: {e}")
+        
+        return assessment
     
     def assess_quality(self, df: pd.DataFrame, target_column: Optional[str] = None) -> DataQualityAssessment:
         """
@@ -329,8 +521,57 @@ class DataRobotStyleQualityMonitor:
             },
             drift_risk=drift_risk,
             target_leakage_risk=leakage_risk,
-            visualization_data=viz_data
+            visualization_data=viz_data,
+            ml_context=None  # Will be filled by assess_quality_with_context if Agent-First enabled
         )
+    
+    def _get_context_recommendations(self, ml_context: Dict[str, Any]) -> List[Dict]:
+        """Generate recommendations based on detected ML context."""
+        recommendations = []
+        
+        problem_type = ml_context.get('problem_type', '')
+        
+        if problem_type == 'fraud_detection':
+            recommendations.append({
+                "priority": "high",
+                "category": "ml_preparation",
+                "title": "Fraud Detection Preparation",
+                "description": "Detected fraud detection use case. Special preparations recommended.",
+                "actions": [
+                    "Create velocity and frequency features",
+                    "Apply SMOTE or ADASYN for class imbalance",
+                    "Engineer IP and device-based features",
+                    "Implement time-window aggregations"
+                ]
+            })
+        elif problem_type == 'churn_prediction':
+            recommendations.append({
+                "priority": "high",
+                "category": "ml_preparation",
+                "title": "Churn Prediction Preparation",
+                "description": "Detected churn prediction use case. Customer analytics preparations recommended.",
+                "actions": [
+                    "Create RFM (Recency, Frequency, Monetary) features",
+                    "Calculate customer lifetime value",
+                    "Engineer engagement and activity metrics",
+                    "Handle class imbalance with appropriate techniques"
+                ]
+            })
+        elif problem_type == 'sales_forecasting':
+            recommendations.append({
+                "priority": "high",
+                "category": "ml_preparation",
+                "title": "Sales Forecasting Preparation",
+                "description": "Detected forecasting use case. Time series preparations recommended.",
+                "actions": [
+                    "Create lag features (1, 7, 30 days)",
+                    "Add seasonal decomposition",
+                    "Engineer moving averages and trends",
+                    "Handle missing time periods appropriately"
+                ]
+            })
+        
+        return recommendations
     
     def _assess_missing_values(self, df: pd.DataFrame) -> Dict:
         """Assess missing values with DataRobot-style alerts."""
@@ -644,15 +885,43 @@ class DataRobotStyleQualityMonitor:
 class IntelligentDataQualityAgent:
     """
     Combined agent using both Akkio-style chat cleaning and DataRobot-style assessment.
+    Enhanced with Agent-First capabilities for intelligent ML context detection.
     """
     
-    def __init__(self, llm_provider=None):
-        self.cleaning_agent = AkkioStyleCleaningAgent(llm_provider) if llm_provider else None
-        self.quality_monitor = DataRobotStyleQualityMonitor()
+    def __init__(self, llm_provider=None, enable_agent_first: bool = False):
+        self.cleaning_agent = AkkioStyleCleaningAgent(llm_provider, enable_agent_first) if llm_provider else None
+        self.quality_monitor = DataRobotStyleQualityMonitor(enable_agent_first)
+        self.enable_agent_first = enable_agent_first
+        self.universal_agent = None
         
+        if enable_agent_first:
+            self._init_universal_agent()
+    
+    def _init_universal_agent(self):
+        """Initialize Universal ML Agent for complete Agent-First support."""
+        try:
+            from automl_platform.agents import UniversalMLAgent, AgentConfig
+            
+            agent_config = AgentConfig(
+                openai_api_key=os.getenv("OPENAI_API_KEY")
+            )
+            self.universal_agent = UniversalMLAgent(agent_config)
+            logger.info("Universal ML Agent initialized for data quality agent")
+        except ImportError:
+            logger.warning("Universal ML Agent not available")
+        except Exception as e:
+            logger.error(f"Failed to initialize Universal ML Agent: {e}")
+    
     def assess(self, df: pd.DataFrame, target_column: Optional[str] = None) -> DataQualityAssessment:
         """Perform DataRobot-style quality assessment."""
         return self.quality_monitor.assess_quality(df, target_column)
+    
+    async def assess_with_context(self, df: pd.DataFrame, target_column: Optional[str] = None) -> DataQualityAssessment:
+        """Perform quality assessment with ML context detection (Agent-First)."""
+        if self.enable_agent_first:
+            return await self.quality_monitor.assess_quality_with_context(df, target_column)
+        else:
+            return self.assess(df, target_column)
     
     async def clean(self, message: str, df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
         """Perform Akkio-style conversational cleaning."""
@@ -660,14 +929,52 @@ class IntelligentDataQualityAgent:
             raise ValueError("LLM provider required for conversational cleaning")
         return await self.cleaning_agent.chat_clean(message, df)
     
+    async def auto_clean_for_ml(self, df: pd.DataFrame, target_column: Optional[str] = None) -> pd.DataFrame:
+        """
+        Automatically clean data based on detected ML context (Agent-First).
+        """
+        if not self.enable_agent_first or not self.universal_agent:
+            raise ValueError("Agent-First mode required for automatic ML cleaning")
+        
+        try:
+            # Use Universal Agent for complete pipeline
+            result = await self.universal_agent.automl_without_templates(
+                df=df,
+                target_col=target_column
+            )
+            
+            if result.success and result.cleaned_data is not None:
+                logger.info(f"Auto-cleaning successful for {result.context_detected.problem_type}")
+                return result.cleaned_data
+            else:
+                logger.warning("Auto-cleaning failed, returning original data")
+                return df
+                
+        except Exception as e:
+            logger.error(f"Auto-cleaning failed: {e}")
+            return df
+    
     def get_quality_report(self, assessment: DataQualityAssessment) -> str:
-        """Generate a formatted quality report."""
+        """Generate a formatted quality report with ML context if available."""
         
         report = f"""
 # Data Quality Assessment Report
 
 ## Overall Quality Score: {assessment.quality_score:.1f}/100
-
+"""
+        
+        # Add ML context if available
+        if assessment.ml_context:
+            report += f"""
+## ML Context Detected
+- **Problem Type:** {assessment.ml_context.get('problem_type', 'Unknown')}
+- **Confidence:** {assessment.ml_context.get('confidence', 0):.1%}
+- **Business Sector:** {assessment.ml_context.get('business_sector', 'General')}
+- **Temporal Data:** {'Yes' if assessment.ml_context.get('temporal_aspect') else 'No'}
+- **Imbalance Detected:** {'Yes' if assessment.ml_context.get('imbalance_detected') else 'No'}
+"""
+        
+        report += f"""
 ## Critical Alerts ({len(assessment.alerts)})
 """
         for alert in assessment.alerts:
@@ -694,6 +1001,12 @@ class IntelligentDataQualityAgent:
                 report += f"- {action}\n"
         
         return report
+    
+    def get_cleaning_suggestions(self, df: pd.DataFrame) -> List[str]:
+        """Get intelligent cleaning suggestions based on data quality."""
+        if self.cleaning_agent:
+            return self.cleaning_agent.get_cleaning_suggestions(df)
+        return []
 
 
 # Example usage
@@ -713,8 +1026,8 @@ if __name__ == "__main__":
     # Add some duplicates
     df = pd.concat([df, df.iloc[:5]], ignore_index=True)
     
-    # Initialize agent
-    agent = IntelligentDataQualityAgent()
+    # Initialize agent with Agent-First enabled
+    agent = IntelligentDataQualityAgent(enable_agent_first=True)
     
     # Perform assessment
     assessment = agent.assess(df, target_column='target')
@@ -728,3 +1041,18 @@ if __name__ == "__main__":
     print(f"Alerts: {len(assessment.alerts)}")
     print(f"Warnings: {len(assessment.warnings)}")
     print(f"Recommendations: {len(assessment.recommendations)}")
+    
+    # Test Agent-First context detection
+    import asyncio
+    
+    async def test_agent_first():
+        assessment_with_context = await agent.assess_with_context(df, target_column='target')
+        if assessment_with_context.ml_context:
+            print(f"\n{'='*50}")
+            print("Agent-First ML Context Detected:")
+            print(f"Problem Type: {assessment_with_context.ml_context['problem_type']}")
+            print(f"Confidence: {assessment_with_context.ml_context['confidence']:.1%}")
+    
+    # Run if OpenAI API key is available
+    if os.getenv("OPENAI_API_KEY"):
+        asyncio.run(test_agent_first())
