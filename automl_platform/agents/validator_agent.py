@@ -3,6 +3,7 @@ Validator Agent - Validates data against sector standards using web search
 """
 
 import pandas as pd
+import numpy as np
 import json
 import logging
 import asyncio
