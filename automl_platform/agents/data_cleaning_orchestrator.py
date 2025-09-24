@@ -1,5 +1,6 @@
 """
 Data Cleaning Orchestrator - Main coordination for OpenAI agents
+Integrated with Agent-First intelligent modules
 """
 
 import pandas as pd
@@ -20,12 +21,18 @@ from .validator_agent import ValidatorAgent
 from .cleaner_agent import CleanerAgent
 from .controller_agent import ControllerAgent
 
+# Import intelligent modules for Agent-First approach
+from .intelligent_context_detector import IntelligentContextDetector
+from .intelligent_config_generator import IntelligentConfigGenerator
+from .adaptive_template_system import AdaptiveTemplateSystem
+
 logger = logging.getLogger(__name__)
 
 
 class DataCleaningOrchestrator:
     """
     Orchestrates the intelligent data cleaning process using OpenAI agents
+    Now integrated with Agent-First approach for template-free operation
     """
     
     def __init__(self, config: Optional[AgentConfig] = None, automl_config: Optional[Dict] = None):
@@ -48,6 +55,11 @@ class DataCleaningOrchestrator:
         self.cleaner = CleanerAgent(self.config)
         self.controller = ControllerAgent(self.config)
         
+        # Initialize intelligent modules (Agent-First)
+        self.context_detector = IntelligentContextDetector()
+        self.config_generator = IntelligentConfigGenerator()
+        self.adaptive_templates = AdaptiveTemplateSystem()
+        
         # Tracking
         self.execution_history = []
         self.total_cost = 0.0
@@ -59,13 +71,15 @@ class DataCleaningOrchestrator:
             "total_api_calls": 0,
             "total_tokens_used": 0,
             "validation_success_rate": 0.0,
-            "retry_count": 0
+            "retry_count": 0,
+            "intelligence_used": False  # Track if Agent-First was used
         }
         
         # Results storage
         self.cleaning_report = {}
         self.validation_sources = []
         self.transformations_applied = []
+        self.ml_context = None  # Store detected ML context
         
         # Setup logging with file handler
         self._setup_logging()
@@ -82,7 +96,6 @@ class DataCleaningOrchestrator:
         )
         
         # File handler with rotation
-        from logging.handlers import RotatingFileHandler
         file_handler = RotatingFileHandler(
             log_file,
             maxBytes=10 * 1024 * 1024,  # 10MB
@@ -101,17 +114,13 @@ class DataCleaningOrchestrator:
         logger.setLevel(getattr(logging, self.config.log_level))
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
-        
-        # Also configure root logger for agents
-        root_logger = logging.getLogger('automl_platform.agents')
-        root_logger.setLevel(getattr(logging, self.config.log_level))
-        root_logger.addHandler(file_handler)
     
     async def clean_dataset(
         self, 
         df: pd.DataFrame, 
         user_context: Dict[str, Any],
-        cleaning_config: Optional[Dict] = None
+        cleaning_config: Optional[Dict] = None,
+        use_intelligence: bool = True  # New parameter for Agent-First
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Main pipeline for intelligent data cleaning
@@ -120,6 +129,7 @@ class DataCleaningOrchestrator:
             df: Input dataframe
             user_context: User context (sector, target variable, etc.)
             cleaning_config: Optional cleaning configuration
+            use_intelligence: Whether to use Agent-First intelligence
             
         Returns:
             Tuple of (cleaned_dataframe, cleaning_report)
@@ -131,8 +141,55 @@ class DataCleaningOrchestrator:
         
         logger.info(f"Starting intelligent cleaning for dataset with shape {df.shape}")
         logger.info(f"User context: {user_context}")
+        logger.info(f"Agent-First mode: {'ENABLED' if use_intelligence else 'DISABLED'}")
         
         try:
+            # NEW: Agent-First approach - Detect ML context if enabled
+            if use_intelligence:
+                self.performance_metrics["intelligence_used"] = True
+                self.ml_context = await self.context_detector.detect_ml_context(
+                    df, 
+                    target_col=user_context.get("target_variable"),
+                    user_hints=user_context
+                )
+                logger.info(f"🎯 Detected ML problem: {self.ml_context.problem_type} "
+                           f"(confidence: {self.ml_context.confidence:.1%})")
+                
+                # Generate optimal configuration dynamically
+                if not cleaning_config:
+                    optimal_config = await self.config_generator.generate_config(
+                        df=df,
+                        context={
+                            'problem_type': self.ml_context.problem_type,
+                            'business_sector': self.ml_context.business_sector,
+                            'temporal_aspect': self.ml_context.temporal_aspect,
+                            'imbalance_detected': self.ml_context.imbalance_detected
+                        },
+                        user_preferences=user_context
+                    )
+                    
+                    # Convert to cleaning config
+                    cleaning_config = {
+                        'preprocessing': optimal_config.preprocessing,
+                        'algorithms': optimal_config.algorithms,
+                        'task': optimal_config.task
+                    }
+                    logger.info(f"✨ Generated optimal configuration automatically")
+                
+                # Get adaptive configuration
+                cleaning_config = await self.adaptive_templates.get_configuration(
+                    df=df,
+                    context={
+                        'problem_type': self.ml_context.problem_type,
+                        'n_samples': len(df),
+                        'n_features': len(df.columns),
+                        'imbalance_detected': self.ml_context.imbalance_detected,
+                        'temporal_aspect': self.ml_context.temporal_aspect,
+                        'business_sector': self.ml_context.business_sector
+                    },
+                    agent_config=cleaning_config
+                )
+            
             # Check dataset size and chunk if necessary
             df_chunks = self._chunk_dataset(df) if self._needs_chunking(df) else [df]
             
@@ -148,6 +205,20 @@ class DataCleaningOrchestrator:
             
             # Generate final report
             self.cleaning_report = self._generate_final_report(df, cleaned_df)
+            
+            # NEW: Learn from execution if Agent-First was used
+            if use_intelligence and self.ml_context:
+                quality_score = await self._evaluate_cleaning_quality(cleaned_df)
+                self.adaptive_templates.learn_from_execution(
+                    context={
+                        'problem_type': self.ml_context.problem_type,
+                        'n_samples': len(df),
+                        'n_features': len(df.columns)
+                    },
+                    config=cleaning_config,
+                    performance={'quality_score': quality_score}
+                )
+                logger.info(f"📚 Learned from execution (quality: {quality_score:.2f})")
             
             # Save configuration if enabled
             if self.config.save_yaml_config:
@@ -183,6 +254,13 @@ class DataCleaningOrchestrator:
                 self.performance_metrics["cleaning_time_per_agent"]["profiler"] = time.time() - start_time
                 self.performance_metrics["total_api_calls"] += 1
                 
+                # Add ML context to profile if available
+                if self.ml_context:
+                    profile_report["ml_context"] = {
+                        "problem_type": self.ml_context.problem_type,
+                        "confidence": self.ml_context.confidence
+                    }
+                
                 self.execution_history.append({
                     "step": "profiling",
                     "chunk": chunk_id,
@@ -191,7 +269,7 @@ class DataCleaningOrchestrator:
                     "duration": self.performance_metrics["cleaning_time_per_agent"]["profiler"]
                 })
                 
-                # Step 2: Validate against sector standards (can run in parallel)
+                # Step 2: Validate against sector standards
                 logger.info(f"[Chunk {chunk_id}] Step 2: Validating against sector standards...")
                 start_time = time.time()
                 validation_task = asyncio.create_task(
@@ -263,6 +341,26 @@ class DataCleaningOrchestrator:
                     # Return original chunk if all retries fail
                     return df_chunk
     
+    async def _evaluate_cleaning_quality(self, df: pd.DataFrame) -> float:
+        """Evaluate the quality of cleaned data"""
+        try:
+            # Basic quality metrics
+            missing_ratio = df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
+            duplicate_ratio = df.duplicated().mean()
+            
+            # Calculate quality score
+            quality_score = 100.0
+            quality_score -= missing_ratio * 50  # Penalize missing values
+            quality_score -= duplicate_ratio * 30  # Penalize duplicates
+            
+            # Check for constant columns
+            constant_cols = sum(1 for col in df.columns if df[col].nunique() == 1)
+            quality_score -= constant_cols * 5
+            
+            return max(0, min(100, quality_score))
+        except:
+            return 50.0  # Default middle score if evaluation fails
+    
     def _needs_chunking(self, df: pd.DataFrame) -> bool:
         """Check if dataset needs chunking"""
         memory_usage_mb = df.memory_usage(deep=True).sum() / (1024 * 1024)
@@ -281,7 +379,6 @@ class DataCleaningOrchestrator:
     def _update_cost_estimate(self):
         """Update cost estimate based on API usage"""
         # Rough estimation based on GPT-4 pricing
-        # Assuming ~1000 tokens per API call average
         tokens_per_call = 1000
         cost_per_1k_tokens_input = 0.03
         cost_per_1k_tokens_output = 0.06
@@ -305,6 +402,7 @@ class DataCleaningOrchestrator:
                 self.performance_metrics["validation_success_rate"] = (
                     self.performance_metrics["validation_success_rate"] / total_validations
                 ) * 100
+        
         report = {
             "metadata": {
                 "processing_date": datetime.now().isoformat(),
@@ -313,7 +411,8 @@ class DataCleaningOrchestrator:
                 "original_shape": original_df.shape,
                 "cleaned_shape": cleaned_df.shape,
                 "execution_time": time.time() - self.start_time if self.start_time else 0,
-                "total_cost": self.total_cost
+                "total_cost": self.total_cost,
+                "agent_first_used": self.performance_metrics["intelligence_used"]
             },
             "transformations": self.transformations_applied,
             "validation_sources": list(set(self.validation_sources)),
@@ -324,16 +423,18 @@ class DataCleaningOrchestrator:
                 "missing_after": cleaned_df.isnull().sum().sum(),
                 "duplicates_removed": original_df.duplicated().sum() - cleaned_df.duplicated().sum()
             },
-            "performance_metrics": {
-                "cleaning_time_per_agent": self.performance_metrics["cleaning_time_per_agent"],
-                "total_api_calls": self.performance_metrics["total_api_calls"],
-                "total_tokens_used": self.performance_metrics["total_tokens_used"],
-                "validation_success_rate": self.performance_metrics["validation_success_rate"],
-                "retry_count": self.performance_metrics["retry_count"],
-                "cost_per_row": self.total_cost / len(original_df) if len(original_df) > 0 else 0
-            },
+            "performance_metrics": self.performance_metrics,
             "execution_history": self.execution_history
         }
+        
+        # Add ML context if detected
+        if self.ml_context:
+            report["ml_context"] = {
+                "problem_type": self.ml_context.problem_type,
+                "confidence": self.ml_context.confidence,
+                "business_sector": self.ml_context.business_sector,
+                "reasoning": self.ml_context.reasoning
+            }
         
         # Add column-specific changes
         column_changes = []
@@ -361,53 +462,26 @@ class DataCleaningOrchestrator:
     
     def _save_yaml_config(self):
         """Save cleaning configuration to YAML"""
-        # Format transformations properly
-        formatted_transformations = []
-        for t in self.transformations_applied:
-            transformation = {
-                "column": t.get("column"),
-                "action": t.get("action"),
-                "params": t.get("params", {})
+        from .yaml_config_handler import YAMLConfigHandler
+        
+        handler = YAMLConfigHandler()
+        
+        # Add ML context to user context if available
+        user_context = self.config.user_context.copy()
+        if self.ml_context:
+            user_context["detected_problem_type"] = self.ml_context.problem_type
+            user_context["ml_confidence"] = self.ml_context.confidence
+        
+        yaml_path = handler.save_cleaning_config(
+            transformations=self.transformations_applied,
+            validation_sources=self.validation_sources,
+            user_context=user_context,
+            metrics={
+                "initial_quality": self.cleaning_report.get("metadata", {}).get("initial_quality", 0),
+                "final_quality": self.cleaning_report.get("metadata", {}).get("final_quality", 0),
+                "agent_first_used": self.performance_metrics["intelligence_used"]
             }
-            # Add rationale if present
-            if "rationale" in t:
-                transformation["rationale"] = t["rationale"]
-            formatted_transformations.append(transformation)
-        
-        # Format validation sources
-        validation_sources = list(set(self.validation_sources))
-        if not validation_sources:
-            validation_sources = ["Standards sectoriels identifiés automatiquement"]
-        
-        config_data = {
-            "metadata": {
-                "industry": self.config.user_context.get("secteur_activite", "general"),
-                "target_variable": self.config.user_context.get("target_variable", "unknown"),
-                "processing_date": datetime.now().strftime("%Y-%m-%d"),
-                "business_context": self.config.user_context.get("contexte_metier", ""),
-                "language": self.config.user_context.get("language", "fr")
-            },
-            "transformations": formatted_transformations,
-            "validation_sources": validation_sources,
-            "quality_metrics": {
-                "initial_score": self.cleaning_report.get("metadata", {}).get("initial_quality", 0),
-                "final_score": self.cleaning_report.get("metadata", {}).get("final_quality", 0),
-                "improvement": self.cleaning_report.get("metadata", {}).get("quality_improvement", 0)
-            },
-            "execution_summary": {
-                "total_transformations": len(formatted_transformations),
-                "execution_time_seconds": self.cleaning_report.get("metadata", {}).get("execution_time", 0),
-                "cost_estimate": self.total_cost
-            }
-        }
-        
-        yaml_path = Path(self.config.output_dir) / f"cleaning_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.yaml"
-        
-        # Ensure the directory exists
-        yaml_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(yaml_path, "w", encoding='utf-8') as f:
-            yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        )
         
         logger.info(f"YAML configuration saved to {yaml_path}")
     
@@ -491,3 +565,26 @@ class DataCleaningOrchestrator:
         suggestions = await self.cleaner.suggest_transformations(df, profile_report)
         
         return suggestions
+    
+    async def detect_ml_context(self, df: pd.DataFrame, target_col: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Detect ML context for a dataset (Agent-First feature)
+        
+        Args:
+            df: Input dataframe
+            target_col: Target column name
+            
+        Returns:
+            Dictionary with detected ML context
+        """
+        context = await self.context_detector.detect_ml_context(df, target_col)
+        
+        return {
+            "problem_type": context.problem_type,
+            "confidence": context.confidence,
+            "business_sector": context.business_sector,
+            "temporal_aspect": context.temporal_aspect,
+            "imbalance_detected": context.imbalance_detected,
+            "reasoning": context.reasoning,
+            "alternatives": context.alternative_interpretations
+        }
