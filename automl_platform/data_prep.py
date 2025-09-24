@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import asyncio
 import os
+import yaml
 from typing import Optional, List, Tuple, Union, Dict, Any
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -1026,6 +1027,177 @@ def validate_data(df: pd.DataFrame, config: Dict[str, Any] = None) -> Dict[str, 
 
 # Alias for backward compatibility
 DataPreprocessor = EnhancedDataPreprocessor
+
+
+class IntelligentDataCleaner:
+    """
+    Intelligent Data Cleaner using OpenAI agents
+    Wrapper class for easy integration with existing architecture
+    """
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize Intelligent Data Cleaner
+        
+        Args:
+            config: Configuration dictionary
+        """
+        self.config = config or {
+            'enable_intelligent_cleaning': True,
+            'openai_cleaning_model': 'gpt-4-1106-preview',
+            'max_cleaning_cost_per_dataset': 5.00
+        }
+        
+        # Check for OpenAI API key
+        self.openai_api_key = self.config.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
+        if not self.openai_api_key:
+            raise ValueError("OpenAI API key required for IntelligentDataCleaner")
+        
+        self.orchestrator = None
+        self.preprocessor = EnhancedDataPreprocessor(self.config)
+        
+    async def clean(
+        self, 
+        df: pd.DataFrame, 
+        user_context: Dict[str, Any],
+        use_traditional_fallback: bool = True
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Clean dataset using OpenAI agents
+        
+        Args:
+            df: Input dataframe
+            user_context: Context with sector, target variable, etc.
+            use_traditional_fallback: Whether to fallback to traditional cleaning on error
+            
+        Returns:
+            Tuple of (cleaned_dataframe, cleaning_report)
+        """
+        try:
+            # Import agents
+            from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
+            
+            # Create agent configuration
+            agent_config = AgentConfig(
+                openai_api_key=self.openai_api_key,
+                model=self.config.get('openai_cleaning_model', 'gpt-4-1106-preview'),
+                user_context=user_context,
+                max_cost_per_dataset=self.config.get('max_cleaning_cost_per_dataset', 5.00)
+            )
+            
+            # Create orchestrator if not exists
+            if not self.orchestrator:
+                self.orchestrator = DataCleaningOrchestrator(agent_config, self.config)
+            
+            # Run intelligent cleaning
+            logger.info(f"Starting intelligent cleaning for sector: {user_context.get('secteur_activite')}")
+            cleaned_df, report = await self.orchestrator.clean_dataset(df, user_context)
+            
+            return cleaned_df, report
+            
+        except Exception as e:
+            logger.error(f"Intelligent cleaning failed: {e}")
+            
+            if use_traditional_fallback:
+                logger.info("Falling back to traditional cleaning")
+                cleaned_df = self.preprocessor.fit_transform(df)
+                report = {
+                    "method": "traditional_fallback",
+                    "error": str(e),
+                    "quality_report": self.preprocessor.quality_report
+                }
+                return cleaned_df, report
+            else:
+                raise
+    
+    def assess_quality(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Assess data quality without cleaning
+        
+        Args:
+            df: Input dataframe
+            
+        Returns:
+            Quality assessment report
+        """
+        return self.preprocessor.check_data_quality(df)
+    
+    async def validate_against_standards(
+        self, 
+        df: pd.DataFrame, 
+        sector: str
+    ) -> Dict[str, Any]:
+        """
+        Validate data against sector standards
+        
+        Args:
+            df: Input dataframe
+            sector: Business sector
+            
+        Returns:
+            Validation report
+        """
+        try:
+            from automl_platform.agents import ValidatorAgent, AgentConfig
+            
+            agent_config = AgentConfig(
+                openai_api_key=self.openai_api_key,
+                user_context={"secteur_activite": sector}
+            )
+            
+            validator = ValidatorAgent(agent_config)
+            
+            # Get basic profile first
+            profile = self.preprocessor.check_data_quality(df)
+            
+            # Validate against standards
+            validation_report = await validator.validate(df, profile)
+            
+            return validation_report
+            
+        except Exception as e:
+            logger.error(f"Validation failed: {e}")
+            return {"error": str(e), "valid": False}
+    
+    @staticmethod
+    def create_from_config(config_path: str) -> 'IntelligentDataCleaner':
+        """
+        Create IntelligentDataCleaner from YAML config file
+        
+        Args:
+            config_path: Path to configuration file
+            
+        Returns:
+            IntelligentDataCleaner instance
+        """
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        return IntelligentDataCleaner(config)
+
+
+# Convenience functions
+def create_intelligent_cleaner(
+    openai_api_key: Optional[str] = None,
+    model: str = "gpt-4-1106-preview"
+) -> IntelligentDataCleaner:
+    """
+    Create an intelligent data cleaner instance
+    
+    Args:
+        openai_api_key: OpenAI API key (uses env var if not provided)
+        model: OpenAI model to use
+        
+    Returns:
+        IntelligentDataCleaner instance
+    """
+    config = {
+        'enable_intelligent_cleaning': True,
+        'openai_cleaning_model': model,
+        'openai_api_key': openai_api_key or os.getenv('OPENAI_API_KEY')
+    }
+    
+    return IntelligentDataCleaner(config)
 
 
 # Example usage
