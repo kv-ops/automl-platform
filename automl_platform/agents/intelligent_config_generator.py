@@ -844,4 +844,100 @@ class IntelligentConfigGenerator:
         
         # Add specific metrics to track
         if task == 'classification':
-            monitoring['metrics'] = ['accuracy',
+            monitoring['metrics'] = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
+        elif task == 'regression':
+            monitoring['metrics'] = ['rmse', 'mae', 'mape', 'r2']
+        elif task == 'ranking':
+            monitoring['metrics'] = ['ndcg', 'map', 'mrr']
+        
+        return monitoring
+    
+    def _generate_config_reasoning(
+        self,
+        task: str,
+        algorithms: List[str],
+        primary_metric: str,
+        constraints: Dict[str, Any]
+    ) -> str:
+        """Generate human-readable reasoning for the configuration"""
+        
+        reasoning = f"📊 **Configuration Strategy**\n\n"
+        reasoning += f"**Task:** {task}\n"
+        reasoning += f"**Optimization Metric:** {primary_metric}\n"
+        reasoning += f"**Time Budget:** {constraints['time_budget']/60:.1f} minutes\n\n"
+        
+        reasoning += f"**Selected Algorithms ({len(algorithms)}):**\n"
+        for algo in algorithms[:5]:  # Show top 5
+            capabilities = self.ALGORITHM_CAPABILITIES.get(algo, {})
+            reasoning += f"- {algo}: {capabilities.get('interpretability', 'unknown')} interpretability, "
+            reasoning += f"{capabilities.get('training_speed', 'unknown')} training\n"
+        
+        reasoning += f"\n**Key Decisions:**\n"
+        
+        if constraints.get('interpretability_required'):
+            reasoning += "- Prioritized interpretable models due to requirements\n"
+        
+        if constraints.get('real_time_scoring'):
+            reasoning += "- Selected fast inference algorithms for real-time scoring\n"
+        
+        if constraints.get('memory_limit_gb', 16) < 8:
+            reasoning += "- Chose memory-efficient algorithms due to resource constraints\n"
+        
+        return reasoning
+    
+    def adapt_config(
+        self,
+        base_config: OptimalConfig,
+        new_constraints: Dict[str, Any]
+    ) -> OptimalConfig:
+        """Adapt an existing configuration to new constraints"""
+        
+        adapted = base_config
+        
+        # Adapt to time constraints
+        if new_constraints.get('time_budget'):
+            ratio = new_constraints['time_budget'] / base_config.time_budget
+            adapted.hpo_config['n_iter'] = int(base_config.hpo_config['n_iter'] * ratio)
+            adapted.time_budget = new_constraints['time_budget']
+        
+        # Adapt to memory constraints
+        if new_constraints.get('memory_limit_gb'):
+            if new_constraints['memory_limit_gb'] < 8:
+                # Remove memory-intensive algorithms
+                adapted.algorithms = [
+                    algo for algo in adapted.algorithms
+                    if self.ALGORITHM_CAPABILITIES[algo]['memory_usage'] != 'high'
+                ]
+        
+        # Adapt to interpretability requirements
+        if new_constraints.get('interpretability_required'):
+            # Prioritize interpretable algorithms
+            interpretable = []
+            for algo in adapted.algorithms:
+                if self.ALGORITHM_CAPABILITIES[algo]['interpretability'] in ['very_high', 'high']:
+                    interpretable.append(algo)
+            if interpretable:
+                adapted.algorithms = interpretable
+        
+        return adapted
+    
+    def learn_from_results(
+        self,
+        config: OptimalConfig,
+        performance: Dict[str, float],
+        execution_time: float
+    ):
+        """Learn from execution results to improve future configs"""
+        
+        self.performance_history.append({
+            'timestamp': datetime.now(),
+            'config': config.to_dict(),
+            'performance': performance,
+            'execution_time': execution_time,
+            'efficiency': performance.get(config.primary_metric, 0) / execution_time
+        })
+        
+        # Analyze what worked well
+        if performance.get(config.primary_metric, 0) > 0.9:  # Good performance
+            logger.info(f"✅ Successful config: {config.primary_metric}={performance.get(config.primary_metric):.3f}")
+            # Could store successful patterns for future use
