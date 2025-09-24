@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 import time
 import yaml
 from typing import Tuple, Dict, Any, Optional, List
@@ -52,25 +53,59 @@ class DataCleaningOrchestrator:
         self.total_cost = 0.0
         self.start_time = None
         
+        # Performance metrics
+        self.performance_metrics = {
+            "cleaning_time_per_agent": {},
+            "total_api_calls": 0,
+            "total_tokens_used": 0,
+            "validation_success_rate": 0.0,
+            "retry_count": 0
+        }
+        
         # Results storage
         self.cleaning_report = {}
         self.validation_sources = []
         self.transformations_applied = []
         
-        # Setup logging
+        # Setup logging with file handler
         self._setup_logging()
     
     def _setup_logging(self):
-        """Setup logging configuration"""
-        if self.config.log_file:
-            logging.basicConfig(
-                level=getattr(logging, self.config.log_level),
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                handlers=[
-                    logging.FileHandler(self.config.log_file),
-                    logging.StreamHandler()
-                ]
-            )
+        """Setup logging configuration with file output"""
+        log_file = self.config.log_file or "./logs/automl.log"
+        log_dir = Path(log_file).parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+        )
+        
+        # File handler with rotation
+        from logging.handlers import RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5
+        )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(getattr(logging, self.config.log_level))
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        console_handler.setLevel(logging.INFO)
+        
+        # Configure logger
+        logger = logging.getLogger(__name__)
+        logger.setLevel(getattr(logging, self.config.log_level))
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+        
+        # Also configure root logger for agents
+        root_logger = logging.getLogger('automl_platform.agents')
+        root_logger.setLevel(getattr(logging, self.config.log_level))
+        root_logger.addHandler(file_handler)
     
     async def clean_dataset(
         self, 
@@ -134,58 +169,99 @@ class DataCleaningOrchestrator:
     
     async def _process_chunk(self, df_chunk: pd.DataFrame, chunk_id: int) -> pd.DataFrame:
         """
-        Process a single chunk through all agents
+        Process a single chunk through all agents with retry logic
         """
-        try:
-            # Step 1: Profile the data
-            logger.info(f"[Chunk {chunk_id}] Step 1: Profiling data...")
-            profile_report = await self.profiler.analyze(df_chunk)
-            self.execution_history.append({
-                "step": "profiling",
-                "chunk": chunk_id,
-                "timestamp": datetime.now().isoformat(),
-                "report": profile_report
-            })
-            
-            # Step 2: Validate against sector standards (can run in parallel)
-            logger.info(f"[Chunk {chunk_id}] Step 2: Validating against sector standards...")
-            validation_task = asyncio.create_task(
-                self.validator.validate(df_chunk, profile_report)
-            )
-            
-            # Step 3: Clean data based on profile and validation
-            validation_report = await validation_task
-            self.validation_sources.extend(validation_report.get("sources", []))
-            
-            logger.info(f"[Chunk {chunk_id}] Step 3: Applying intelligent cleaning...")
-            cleaned_df, transformations = await self.cleaner.clean(
-                df_chunk, 
-                profile_report, 
-                validation_report
-            )
-            self.transformations_applied.extend(transformations)
-            
-            # Step 4: Final validation
-            logger.info(f"[Chunk {chunk_id}] Step 4: Final quality control...")
-            control_report = await self.controller.validate(
-                cleaned_df,
-                df_chunk,
-                transformations
-            )
-            
-            self.execution_history.append({
-                "step": "complete",
-                "chunk": chunk_id,
-                "timestamp": datetime.now().isoformat(),
-                "control_report": control_report
-            })
-            
-            return cleaned_df
-            
-        except Exception as e:
-            logger.error(f"Error processing chunk {chunk_id}: {e}")
-            # Return original chunk if processing fails
-            return df_chunk
+        max_retries = self.config.max_retries
+        retry_delay = self.config.retry_delay
+        
+        for attempt in range(max_retries):
+            try:
+                # Step 1: Profile the data
+                logger.info(f"[Chunk {chunk_id}] Step 1: Profiling data...")
+                start_time = time.time()
+                profile_report = await self.profiler.analyze(df_chunk)
+                self.performance_metrics["cleaning_time_per_agent"]["profiler"] = time.time() - start_time
+                self.performance_metrics["total_api_calls"] += 1
+                
+                self.execution_history.append({
+                    "step": "profiling",
+                    "chunk": chunk_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "report": profile_report,
+                    "duration": self.performance_metrics["cleaning_time_per_agent"]["profiler"]
+                })
+                
+                # Step 2: Validate against sector standards (can run in parallel)
+                logger.info(f"[Chunk {chunk_id}] Step 2: Validating against sector standards...")
+                start_time = time.time()
+                validation_task = asyncio.create_task(
+                    self.validator.validate(df_chunk, profile_report)
+                )
+                
+                # Step 3: Clean data based on profile and validation
+                validation_report = await validation_task
+                self.performance_metrics["cleaning_time_per_agent"]["validator"] = time.time() - start_time
+                self.performance_metrics["total_api_calls"] += 1
+                
+                self.validation_sources.extend(validation_report.get("sources", []))
+                
+                # Track validation success
+                if validation_report.get("valid", False):
+                    self.performance_metrics["validation_success_rate"] += 1
+                
+                logger.info(f"[Chunk {chunk_id}] Step 3: Applying intelligent cleaning...")
+                start_time = time.time()
+                cleaned_df, transformations = await self.cleaner.clean(
+                    df_chunk, 
+                    profile_report, 
+                    validation_report
+                )
+                self.performance_metrics["cleaning_time_per_agent"]["cleaner"] = time.time() - start_time
+                self.performance_metrics["total_api_calls"] += 1
+                
+                self.transformations_applied.extend(transformations)
+                
+                # Step 4: Final validation
+                logger.info(f"[Chunk {chunk_id}] Step 4: Final quality control...")
+                start_time = time.time()
+                control_report = await self.controller.validate(
+                    cleaned_df,
+                    df_chunk,
+                    transformations
+                )
+                self.performance_metrics["cleaning_time_per_agent"]["controller"] = time.time() - start_time
+                self.performance_metrics["total_api_calls"] += 1
+                
+                self.execution_history.append({
+                    "step": "complete",
+                    "chunk": chunk_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "control_report": control_report,
+                    "total_duration": sum(self.performance_metrics["cleaning_time_per_agent"].values())
+                })
+                
+                # Estimate cost
+                self._update_cost_estimate()
+                
+                return cleaned_df
+                
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for chunk {chunk_id}: {e}")
+                self.performance_metrics["retry_count"] += 1
+                
+                if attempt < max_retries - 1:
+                    # Exponential backoff
+                    if self.config.exponential_backoff:
+                        wait_time = retry_delay * (2 ** attempt)
+                    else:
+                        wait_time = retry_delay
+                    
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"All retries exhausted for chunk {chunk_id}")
+                    # Return original chunk if all retries fail
+                    return df_chunk
     
     def _needs_chunking(self, df: pd.DataFrame) -> bool:
         """Check if dataset needs chunking"""
@@ -202,8 +278,33 @@ class DataCleaningOrchestrator:
         chunks = np.array_split(df, n_chunks)
         return chunks
     
+    def _update_cost_estimate(self):
+        """Update cost estimate based on API usage"""
+        # Rough estimation based on GPT-4 pricing
+        # Assuming ~1000 tokens per API call average
+        tokens_per_call = 1000
+        cost_per_1k_tokens_input = 0.03
+        cost_per_1k_tokens_output = 0.06
+        
+        estimated_tokens = self.performance_metrics["total_api_calls"] * tokens_per_call
+        self.performance_metrics["total_tokens_used"] = estimated_tokens
+        
+        # Estimate cost (input + output)
+        estimated_cost = (estimated_tokens / 1000) * (cost_per_1k_tokens_input + cost_per_1k_tokens_output) / 2
+        self.total_cost = min(estimated_cost, self.config.max_cost_per_dataset)
+        
+        if self.total_cost >= self.config.max_cost_per_dataset * 0.8:
+            logger.warning(f"Approaching cost limit: ${self.total_cost:.2f} / ${self.config.max_cost_per_dataset:.2f}")
+    
     def _generate_final_report(self, original_df: pd.DataFrame, cleaned_df: pd.DataFrame) -> Dict[str, Any]:
-        """Generate comprehensive cleaning report"""
+        """Generate comprehensive cleaning report with performance metrics"""
+        # Calculate validation success rate
+        if len(self.execution_history) > 0:
+            total_validations = sum(1 for h in self.execution_history if "validation" in h.get("step", ""))
+            if total_validations > 0:
+                self.performance_metrics["validation_success_rate"] = (
+                    self.performance_metrics["validation_success_rate"] / total_validations
+                ) * 100
         report = {
             "metadata": {
                 "processing_date": datetime.now().isoformat(),
@@ -222,6 +323,14 @@ class DataCleaningOrchestrator:
                 "missing_before": original_df.isnull().sum().sum(),
                 "missing_after": cleaned_df.isnull().sum().sum(),
                 "duplicates_removed": original_df.duplicated().sum() - cleaned_df.duplicated().sum()
+            },
+            "performance_metrics": {
+                "cleaning_time_per_agent": self.performance_metrics["cleaning_time_per_agent"],
+                "total_api_calls": self.performance_metrics["total_api_calls"],
+                "total_tokens_used": self.performance_metrics["total_tokens_used"],
+                "validation_success_rate": self.performance_metrics["validation_success_rate"],
+                "retry_count": self.performance_metrics["retry_count"],
+                "cost_per_row": self.total_cost / len(original_df) if len(original_df) > 0 else 0
             },
             "execution_history": self.execution_history
         }
