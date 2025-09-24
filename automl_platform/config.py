@@ -1,4 +1,4 @@
-"""Enhanced configuration management for AutoML platform with Storage, Monitoring, Workers, Billing, RGPD, and Expert Mode."""
+"""Enhanced configuration management for AutoML platform with Agent-First support."""
 
 import yaml
 from pathlib import Path
@@ -22,12 +22,86 @@ class PlanType(Enum):
 
 
 @dataclass
+class AgentFirstConfig:
+    """Configuration for Agent-First approach with intelligent agents"""
+    enabled: bool = True
+    
+    # Universal ML Agent settings
+    use_universal_agent: bool = True
+    auto_detect_problem_type: bool = True
+    search_best_practices: bool = True
+    enable_continuous_learning: bool = True
+    
+    # Context detection
+    context_detection_confidence_threshold: float = 0.7
+    alternative_contexts_to_consider: int = 3
+    detect_business_sector: bool = True
+    detect_temporal_aspects: bool = True
+    
+    # Configuration generation
+    generate_config_dynamically: bool = True
+    override_templates: bool = True
+    template_as_hint_only: bool = True
+    adapt_to_data_characteristics: bool = True
+    
+    # Adaptive learning
+    enable_adaptive_templates: bool = True
+    max_learned_patterns: int = 100
+    min_success_score_to_learn: float = 0.8
+    learn_from_each_execution: bool = True
+    
+    # Knowledge base
+    knowledge_base_path: str = "./knowledge_base"
+    cache_contexts: bool = True
+    cache_best_practices: bool = True
+    cache_successful_patterns: bool = True
+    knowledge_retention_days: int = 365
+    
+    # Web search for ML best practices
+    enable_web_search: bool = True
+    search_providers: List[str] = field(default_factory=lambda: ["papers_with_code", "arxiv", "google_scholar"])
+    max_search_results: int = 10
+    cache_search_results: bool = True
+    search_cache_ttl: int = 86400  # 24 hours
+    
+    # Performance tracking
+    track_agent_metrics: bool = True
+    track_execution_history: bool = True
+    max_execution_history: int = 1000
+    generate_performance_reports: bool = True
+    
+    # Agent orchestration
+    agent_timeout_seconds: int = 300
+    max_agent_retries: int = 3
+    parallel_agent_execution: bool = True
+    use_intelligent_cleaning: bool = True
+    
+    # OpenAI configuration for agents
+    openai_model: str = "gpt-4-1106-preview"
+    openai_temperature: float = 0.7
+    openai_max_tokens: int = 1000
+    track_openai_costs: bool = True
+    max_openai_cost_per_run: float = 10.0
+    
+    # Agent-specific settings
+    enable_profiler_agent: bool = True
+    enable_validator_agent: bool = True
+    enable_cleaner_agent: bool = True
+    enable_controller_agent: bool = True
+    
+    # YAML configuration export
+    export_yaml_configs: bool = True
+    yaml_output_dir: str = "./agent_outputs"
+    include_reasoning_in_yaml: bool = True
+
+
+@dataclass
 class BillingConfig:
     """Billing and quotas configuration"""
     enabled: bool = True
     plan_type: str = "free"  # free, trial, pro, enterprise
     
-    # Quotas by plan
+    # Quotas by plan (updated with Agent-First limits)
     quotas: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
         "free": {
             "max_datasets": 3,
@@ -38,6 +112,8 @@ class BillingConfig:
             "max_workers": 1,
             "llm_enabled": False,
             "llm_calls_per_month": 0,
+            "agent_first_enabled": False,  # New
+            "agent_calls_per_month": 0,    # New
             "gpu_enabled": False,
             "api_rate_limit": 10,
             "data_retention_days": 7
@@ -51,6 +127,8 @@ class BillingConfig:
             "max_workers": 2,
             "llm_enabled": True,
             "llm_calls_per_month": 100,
+            "agent_first_enabled": True,    # New
+            "agent_calls_per_month": 50,    # New
             "gpu_enabled": False,
             "api_rate_limit": 60,
             "data_retention_days": 14
@@ -64,6 +142,8 @@ class BillingConfig:
             "max_workers": 4,
             "llm_enabled": True,
             "llm_calls_per_month": 1000,
+            "agent_first_enabled": True,    # New
+            "agent_calls_per_month": 500,   # New
             "gpu_enabled": False,
             "api_rate_limit": 100,
             "data_retention_days": 90
@@ -77,6 +157,8 @@ class BillingConfig:
             "max_workers": 10,
             "llm_enabled": True,
             "llm_calls_per_month": -1,
+            "agent_first_enabled": True,    # New
+            "agent_calls_per_month": -1,    # New
             "gpu_enabled": True,
             "api_rate_limit": 1000,
             "data_retention_days": 365
@@ -97,6 +179,7 @@ class BillingConfig:
     track_storage_gb: bool = True
     track_api_calls: bool = True
     track_llm_tokens: bool = True
+    track_agent_calls: bool = True  # New
     
     # Billing backend
     stripe_api_key: Optional[str] = os.getenv("STRIPE_API_KEY")
@@ -122,7 +205,9 @@ class RGPDConfig:
         "sensitive_data": 365,  # 1 year with explicit consent
         "ml_predictions": 180,  # 6 months
         "audit_logs": 365 * 2,  # 2 years
-        "consent_records": 365 * 5  # 5 years
+        "consent_records": 365 * 5,  # 5 years
+        "agent_interactions": 365,  # New - 1 year for agent interactions
+        "knowledge_base": 365 * 2  # New - 2 years for learned patterns
     })
     
     # Consent management
@@ -132,7 +217,8 @@ class RGPDConfig:
         "profiling",
         "automated_decisions",
         "third_party_sharing",
-        "data_processing"
+        "data_processing",
+        "agent_learning"  # New - consent for agent learning from data
     ])
     
     consent_renewal_days: int = 365  # Renew consent annually
@@ -165,7 +251,8 @@ class RGPDConfig:
     third_party_processors: List[Dict[str, str]] = field(default_factory=lambda: [
         {"name": "AWS", "purpose": "infrastructure", "location": "EU"},
         {"name": "Stripe", "purpose": "payments", "location": "EU"},
-        {"name": "SendGrid", "purpose": "email", "location": "EU"}
+        {"name": "SendGrid", "purpose": "email", "location": "EU"},
+        {"name": "OpenAI", "purpose": "intelligent_agents", "location": "US"}  # New
     ])
     
     # Data mapping
@@ -176,7 +263,8 @@ class RGPDConfig:
         "behavioral",
         "technical",
         "preferences",
-        "ml_data"
+        "ml_data",
+        "agent_interactions"  # New
     ])
     
     # Legal basis
@@ -186,7 +274,8 @@ class RGPDConfig:
         "marketing": "consent",
         "analytics": "legitimate_interest",
         "security": "legal_obligation",
-        "payments": "contract"
+        "payments": "contract",
+        "agent_learning": "consent"  # New
     })
     
     # Privacy by design
@@ -396,6 +485,7 @@ class StorageConfig:
     models_bucket: str = "models"
     datasets_bucket: str = "datasets"
     artifacts_bucket: str = "artifacts"
+    knowledge_bucket: str = "knowledge"  # New - for agent knowledge base
     
     # Feature store
     enable_feature_store: bool = True
@@ -438,6 +528,12 @@ class MonitoringConfig:
     performance_window_days: int = 7
     min_predictions_for_metrics: int = 30
     
+    # Agent monitoring (New)
+    track_agent_performance: bool = True
+    track_agent_costs: bool = True
+    track_context_accuracy: bool = True
+    track_config_effectiveness: bool = True
+    
     # Alerting
     alerting_enabled: bool = True
     alert_channels: List[str] = field(default_factory=lambda: ["log", "email", "slack"])
@@ -448,6 +544,7 @@ class MonitoringConfig:
     error_rate_threshold: float = 0.05
     latency_threshold: float = 1.0  # seconds
     quality_score_threshold: float = 70.0
+    agent_cost_threshold: float = 100.0  # New - daily cost limit for agents
     
     # Alert configuration
     slack_webhook_url: Optional[str] = os.getenv("SLACK_WEBHOOK_URL")
@@ -459,6 +556,7 @@ class MonitoringConfig:
     # Logging and reporting
     log_predictions: bool = True
     log_features: bool = False  # Can be memory intensive
+    log_agent_decisions: bool = True  # New - log agent decisions
     create_reports: bool = True
     report_frequency: str = "daily"  # "hourly", "daily", "weekly"
     report_output_dir: str = "./monitoring_reports"
@@ -486,13 +584,14 @@ class WorkerConfig:
     task_time_limit: int = 3600  # seconds
     task_soft_time_limit: int = 3300  # seconds
     
-    # Queue configuration - WITH GPU SUPPORT
+    # Queue configuration - WITH GPU AND AGENT SUPPORT
     queues: Dict[str, Dict] = field(default_factory=lambda: {
         "default": {"priority": 0},
         "training": {"priority": 1},
         "prediction": {"priority": 2},
         "gpu": {"priority": 3, "routing_key": "gpu.*", "gpu_required": True},
-        "llm": {"priority": 2, "routing_key": "llm.*"}
+        "llm": {"priority": 2, "routing_key": "llm.*"},
+        "agents": {"priority": 3, "routing_key": "agents.*"}  # New - for agent tasks
     })
     
     # Resource management
@@ -543,6 +642,7 @@ class LLMConfig:
     enable_model_explanations: bool = True
     enable_report_generation: bool = True
     enable_chatbot: bool = True
+    enable_agent_first: bool = True  # New - enable Agent-First approach
     
     # RAG configuration
     enable_rag: bool = True
@@ -608,7 +708,7 @@ class APIConfig:
 
 @dataclass
 class AutoMLConfig:
-    """Enhanced AutoML configuration with all components including Expert Mode."""
+    """Enhanced AutoML configuration with all components including Expert Mode and Agent-First."""
     
     # Component configurations
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -621,6 +721,7 @@ class AutoMLConfig:
     connectors: ConnectorConfig = field(default_factory=ConnectorConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     feature_store: FeatureStoreConfig = field(default_factory=FeatureStoreConfig)
+    agent_first: AgentFirstConfig = field(default_factory=AgentFirstConfig)  # NEW
     
     # General settings
     environment: str = "development"  # "development", "staging", "production"
@@ -650,7 +751,7 @@ class AutoMLConfig:
     Useful for SaaS deployments where different user tiers get different complexity levels.
     """
     
-    # ================ AJOUT DU FLAG INTELLIGENT CLEANING ================
+    # INTELLIGENT CLEANING FLAG
     enable_intelligent_cleaning: bool = field(default=False)
     """
     Flag pour activer le nettoyage intelligent via l'API Python.
@@ -664,7 +765,19 @@ class AutoMLConfig:
     - Orchestre profiling → schema → outliers → encodage selon le secteur d'activité
     - Intègre la protection contre le leakage des données
     """
-    # ====================================================================
+    
+    # AGENT-FIRST FLAG
+    enable_agent_first: bool = field(default=False)
+    """
+    Enable Agent-First approach for template-free AutoML.
+    
+    When True:
+    - Automatically detects ML problem type
+    - Generates optimal configurations dynamically
+    - Searches for ML best practices
+    - Learns from each execution
+    - No templates required
+    """
     
     # Data preprocessing
     max_missing_ratio: float = 0.5
@@ -822,6 +935,27 @@ class AutoMLConfig:
                 "early_stopping_rounds": 10
             }
     
+    def should_use_agent_first(self) -> bool:
+        """Determine if Agent-First approach should be used"""
+        # Check multiple conditions
+        if not self.enable_agent_first:
+            return False
+        
+        if not self.agent_first.enabled:
+            return False
+        
+        # Check if user has quota for agent calls
+        if self.billing.enabled:
+            agent_quota = self.get_quota("agent_calls_per_month")
+            if agent_quota == 0:
+                return False
+        
+        # Check if OpenAI API key is available
+        if not self.llm.api_key and not os.getenv("OPENAI_API_KEY"):
+            return False
+        
+        return True
+    
     @classmethod
     def from_yaml(cls, filepath: str) -> "AutoMLConfig":
         """Load configuration from YAML file with nested configs."""
@@ -837,36 +971,24 @@ class AutoMLConfig:
                 config_dict['expert_mode'] = False
             # Otherwise use value from YAML or default
             
+            # Check for Agent-First mode in environment variable
+            agent_first_env = os.getenv("AUTOML_AGENT_FIRST", "").lower()
+            if agent_first_env in ["true", "1", "yes", "on"]:
+                config_dict['enable_agent_first'] = True
+            elif agent_first_env in ["false", "0", "no", "off"]:
+                config_dict['enable_agent_first'] = False
+            
             # Handle nested configurations
-            if 'storage' in config_dict and isinstance(config_dict['storage'], dict):
-                config_dict['storage'] = StorageConfig(**config_dict['storage'])
+            nested_configs = [
+                'storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 
+                'rgpd', 'connectors', 'streaming', 'feature_store', 'agent_first'
+            ]
             
-            if 'monitoring' in config_dict and isinstance(config_dict['monitoring'], dict):
-                config_dict['monitoring'] = MonitoringConfig(**config_dict['monitoring'])
-            
-            if 'worker' in config_dict and isinstance(config_dict['worker'], dict):
-                config_dict['worker'] = WorkerConfig(**config_dict['worker'])
-            
-            if 'llm' in config_dict and isinstance(config_dict['llm'], dict):
-                config_dict['llm'] = LLMConfig(**config_dict['llm'])
-            
-            if 'api' in config_dict and isinstance(config_dict['api'], dict):
-                config_dict['api'] = APIConfig(**config_dict['api'])
-            
-            if 'billing' in config_dict and isinstance(config_dict['billing'], dict):
-                config_dict['billing'] = BillingConfig(**config_dict['billing'])
-            
-            if 'rgpd' in config_dict and isinstance(config_dict['rgpd'], dict):
-                config_dict['rgpd'] = RGPDConfig(**config_dict['rgpd'])
-            
-            if 'connectors' in config_dict and isinstance(config_dict['connectors'], dict):
-                config_dict['connectors'] = ConnectorConfig(**config_dict['connectors'])
-            
-            if 'streaming' in config_dict and isinstance(config_dict['streaming'], dict):
-                config_dict['streaming'] = StreamingConfig(**config_dict['streaming'])
-            
-            if 'feature_store' in config_dict and isinstance(config_dict['feature_store'], dict):
-                config_dict['feature_store'] = FeatureStoreConfig(**config_dict['feature_store'])
+            for config_name in nested_configs:
+                if config_name in config_dict and isinstance(config_dict[config_name], dict):
+                    config_class = globals().get(f"{config_name.replace('_', ' ').title().replace(' ', '')}Config")
+                    if config_class:
+                        config_dict[config_name] = config_class(**config_dict[config_name])
             
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
@@ -880,7 +1002,7 @@ class AutoMLConfig:
         
         # Convert dataclasses to dicts for YAML serialization
         for key in ['storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 'rgpd',
-                   'connectors', 'streaming', 'feature_store']:
+                   'connectors', 'streaming', 'feature_store', 'agent_first']:
             if key in config_dict and hasattr(config_dict[key], '__dict__'):
                 config_dict[key] = asdict(config_dict[key])
         
@@ -918,6 +1040,12 @@ class AutoMLConfig:
                 if self.llm.provider in ["openai", "anthropic"] and not self.llm.api_key:
                     logger.warning(f"No API key provided for {self.llm.provider}")
             
+            # Validate Agent-First config
+            if self.agent_first.enabled:
+                assert self.agent_first.context_detection_confidence_threshold >= 0 and self.agent_first.context_detection_confidence_threshold <= 1
+                assert self.agent_first.max_learned_patterns > 0
+                assert self.agent_first.min_success_score_to_learn >= 0 and self.agent_first.min_success_score_to_learn <= 1
+            
             # Validate billing config
             if self.billing.enabled:
                 assert self.billing.plan_type in ["free", "trial", "pro", "enterprise"], f"Invalid plan type: {self.billing.plan_type}"
@@ -940,6 +1068,9 @@ class AutoMLConfig:
                 Path(self.monitoring.report_output_dir).mkdir(parents=True, exist_ok=True)
             if self.log_file:
                 Path(self.log_file).parent.mkdir(parents=True, exist_ok=True)
+            if self.agent_first.enabled:
+                Path(self.agent_first.knowledge_base_path).mkdir(parents=True, exist_ok=True)
+                Path(self.agent_first.yaml_output_dir).mkdir(parents=True, exist_ok=True)
             
             return True
             
@@ -962,7 +1093,8 @@ class AutoMLConfig:
                 "billing.plan_type": "trial",
                 "rgpd.enabled": False,  # Disabled in dev for easier testing
                 "expert_mode": True,  # Enable expert mode in dev by default
-                "enable_intelligent_cleaning": False  # Disabled by default in dev
+                "enable_intelligent_cleaning": False,  # Disabled by default in dev
+                "enable_agent_first": True  # Enable Agent-First in dev for testing
             },
             "staging": {
                 "debug": False,
@@ -973,7 +1105,8 @@ class AutoMLConfig:
                 "billing.plan_type": "pro",
                 "rgpd.enabled": True,
                 "expert_mode": False,  # Simplified for staging tests
-                "enable_intelligent_cleaning": True  # Enabled in staging
+                "enable_intelligent_cleaning": True,  # Enabled in staging
+                "enable_agent_first": True  # Enabled in staging
             },
             "production": {
                 "debug": False,
@@ -987,7 +1120,8 @@ class AutoMLConfig:
                 "rgpd.enabled": True,
                 "rgpd.identity_verification_required": True,
                 "expert_mode": False,  # Default to simplified in production
-                "enable_intelligent_cleaning": True  # Enabled in production
+                "enable_intelligent_cleaning": True,  # Enabled in production
+                "enable_agent_first": False  # Disabled by default in production (opt-in)
             }
         }
         
@@ -1004,6 +1138,13 @@ class AutoMLConfig:
         elif expert_mode_env in ["false", "0", "no", "off"]:
             env_config['expert_mode'] = False
         
+        # Check for Agent-First mode in environment variable
+        agent_first_env = os.getenv("AUTOML_AGENT_FIRST", "").lower()
+        if agent_first_env in ["true", "1", "yes", "on"]:
+            env_config['enable_agent_first'] = True
+        elif agent_first_env in ["false", "0", "no", "off"]:
+            env_config['enable_agent_first'] = False
+        
         for key, value in env_config.items():
             if '.' in key:
                 # Handle nested configs
@@ -1017,7 +1158,7 @@ class AutoMLConfig:
 
 
 # Convenience functions
-def load_config(filepath: str = None, environment: str = None, expert_mode: Optional[bool] = None) -> AutoMLConfig:
+def load_config(filepath: str = None, environment: str = None, expert_mode: Optional[bool] = None, agent_first: Optional[bool] = None) -> AutoMLConfig:
     """
     Load configuration with environment overrides and expert mode support.
     
@@ -1025,6 +1166,7 @@ def load_config(filepath: str = None, environment: str = None, expert_mode: Opti
         filepath: Path to YAML config file
         environment: Environment name (development, staging, production)
         expert_mode: Override expert mode setting (None = use env var or config)
+        agent_first: Override Agent-First setting (None = use env var or config)
     
     Returns:
         AutoMLConfig instance with appropriate settings
@@ -1050,11 +1192,27 @@ def load_config(filepath: str = None, environment: str = None, expert_mode: Opti
         elif expert_mode_env in ["false", "0", "no", "off"]:
             config.expert_mode = False
     
-    # Log expert mode status
+    # Override Agent-First mode if specified
+    if agent_first is not None:
+        config.enable_agent_first = agent_first
+    else:
+        # Check environment variable
+        agent_first_env = os.getenv("AUTOML_AGENT_FIRST", "").lower()
+        if agent_first_env in ["true", "1", "yes", "on"]:
+            config.enable_agent_first = True
+        elif agent_first_env in ["false", "0", "no", "off"]:
+            config.enable_agent_first = False
+    
+    # Log mode status
     if config.expert_mode:
         logger.info("Expert mode ENABLED - All advanced options available")
     else:
         logger.info("Expert mode DISABLED - Using simplified configuration")
+    
+    if config.enable_agent_first and config.should_use_agent_first():
+        logger.info("Agent-First mode ENABLED - Template-free AutoML with intelligent agents")
+    else:
+        logger.info("Agent-First mode DISABLED - Using traditional AutoML approach")
     
     # Validate configuration
     config.validate()
