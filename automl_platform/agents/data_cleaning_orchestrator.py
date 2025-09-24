@@ -252,26 +252,53 @@ class DataCleaningOrchestrator:
     
     def _save_yaml_config(self):
         """Save cleaning configuration to YAML"""
+        # Format transformations properly
+        formatted_transformations = []
+        for t in self.transformations_applied:
+            transformation = {
+                "column": t.get("column"),
+                "action": t.get("action"),
+                "params": t.get("params", {})
+            }
+            # Add rationale if present
+            if "rationale" in t:
+                transformation["rationale"] = t["rationale"]
+            formatted_transformations.append(transformation)
+        
+        # Format validation sources
+        validation_sources = list(set(self.validation_sources))
+        if not validation_sources:
+            validation_sources = ["Standards sectoriels identifiés automatiquement"]
+        
         config_data = {
             "metadata": {
-                "industry": self.config.user_context.get("secteur_activite"),
-                "target_variable": self.config.user_context.get("target_variable"),
-                "processing_date": datetime.now().isoformat()
+                "industry": self.config.user_context.get("secteur_activite", "general"),
+                "target_variable": self.config.user_context.get("target_variable", "unknown"),
+                "processing_date": datetime.now().strftime("%Y-%m-%d"),
+                "business_context": self.config.user_context.get("contexte_metier", ""),
+                "language": self.config.user_context.get("language", "fr")
             },
-            "transformations": [
-                {
-                    "column": t.get("column"),
-                    "action": t.get("action"),
-                    "params": t.get("params", {})
-                }
-                for t in self.transformations_applied
-            ],
-            "validation_sources": list(set(self.validation_sources))
+            "transformations": formatted_transformations,
+            "validation_sources": validation_sources,
+            "quality_metrics": {
+                "initial_score": self.cleaning_report.get("metadata", {}).get("initial_quality", 0),
+                "final_score": self.cleaning_report.get("metadata", {}).get("final_quality", 0),
+                "improvement": self.cleaning_report.get("metadata", {}).get("quality_improvement", 0)
+            },
+            "execution_summary": {
+                "total_transformations": len(formatted_transformations),
+                "execution_time_seconds": self.cleaning_report.get("metadata", {}).get("execution_time", 0),
+                "cost_estimate": self.total_cost
+            }
         }
         
         yaml_path = Path(self.config.output_dir) / f"cleaning_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.yaml"
-        with open(yaml_path, "w") as f:
-            yaml.dump(config_data, f, default_flow_style=False)
+        
+        # Ensure the directory exists
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(yaml_path, "w", encoding='utf-8') as f:
+            yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         
         logger.info(f"YAML configuration saved to {yaml_path}")
     
