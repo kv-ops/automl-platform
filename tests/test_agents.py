@@ -6,6 +6,7 @@ import pytest
 import pandas as pd
 import numpy as np
 import asyncio
+import time
 from unittest.mock import Mock, patch, AsyncMock
 import json
 from pathlib import Path
