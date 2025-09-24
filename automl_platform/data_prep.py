@@ -10,6 +10,7 @@ import asyncio
 import os
 import yaml
 from typing import Optional, List, Tuple, Union, Dict, Any
+from dataclasses import asdict
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import (
@@ -35,14 +36,21 @@ class EnhancedDataPreprocessor:
     Integrated with data connectors, feature store, and OpenAI agents.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Union[Dict[str, Any], 'AutoMLConfig']):
         """
-        Initialize preprocessor.
+        Initialize preprocessor avec support pour AutoMLConfig.
         
         Args:
-            config: Configuration dictionary
+            config: Configuration dictionary ou AutoMLConfig instance
         """
-        self.config = config
+        # Handle both dict and AutoMLConfig instances
+        if isinstance(config, dict):
+            self.config = config
+            self.enable_intelligent_cleaning = config.get('enable_intelligent_cleaning', False)
+        else:  # AutoMLConfig instance
+            self.config = config.to_dict() if hasattr(config, 'to_dict') else asdict(config)
+            self.enable_intelligent_cleaning = getattr(config, 'enable_intelligent_cleaning', False)
+        
         self.numeric_features = []
         self.categorical_features = []
         self.datetime_features = []
@@ -58,26 +66,26 @@ class EnhancedDataPreprocessor:
         self.cleaning_report = {}  # For intelligent cleaning results
         
         # Advanced options
-        self.handle_outliers = config.get('handle_outliers', True)
-        self.outlier_method = config.get('outlier_method', 'iqr')
-        self.outlier_threshold = config.get('outlier_threshold', 1.5)
-        self.imputation_method = config.get('imputation_method', 'median')
-        self.scaling_method = config.get('scaling_method', 'robust')
-        self.encoding_method = config.get('encoding_method', 'onehot')
-        self.max_cardinality = config.get('high_cardinality_threshold', 20)
-        self.rare_threshold = config.get('rare_category_threshold', 0.01)
-        self.enable_quality_checks = config.get('enable_quality_checks', True)
-        self.enable_drift_detection = config.get('enable_drift_detection', False)
+        self.handle_outliers = self.config.get('handle_outliers', True)
+        self.outlier_method = self.config.get('outlier_method', 'iqr')
+        self.outlier_threshold = self.config.get('outlier_threshold', 1.5)
+        self.imputation_method = self.config.get('imputation_method', 'median')
+        self.scaling_method = self.config.get('scaling_method', 'robust')
+        self.encoding_method = self.config.get('encoding_method', 'onehot')
+        self.max_cardinality = self.config.get('high_cardinality_threshold', 20)
+        self.rare_threshold = self.config.get('rare_category_threshold', 0.01)
+        self.enable_quality_checks = self.config.get('enable_quality_checks', True)
+        self.enable_drift_detection = self.config.get('enable_drift_detection', False)
         
         # Connector integration
         self.connector = None
-        if config.get('connector_config'):
-            self._init_connector(config['connector_config'])
+        if self.config.get('connector_config'):
+            self._init_connector(self.config['connector_config'])
         
         # Feature store integration
         self.feature_store = None
-        if config.get('feature_store_config'):
-            self._init_feature_store(config['feature_store_config'])
+        if self.config.get('feature_store_config'):
+            self._init_feature_store(self.config['feature_store_config'])
     
     def _init_connector(self, connector_config: Dict[str, Any]):
         """Initialize data connector."""
@@ -161,69 +169,63 @@ class EnhancedDataPreprocessor:
     
     async def intelligent_clean(self, df: pd.DataFrame, user_context: Dict[str, Any]) -> pd.DataFrame:
         """
-        Use OpenAI agents for intelligent data cleaning
+        API finale pour le nettoyage intelligent.
         
         Args:
-            df: Input dataframe to clean
-            user_context: User context including sector, target variable, etc.
-            
+            df: DataFrame à nettoyer
+            user_context: Contexte utilisateur avec:
+                - industry: secteur d'activité (ex: "finance")
+                - target_variable: nom de la variable cible (ex: "churn")  
+                - business_context: description métier (ex: "Prédiction attrition clients B2B")
+                
         Returns:
-            Cleaned dataframe
+            DataFrame nettoyé
         """
+        if not self.enable_intelligent_cleaning:
+            logger.info("Intelligent cleaning disabled, using standard preprocessing")
+            return self.fit_transform(df)
+        
+        # Validation du contexte
+        required_keys = ['industry', 'target_variable', 'business_context']
+        for key in required_keys:
+            if key not in user_context:
+                raise ValueError(f"Missing required context key: {key}")
+        
         try:
-            # Check if intelligent cleaning is enabled
-            if not self.config.get('enable_intelligent_cleaning', False):
-                logger.info("Intelligent cleaning not enabled, using standard cleaning")
-                return self.fit_transform(df)
+            # Import de l'orchestrateur intelligent
+            from .intelligent_cleaning import IntelligentCleaningOrchestrator
             
-            # Check for OpenAI API key
-            openai_api_key = self.config.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
-            if not openai_api_key:
-                logger.warning("No OpenAI API key found, falling back to standard cleaning")
-                return self.fit_transform(df)
+            # Configuration de l'orchestrateur
+            orchestrator_config = {
+                'time_budget_s': self.config.get('time_budget_s', 300),
+                'memory_limit_mb': self.config.get('memory_limit_mb', 2048),
+                'n_jobs': self.config.get('n_jobs', -1),
+                'strict_schema': self.config.get('strict_schema', False),
+                'leakage_protection': self.config.get('leakage_protection', True),
+                'logging_level': self.config.get('logging_level', 'INFO')
+            }
             
-            # Import agent components
-            from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
+            # Instanciation de l'orchestrateur
+            orchestrator = IntelligentCleaningOrchestrator(orchestrator_config)
             
-            # Create agent configuration
-            agent_config = AgentConfig(
-                openai_api_key=openai_api_key,
-                model=self.config.get('openai_cleaning_model', 'gpt-4-1106-preview'),
-                user_context=user_context,
-                max_cost_per_dataset=self.config.get('max_cleaning_cost_per_dataset', 5.00),
-                enable_web_search=self.config.get('enable_web_search', True),
-                enable_file_operations=self.config.get('enable_file_operations', True)
-            )
+            # Exécution du pipeline intelligent
+            logger.info(f"Starting intelligent cleaning for industry: {user_context['industry']}")
+            cleaned_df = await orchestrator.process(df, user_context)
             
-            # Create orchestrator
-            orchestrator = DataCleaningOrchestrator(agent_config, self.config)
+            # Mise à jour du rapport
+            self.cleaning_report = orchestrator.get_report()
             
-            # Run intelligent cleaning
-            logger.info(f"Starting intelligent cleaning with OpenAI agents for sector: {user_context.get('secteur_activite', 'general')}")
-            
-            cleaned_df, report = await orchestrator.clean_dataset(df, user_context)
-            
-            # Log results
-            logger.info(f"Intelligent cleaning completed. Quality score: {report.get('quality_metrics', {}).get('quality_score', 'N/A')}")
-            
-            # Store the cleaning report
-            self.cleaning_report = report
-            
-            # Save to feature store if configured
-            if self.feature_store and user_context.get('save_to_feature_store', False):
-                feature_set_name = f"{user_context.get('secteur_activite', 'general')}_{user_context.get('target_variable', 'features')}"
-                self.save_to_feature_store(cleaned_df, feature_set_name)
-            
+            logger.info(f"Intelligent cleaning completed. Quality score: {self.cleaning_report.get('quality_score', 'N/A')}")
             return cleaned_df
             
         except ImportError as e:
-            logger.error(f"Failed to import agent components: {e}")
-            logger.info("Falling back to standard cleaning")
+            logger.error(f"Intelligent cleaning module not available: {e}")
+            logger.info("Falling back to standard preprocessing")
             return self.fit_transform(df)
             
         except Exception as e:
-            logger.error(f"Error in intelligent cleaning: {e}")
-            logger.info("Falling back to standard cleaning")
+            logger.error(f"Intelligent cleaning failed: {e}")
+            logger.info("Falling back to standard preprocessing")
             return self.fit_transform(df)
         
     def detect_feature_types(self, df: pd.DataFrame) -> Dict[str, List[str]]:
@@ -1234,13 +1236,14 @@ if __name__ == "__main__":
     # Example of intelligent cleaning (requires async)
     async def test_intelligent_cleaning():
         user_context = {
-            "secteur_activite": "finance",
+            "industry": "finance",  # Changé pour correspondre à l'API finale
             "target_variable": "target",
-            "contexte_metier": "Risk prediction"
+            "business_context": "Risk prediction for B2B customers"
         }
         
         cleaned_df = await preprocessor.intelligent_clean(df, user_context)
         print(f"Intelligent cleaning completed: {cleaned_df.shape}")
+        print(f"Cleaning report: {preprocessor.cleaning_report}")
     
     # Run if OpenAI API key is available
     if os.getenv('OPENAI_API_KEY'):
