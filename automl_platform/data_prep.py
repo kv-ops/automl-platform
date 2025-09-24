@@ -1,11 +1,13 @@
 """
 Enhanced Data Preparation Module
 Includes data quality checks, drift detection, advanced preprocessing,
-and integration with connectors and feature store
+integration with connectors, feature store, and intelligent cleaning with OpenAI agents
 """
 
 import pandas as pd
 import numpy as np
+import asyncio
+import os
 from typing import Optional, List, Tuple, Union, Dict, Any
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -29,7 +31,7 @@ class EnhancedDataPreprocessor:
     """
     Advanced data preprocessing with quality checks and drift detection.
     No data leakage guaranteed through proper pipeline usage.
-    Integrated with data connectors and feature store.
+    Integrated with data connectors, feature store, and OpenAI agents.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -52,6 +54,7 @@ class EnhancedDataPreprocessor:
         self.reference_stats = {}
         self.quality_report = {}
         self.drift_report = {}
+        self.cleaning_report = {}  # For intelligent cleaning results
         
         # Advanced options
         self.handle_outliers = config.get('handle_outliers', True)
@@ -154,6 +157,73 @@ class EnhancedDataPreprocessor:
         except Exception as e:
             logger.error(f"Failed to save to feature store: {e}")
             return False
+    
+    async def intelligent_clean(self, df: pd.DataFrame, user_context: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Use OpenAI agents for intelligent data cleaning
+        
+        Args:
+            df: Input dataframe to clean
+            user_context: User context including sector, target variable, etc.
+            
+        Returns:
+            Cleaned dataframe
+        """
+        try:
+            # Check if intelligent cleaning is enabled
+            if not self.config.get('enable_intelligent_cleaning', False):
+                logger.info("Intelligent cleaning not enabled, using standard cleaning")
+                return self.fit_transform(df)
+            
+            # Check for OpenAI API key
+            openai_api_key = self.config.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
+            if not openai_api_key:
+                logger.warning("No OpenAI API key found, falling back to standard cleaning")
+                return self.fit_transform(df)
+            
+            # Import agent components
+            from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
+            
+            # Create agent configuration
+            agent_config = AgentConfig(
+                openai_api_key=openai_api_key,
+                model=self.config.get('openai_cleaning_model', 'gpt-4-1106-preview'),
+                user_context=user_context,
+                max_cost_per_dataset=self.config.get('max_cleaning_cost_per_dataset', 5.00),
+                enable_web_search=self.config.get('enable_web_search', True),
+                enable_file_operations=self.config.get('enable_file_operations', True)
+            )
+            
+            # Create orchestrator
+            orchestrator = DataCleaningOrchestrator(agent_config, self.config)
+            
+            # Run intelligent cleaning
+            logger.info(f"Starting intelligent cleaning with OpenAI agents for sector: {user_context.get('secteur_activite', 'general')}")
+            
+            cleaned_df, report = await orchestrator.clean_dataset(df, user_context)
+            
+            # Log results
+            logger.info(f"Intelligent cleaning completed. Quality score: {report.get('quality_metrics', {}).get('quality_score', 'N/A')}")
+            
+            # Store the cleaning report
+            self.cleaning_report = report
+            
+            # Save to feature store if configured
+            if self.feature_store and user_context.get('save_to_feature_store', False):
+                feature_set_name = f"{user_context.get('secteur_activite', 'general')}_{user_context.get('target_variable', 'features')}"
+                self.save_to_feature_store(cleaned_df, feature_set_name)
+            
+            return cleaned_df
+            
+        except ImportError as e:
+            logger.error(f"Failed to import agent components: {e}")
+            logger.info("Falling back to standard cleaning")
+            return self.fit_transform(df)
+            
+        except Exception as e:
+            logger.error(f"Error in intelligent cleaning: {e}")
+            logger.info("Falling back to standard cleaning")
+            return self.fit_transform(df)
         
     def detect_feature_types(self, df: pd.DataFrame) -> Dict[str, List[str]]:
         """
@@ -979,7 +1049,8 @@ if __name__ == "__main__":
         'outlier_method': 'iqr',
         'scaling_method': 'robust',
         'enable_quality_checks': True,
-        'enable_drift_detection': True
+        'enable_drift_detection': True,
+        'enable_intelligent_cleaning': True  # Enable OpenAI agents
     }
     
     preprocessor = EnhancedDataPreprocessor(config)
@@ -988,9 +1059,25 @@ if __name__ == "__main__":
     quality_report = preprocessor.check_data_quality(df)
     print(f"Data quality score: {quality_report['quality_score']:.1f}")
     
-    # Fit and transform
-    X_transformed = preprocessor.fit_transform(df, y)
-    print(f"Transformed shape: {X_transformed.shape}")
+    # Example of intelligent cleaning (requires async)
+    async def test_intelligent_cleaning():
+        user_context = {
+            "secteur_activite": "finance",
+            "target_variable": "target",
+            "contexte_metier": "Risk prediction"
+        }
+        
+        cleaned_df = await preprocessor.intelligent_clean(df, user_context)
+        print(f"Intelligent cleaning completed: {cleaned_df.shape}")
+    
+    # Run if OpenAI API key is available
+    if os.getenv('OPENAI_API_KEY'):
+        import asyncio
+        asyncio.run(test_intelligent_cleaning())
+    else:
+        # Standard cleaning
+        X_transformed = preprocessor.fit_transform(df, y)
+        print(f"Transformed shape: {X_transformed.shape}")
     
     # Detect drift (simulate with modified data)
     df_drift = df.copy()
