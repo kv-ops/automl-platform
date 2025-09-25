@@ -24,7 +24,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "automl-platform"
-version = "3.2.0"
+version = "3.2.1"
 description = "Enterprise AutoML platform with MLOps, distributed training, and production deployment"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
