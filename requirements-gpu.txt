@@ -1,6 +1,6 @@
 # ==============================================================================
 # GPU-specific requirements for AutoML Platform
-# Version 3.1.0 - Harmonized with setup.py and pyproject.toml
+# Version 3.2.1 - Harmonized with setup.py and pyproject.toml
 # ==============================================================================
 
 # ---------- Core GPU Dependencies ----------
