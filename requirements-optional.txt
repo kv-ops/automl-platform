@@ -1,6 +1,6 @@
 # ==============================================================================
 # AutoML Platform - Optional Dependencies Guide
-# Version: 3.1.0
+# Version: 3.2.1
 # 
 # This file documents all optional extras available for AutoML Platform.
 # Install specific features with: pip install automl-platform[extra_name]
