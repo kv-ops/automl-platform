@@ -1,6 +1,6 @@
-# AutoML Platform v3.2 - Enterprise MLOps Edition with Extended Connectors
+# AutoML Platform v3.2.1 - Enterprise MLOps Edition with Extended Connectors
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![MLflow](https://img.shields.io/badge/MLflow-2.9%2B-0194E2)](https://mlflow.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688)](https://fastapi.tiangolo.com/)
@@ -37,6 +37,9 @@ The system uses 4 specialized OpenAI agents working in concert:
 
 ```bash
 # Install additional dependencies
+pip install "automl-platform[agents]"
+
+# Or install specific dependencies
 pip install openai>=1.0.0 beautifulsoup4>=4.11.0
 
 # Set your OpenAI API key
@@ -48,7 +51,7 @@ export MAX_CLEANING_COST_PER_DATASET=5.00
 #### Basic Usage
 
 ```python
-from automl_platform.data_prep import IntelligentDataCleaner
+from automl_platform.agents import IntelligentDataCleaner
 import pandas as pd
 import asyncio
 
@@ -67,16 +70,16 @@ user_context = {
 
 # Run intelligent cleaning
 async def clean_data():
-    cleaned_df, report = await cleaner.clean(df, user_context)
+    cleaned_df, report = await cleaner.smart_clean(df, user_context)
     return cleaned_df, report
 
 # Execute
 cleaned_df, report = asyncio.run(clean_data())
 
 # Review quality improvement
-print(f"Quality Score: {report['quality_metrics']['quality_score']:.1f}/100")
-print(f"Transformations Applied: {len(report['transformations'])}")
-print(f"Validation Sources: {report['validation_sources']}")
+print(f"Quality Score: {report['summary']['final_quality']:.1f}/100")
+print(f"Quality Improvement: {report['summary']['improvement']:.1f} points")
+print(f"Mode Used: {report['summary']['mode']}")
 ```
 
 ### 🎯 Sector-Specific Validation
@@ -145,6 +148,26 @@ cleaned_df = asyncio.run(clean_financial_data())
 
 ### 🛠️ Advanced Features
 
+#### Intelligent Mode Selection
+
+The system automatically chooses the best cleaning approach:
+
+```python
+from automl_platform.agents import IntelligentDataCleaner
+
+cleaner = IntelligentDataCleaner()
+
+# Auto mode: Automatically selects best approach
+cleaned_df, report = await cleaner.smart_clean(
+    df, 
+    user_context, 
+    mode="auto"  # auto, agents, conversational, hybrid
+)
+
+# Get recommendations without cleaning
+recommendations = await cleaner.recommend_cleaning_approach(df, user_context)
+```
+
 #### Chunking for Large Datasets
 
 Automatically handles large datasets by chunking:
@@ -197,26 +220,6 @@ validation_sources:
   - "https://www.ifrs.org/standards/"
 ```
 
-#### Unified Cleaning Interface
-
-Choose the best cleaning mode automatically:
-
-```python
-from automl_platform.agents.unified_cleaning import UnifiedDataCleaner
-
-cleaner = UnifiedDataCleaner()
-
-# Auto mode: Automatically selects best approach
-cleaned_df, report = await cleaner.smart_clean(
-    df, 
-    user_context, 
-    mode="auto"  # auto, agents, conversational, hybrid
-)
-
-# Get recommendations without cleaning
-recommendations = await cleaner.recommend_cleaning_approach(df, user_context)
-```
-
 ### 📈 Performance Metrics
 
 The system tracks comprehensive metrics:
@@ -251,7 +254,7 @@ The system tracks comprehensive metrics:
 ```python
 # If OpenAI fails, falls back to traditional cleaning
 try:
-    cleaned_df, report = await cleaner.clean(df, user_context)
+    cleaned_df, report = await cleaner.smart_clean(df, user_context)
 except:
     # Automatic fallback to EnhancedDataPreprocessor
     cleaned_df = preprocessor.fit_transform(df)
@@ -350,11 +353,88 @@ python main.py clean --intelligent --data data.csv --sector finance --export-yam
 
 ## 🎯 New in v3.2 - Use Case Templates
 
-[Original templates section continues...]
+Pre-configured templates for common ML problems allow you to get started in seconds with optimized settings for your specific use case.
+
+### Available Templates
+
+| Template | Description | Optimized For | Key Features |
+|----------|-------------|---------------|--------------|
+| **Churn Prediction** | Customer retention analysis | Telecom, SaaS, Subscription services | • RFM features<br>• Time-based validation<br>• Uplift modeling ready |
+| **Fraud Detection** | Anomaly detection in transactions | Finance, E-commerce | • Imbalanced learning<br>• Real-time scoring<br>• Explainability focus |
+| **Sales Forecasting** | Time series prediction | Retail, Manufacturing | • Seasonal decomposition<br>• Multiple horizons<br>• Hierarchical forecasting |
+| **Credit Scoring** | Risk assessment | Banking, Lending | • Regulatory compliance<br>• Fairness metrics<br>• Monotonicity constraints |
+| **Recommendation System** | Personalization engine | E-commerce, Media | • Collaborative filtering<br>• Content-based<br>• Hybrid approaches |
+
+---
 
 ## 🎓 Expert Mode vs Simplified Mode
 
-[Original expert mode section continues...]
+The platform adapts to your expertise level:
+
+### Simplified Mode (Default)
+Perfect for business users and data scientists who want quick results:
+- One-click model training
+- Automatic feature engineering
+- Pre-configured pipelines
+- Visual interface with Streamlit
+
+### Expert Mode
+Full control for ML engineers and researchers:
+- Custom pipeline configuration
+- Advanced hyperparameter tuning
+- Direct access to all algorithms
+- API-first approach
+- Custom metric definitions
+- Raw model artifacts access
+
+---
+
+## 🚀 Installation
+
+### Basic Installation
+
+```bash
+pip install automl-platform
+```
+
+### Installation with Extras
+
+```bash
+# For intelligent agents
+pip install "automl-platform[agents]"
+
+# For complete no-code experience
+pip install "automl-platform[nocode]"
+
+# For enterprise features
+pip install "automl-platform[enterprise]"
+
+# For GPU support
+pip install "automl-platform[gpu]"
+
+# Everything
+pip install "automl-platform[all]"
+```
+
+### Development Installation
+
+```bash
+git clone https://github.com/automl-platform/automl-platform.git
+cd automl-platform
+pip install -e ".[dev]"
+```
+
+## 📖 Documentation
+
+- [Getting Started](https://docs.automl-platform.com/getting-started)
+- [API Reference](https://api.automl-platform.com/docs)
+- [Templates Guide](https://docs.automl-platform.com/templates)
+- [Agent Documentation](https://docs.automl-platform.com/agents)
+- [Examples](https://github.com/automl-platform/automl-platform/tree/main/examples)
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ## 📄 License
 
@@ -363,10 +443,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - OpenAI for GPT-4 API and Assistants framework
-- pandas for data manipulation
-- openpyxl for Excel support
-- gspread for Google Sheets integration
-- All CRM API providers
+- MLflow for experiment tracking
+- FastAPI for the API framework
+- Streamlit for the UI dashboard
 - The open-source community
 
 ---
@@ -379,4 +458,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 *Your data, anywhere: Excel, Google Sheets, CRM, Databases - all connected*
 
-*Version 3.2.0 - Last updated: January 2024*
+*Version 3.2.1 - Last updated: January 2025*
