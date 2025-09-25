@@ -48,4 +48,4 @@ __all__ = [
     'smart_clean_data'
 ]
 
-__version__ = '2.0.0'  # Major version bump for Agent-First approach
+__version__ = '3.2.1'  # Major version bump for Agent-First approach
