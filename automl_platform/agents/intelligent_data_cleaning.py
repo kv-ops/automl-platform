@@ -1,5 +1,5 @@
 """
-Unified Data Cleaning Interface
+Intelligent Data Cleaning Interface
 Combines OpenAI Agents with Data Quality Agent for comprehensive cleaning
 """
 
@@ -21,9 +21,9 @@ from .agent_config import AgentConfig
 logger = logging.getLogger(__name__)
 
 
-class UnifiedDataCleaner:
+class IntelligentDataCleaner:
     """
-    Unified interface combining:
+    Intelligent interface combining:
     - DataRobot-style quality assessment
     - OpenAI agents for automated cleaning
     - Akkio-style conversational interface
@@ -31,7 +31,7 @@ class UnifiedDataCleaner:
     
     def __init__(self, config: Optional[AgentConfig] = None, llm_provider=None):
         """
-        Initialize unified cleaner with both systems
+        Initialize intelligent cleaner with both systems
         
         Args:
             config: Configuration for OpenAI agents
@@ -463,7 +463,7 @@ async def smart_clean_data(
     Returns:
         Tuple of (cleaned_df, report)
     """
-    cleaner = UnifiedDataCleaner(config)
+    cleaner = IntelligentDataCleaner(config)
     return await cleaner.smart_clean(df, user_context, mode)
 
 
@@ -490,8 +490,8 @@ if __name__ == "__main__":
     }
     
     async def demo():
-        # Create unified cleaner
-        cleaner = UnifiedDataCleaner()
+        # Create intelligent cleaner
+        cleaner = IntelligentDataCleaner()
         
         # Get recommendation
         recommendation = await cleaner.recommend_cleaning_approach(sample_df, context)
