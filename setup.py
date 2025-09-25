@@ -1,6 +1,6 @@
 """
 Setup script for AutoML Platform
-Version 3.2.0 - Enterprise Edition with No-Code UI and Extended Connectors
+Version 3.2.1 - Enterprise Edition with No-Code UI and Extended Connectors
 """
 
 from setuptools import setup, find_packages
