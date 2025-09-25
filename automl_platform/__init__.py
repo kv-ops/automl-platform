@@ -1,6 +1,12 @@
 """
 AutoML Platform - Production-ready machine learning automation with enterprise features
 
+Version: 3.2.1
+
+__version__ = "3.2.1"
+__author__ = "AutoML Platform Team"
+__email__ = "support@automl-platform.com"
+
 A comprehensive platform for automated machine learning with advanced features including:
 - Automated model selection and hyperparameter optimization
 - Feature engineering and data preprocessing
