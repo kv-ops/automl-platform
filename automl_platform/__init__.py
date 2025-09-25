@@ -31,10 +31,10 @@ A comprehensive platform for automated machine learning with advanced features i
 - Data anonymization and pseudonymization capabilities
 - Compliance score calculation and automated reporting
 
-Version: 3.1.0
+Version: 3.2.1
 """
 
-__version__ = "3.1.0"
+__version__ = "3.2.1"
 __author__ = "AutoML Platform Team"
 __email__ = "support@automl-platform.com"
 
@@ -925,7 +925,7 @@ def create_app(config_path: str = None, environment: str = "production",
     # Create FastAPI app
     app = FastAPI(
         title="AutoML Platform",
-        description="Enterprise AutoML Platform v3.1.0 with SSO, RGPD compliance, multi-tenant support, optimizations, and complete API",
+        description="Enterprise AutoML Platform v3.2.1 with SSO, RGPD compliance, multi-tenant support, optimizations, and complete API",
         version=__version__,
         docs_url="/docs" if config.api.enable_docs else None,
         redoc_url="/redoc" if config.api.enable_docs else None
