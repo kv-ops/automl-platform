@@ -1,7 +1,9 @@
 """
-Enhanced Data Preparation Module
+Enhanced Data Preparation Module with Full Agent-First Integration
+===================================================================
 Includes data quality checks, drift detection, advanced preprocessing,
-integration with connectors, feature store, and intelligent cleaning with OpenAI agents
+integration with connectors, feature store, OpenAI agents, and Universal ML Agent.
+Complete implementation with all Agent-First components.
 """
 
 import pandas as pd
@@ -37,23 +39,31 @@ class EnhancedDataPreprocessor:
     """
     Advanced data preprocessing with quality checks and drift detection.
     No data leakage guaranteed through proper pipeline usage.
-    Integrated with data connectors, feature store, and OpenAI agents.
+    Integrated with data connectors, feature store, OpenAI agents, and Universal ML Agent.
+    Full Agent-First support for template-free AutoML.
     """
     
     def __init__(self, config: Union[Dict[str, Any], 'AutoMLConfig']):
         """
-        Initialize preprocessor avec support pour AutoMLConfig.
+        Initialize preprocessor with support for AutoMLConfig and Agent-First.
         
         Args:
-            config: Configuration dictionary ou AutoMLConfig instance
+            config: Configuration dictionary or AutoMLConfig instance
         """
         # Handle both dict and AutoMLConfig instances
         if isinstance(config, dict):
             self.config = config
             self.enable_intelligent_cleaning = config.get('enable_intelligent_cleaning', False)
+            self.enable_agent_first = config.get('enable_agent_first', False)
         else:  # AutoMLConfig instance
             self.config = config.to_dict() if hasattr(config, 'to_dict') else asdict(config)
             self.enable_intelligent_cleaning = getattr(config, 'enable_intelligent_cleaning', False)
+            self.enable_agent_first = getattr(config, 'enable_agent_first', False)
+            # Get Agent-First config if available
+            if hasattr(config, 'agent_first'):
+                self.agent_first_config = config.agent_first
+            else:
+                self.agent_first_config = None
         
         self.numeric_features = []
         self.categorical_features = []
@@ -68,6 +78,7 @@ class EnhancedDataPreprocessor:
         self.quality_report = {}
         self.drift_report = {}
         self.cleaning_report = {}  # For intelligent cleaning results
+        self.ml_context = None  # For Agent-First ML context
         
         # Advanced options
         self.handle_outliers = self.config.get('handle_outliers', True)
@@ -81,6 +92,16 @@ class EnhancedDataPreprocessor:
         self.enable_quality_checks = self.config.get('enable_quality_checks', True)
         self.enable_drift_detection = self.config.get('enable_drift_detection', False)
         
+        # Initialize Agent-First components if enabled
+        self.universal_agent = None
+        self.context_detector = None
+        self.config_generator = None
+        self.adaptive_templates = None
+        self.orchestrator = None
+        
+        if self.enable_agent_first:
+            self._init_agent_first_components()
+        
         # Connector integration
         self.connector = None
         if self.config.get('connector_config'):
@@ -91,10 +112,46 @@ class EnhancedDataPreprocessor:
         if self.config.get('feature_store_config'):
             self._init_feature_store(self.config['feature_store_config'])
     
+    def _init_agent_first_components(self):
+        """Initialize Agent-First components for template-free AutoML."""
+        try:
+            from .agents import (
+                UniversalMLAgent, 
+                IntelligentContextDetector,
+                IntelligentConfigGenerator,
+                AdaptiveTemplateSystem,
+                DataCleaningOrchestrator,
+                AgentConfig
+            )
+            
+            # Create agent configuration
+            agent_config = AgentConfig(
+                openai_api_key=os.getenv("OPENAI_API_KEY") or self.config.get('openai_api_key'),
+                model=self.config.get('openai_model', 'gpt-4-1106-preview'),
+                enable_web_search=True,
+                enable_file_operations=True
+            )
+            
+            # Initialize all Agent-First components
+            self.universal_agent = UniversalMLAgent(agent_config)
+            self.context_detector = IntelligentContextDetector()
+            self.config_generator = IntelligentConfigGenerator()
+            self.adaptive_templates = AdaptiveTemplateSystem()
+            self.orchestrator = DataCleaningOrchestrator(agent_config, self.config)
+            
+            logger.info("✅ Agent-First components initialized successfully")
+            
+        except ImportError as e:
+            logger.warning(f"Agent-First components not available: {e}")
+            self.enable_agent_first = False
+        except Exception as e:
+            logger.error(f"Failed to initialize Agent-First components: {e}")
+            self.enable_agent_first = False
+    
     def _init_connector(self, connector_config: Dict[str, Any]):
         """Initialize data connector."""
         try:
-            from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
+            from .api.connectors import ConnectorFactory, ConnectionConfig
             
             conn_config = ConnectionConfig(
                 connection_type=connector_config.get('type', 'postgresql'),
@@ -110,13 +167,175 @@ class EnhancedDataPreprocessor:
     def _init_feature_store(self, feature_store_config: Dict[str, Any]):
         """Initialize feature store."""
         try:
-            from automl_platform.api.feature_store import FeatureStore
+            from .api.feature_store import FeatureStore
             
             self.feature_store = FeatureStore(feature_store_config)
             logger.info("Initialized feature store")
         except Exception as e:
             logger.warning(f"Failed to initialize feature store: {e}")
             self.feature_store = None
+    
+    async def agent_first_automl(
+        self, 
+        df: pd.DataFrame, 
+        target_col: Optional[str] = None,
+        user_hints: Optional[Dict[str, Any]] = None,
+        constraints: Optional[Dict[str, Any]] = None
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Complete Agent-First AutoML without templates.
+        This is the main entry point for template-free ML.
+        
+        Args:
+            df: Input dataframe
+            target_col: Target column name
+            user_hints: Optional user hints (sector, keywords, etc.)
+            constraints: Optional constraints (time_budget, memory_limit, etc.)
+            
+        Returns:
+            Tuple of (processed_dataframe, ml_pipeline_result)
+        """
+        if not self.enable_agent_first or not self.universal_agent:
+            raise ValueError("Agent-First mode not enabled or not initialized")
+        
+        logger.info("🚀 Starting Agent-First AutoML without templates")
+        
+        # Execute complete AutoML pipeline
+        result = await self.universal_agent.automl_without_templates(
+            df=df,
+            target_col=target_col,
+            user_hints=user_hints,
+            constraints=constraints
+        )
+        
+        # Store ML context
+        self.ml_context = {
+            "problem_type": result.context_detected.problem_type,
+            "confidence": result.context_detected.confidence,
+            "business_sector": result.context_detected.business_sector,
+            "config_used": result.config_used.to_dict(),
+            "performance": result.performance_metrics
+        }
+        
+        # Store cleaning report
+        self.cleaning_report = result.cleaning_report
+        
+        logger.info(f"✅ Agent-First AutoML completed: {result.context_detected.problem_type}")
+        
+        return result.cleaned_data, result
+    
+    async def detect_ml_context(self, df: pd.DataFrame, target_col: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Detect ML context using Agent-First intelligence.
+        
+        Returns:
+            Dictionary with ML context (problem_type, confidence, etc.)
+        """
+        if not self.enable_agent_first or not self.context_detector:
+            raise ValueError("Agent-First mode not enabled")
+        
+        context = await self.context_detector.detect_ml_context(df, target_col)
+        
+        self.ml_context = {
+            "problem_type": context.problem_type,
+            "confidence": context.confidence,
+            "detected_patterns": context.detected_patterns,
+            "business_sector": context.business_sector,
+            "temporal_aspect": context.temporal_aspect,
+            "imbalance_detected": context.imbalance_detected,
+            "recommended_config": context.recommended_config,
+            "reasoning": context.reasoning
+        }
+        
+        return self.ml_context
+    
+    async def generate_optimal_config(
+        self, 
+        df: pd.DataFrame,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate optimal configuration using Agent-First intelligence.
+        
+        Returns:
+            Optimal configuration dictionary
+        """
+        if not self.enable_agent_first or not self.config_generator:
+            raise ValueError("Agent-First mode not enabled")
+        
+        # Use stored context if not provided
+        if context is None:
+            context = self.ml_context or {}
+        
+        config = await self.config_generator.generate_config(
+            df=df,
+            context=context,
+            constraints=self.config.get('constraints', {}),
+            user_preferences=self.config.get('user_preferences', {})
+        )
+        
+        return config.to_dict()
+    
+    async def intelligent_clean(self, df: pd.DataFrame, user_context: Dict[str, Any]) -> pd.DataFrame:
+        """
+        API finale pour le nettoyage intelligent avec agents OpenAI.
+        
+        Args:
+            df: DataFrame à nettoyer
+            user_context: Contexte utilisateur avec:
+                - secteur_activite: secteur d'activité (ex: "finance")
+                - target_variable: nom de la variable cible (ex: "churn")  
+                - contexte_metier: description métier (ex: "Prédiction attrition clients B2B")
+                
+        Returns:
+            DataFrame nettoyé
+        """
+        if not self.enable_intelligent_cleaning:
+            logger.info("Intelligent cleaning disabled, using standard preprocessing")
+            return self.fit_transform(df)
+        
+        # If Agent-First is enabled, use Universal Agent
+        if self.enable_agent_first and self.universal_agent:
+            logger.info("Using Agent-First for intelligent cleaning")
+            
+            # Convert user_context format for Agent-First
+            user_hints = {
+                'sector': user_context.get('secteur_activite', 'general'),
+                'keywords': [user_context.get('contexte_metier', '')],
+                'target': user_context.get('target_variable')
+            }
+            
+            # Use Universal Agent for complete pipeline
+            cleaned_df, result = await self.agent_first_automl(
+                df=df,
+                target_col=user_context.get('target_variable'),
+                user_hints=user_hints
+            )
+            
+            return cleaned_df if cleaned_df is not None else df
+        
+        # Otherwise use traditional intelligent cleaning with orchestrator
+        if self.orchestrator:
+            try:
+                logger.info(f"Starting intelligent cleaning for sector: {user_context.get('secteur_activite')}")
+                cleaned_df, report = await self.orchestrator.clean_dataset(
+                    df=df,
+                    user_context=user_context,
+                    use_intelligence=True  # Enable Agent-First features in orchestrator
+                )
+                
+                self.cleaning_report = report
+                logger.info(f"Intelligent cleaning completed. Quality improved by: {report.get('quality_metrics', {}).get('improvement', 0):.1f} points")
+                
+                return cleaned_df
+                
+            except Exception as e:
+                logger.error(f"Intelligent cleaning failed: {e}")
+                logger.info("Falling back to standard preprocessing")
+                return self.fit_transform(df)
+        else:
+            logger.warning("No orchestrator available, using standard preprocessing")
+            return self.fit_transform(df)
     
     def load_data_from_connector(self, query: str = None, table_name: str = None) -> pd.DataFrame:
         """Load data using configured connector."""
@@ -146,7 +365,7 @@ class EnhancedDataPreprocessor:
         
         try:
             # Register feature set if needed
-            from automl_platform.feature_store import FeatureSet, FeatureDefinition
+            from .feature_store import FeatureSet, FeatureDefinition
             
             features = []
             for col in df.columns:
@@ -171,67 +390,6 @@ class EnhancedDataPreprocessor:
             logger.error(f"Failed to save to feature store: {e}")
             return False
     
-    async def intelligent_clean(self, df: pd.DataFrame, user_context: Dict[str, Any]) -> pd.DataFrame:
-        """
-        API finale pour le nettoyage intelligent.
-        
-        Args:
-            df: DataFrame à nettoyer
-            user_context: Contexte utilisateur avec:
-                - industry: secteur d'activité (ex: "finance")
-                - target_variable: nom de la variable cible (ex: "churn")  
-                - business_context: description métier (ex: "Prédiction attrition clients B2B")
-                
-        Returns:
-            DataFrame nettoyé
-        """
-        if not self.enable_intelligent_cleaning:
-            logger.info("Intelligent cleaning disabled, using standard preprocessing")
-            return self.fit_transform(df)
-        
-        # Validation du contexte
-        required_keys = ['industry', 'target_variable', 'business_context']
-        for key in required_keys:
-            if key not in user_context:
-                raise ValueError(f"Missing required context key: {key}")
-        
-        try:
-            # Import de l'orchestrateur intelligent
-            from .intelligent_cleaning import IntelligentCleaningOrchestrator
-            
-            # Configuration de l'orchestrateur
-            orchestrator_config = {
-                'time_budget_s': self.config.get('time_budget_s', 300),
-                'memory_limit_mb': self.config.get('memory_limit_mb', 2048),
-                'n_jobs': self.config.get('n_jobs', -1),
-                'strict_schema': self.config.get('strict_schema', False),
-                'leakage_protection': self.config.get('leakage_protection', True),
-                'logging_level': self.config.get('logging_level', 'INFO')
-            }
-            
-            # Instanciation de l'orchestrateur
-            orchestrator = IntelligentCleaningOrchestrator(orchestrator_config)
-            
-            # Exécution du pipeline intelligent
-            logger.info(f"Starting intelligent cleaning for industry: {user_context['industry']}")
-            cleaned_df = await orchestrator.process(df, user_context)
-            
-            # Mise à jour du rapport
-            self.cleaning_report = orchestrator.get_report()
-            
-            logger.info(f"Intelligent cleaning completed. Quality score: {self.cleaning_report.get('quality_score', 'N/A')}")
-            return cleaned_df
-            
-        except ImportError as e:
-            logger.error(f"Intelligent cleaning module not available: {e}")
-            logger.info("Falling back to standard preprocessing")
-            return self.fit_transform(df)
-            
-        except Exception as e:
-            logger.error(f"Intelligent cleaning failed: {e}")
-            logger.info("Falling back to standard preprocessing")
-            return self.fit_transform(df)
-        
     def detect_feature_types(self, df: pd.DataFrame) -> Dict[str, List[str]]:
         """
         Automatically detect and categorize feature types.
@@ -326,6 +484,7 @@ class EnhancedDataPreprocessor:
     def check_data_quality(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Comprehensive data quality assessment.
+        Enhanced with Agent-First context if available.
         """
         quality_report = {
             'valid': True,
@@ -336,6 +495,10 @@ class EnhancedDataPreprocessor:
             'statistics': {},
             'quality_score': 100.0
         }
+        
+        # Add ML context if available (from Agent-First)
+        if self.ml_context:
+            quality_report['ml_context'] = self.ml_context
         
         # Check for empty dataframe
         if df.empty:
@@ -901,6 +1064,28 @@ class EnhancedDataPreprocessor:
         
         if drift_warnings:
             logger.warning(f"Drift detected: {drift_warnings}")
+    
+    def get_ml_context_summary(self) -> str:
+        """Get summary of detected ML context (Agent-First)."""
+        if not self.ml_context:
+            return "No ML context detected yet. Run detect_ml_context() or agent_first_automl() first."
+        
+        summary = f"""
+📊 ML Context Summary
+====================
+Problem Type: {self.ml_context.get('problem_type', 'Unknown')}
+Confidence: {self.ml_context.get('confidence', 0):.1%}
+Business Sector: {self.ml_context.get('business_sector', 'General')}
+Temporal Data: {'Yes' if self.ml_context.get('temporal_aspect') else 'No'}
+Imbalance: {'Detected' if self.ml_context.get('imbalance_detected') else 'Not detected'}
+
+Detected Patterns:
+{chr(10).join('- ' + p for p in self.ml_context.get('detected_patterns', [])[:5])}
+
+Reasoning:
+{self.ml_context.get('reasoning', 'N/A')}
+"""
+        return summary
 
 
 # Convenience functions
@@ -1035,175 +1220,64 @@ def validate_data(df: pd.DataFrame, config: Dict[str, Any] = None) -> Dict[str, 
 DataPreprocessor = EnhancedDataPreprocessor
 
 
-class IntelligentDataCleaner:
+# Agent-First convenience functions
+async def automl_without_templates(
+    df: pd.DataFrame,
+    target_col: Optional[str] = None,
+    config: Optional[Union[Dict, 'AutoMLConfig']] = None
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Intelligent Data Cleaner using OpenAI agents
-    Wrapper class for easy integration with existing architecture
-    """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize Intelligent Data Cleaner
-        
-        Args:
-            config: Configuration dictionary
-        """
-        self.config = config or {
-            'enable_intelligent_cleaning': True,
-            'openai_cleaning_model': 'gpt-4-1106-preview',
-            'max_cleaning_cost_per_dataset': 5.00
-        }
-        
-        # Check for OpenAI API key
-        self.openai_api_key = self.config.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
-        if not self.openai_api_key:
-            raise ValueError("OpenAI API key required for IntelligentDataCleaner")
-        
-        self.orchestrator = None
-        self.preprocessor = EnhancedDataPreprocessor(self.config)
-        
-    async def clean(
-        self, 
-        df: pd.DataFrame, 
-        user_context: Dict[str, Any],
-        use_traditional_fallback: bool = True
-    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """
-        Clean dataset using OpenAI agents
-        
-        Args:
-            df: Input dataframe
-            user_context: Context with sector, target variable, etc.
-            use_traditional_fallback: Whether to fallback to traditional cleaning on error
-            
-        Returns:
-            Tuple of (cleaned_dataframe, cleaning_report)
-        """
-        try:
-            # Import agents
-            from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
-            
-            # Create agent configuration
-            agent_config = AgentConfig(
-                openai_api_key=self.openai_api_key,
-                model=self.config.get('openai_cleaning_model', 'gpt-4-1106-preview'),
-                user_context=user_context,
-                max_cost_per_dataset=self.config.get('max_cleaning_cost_per_dataset', 5.00)
-            )
-            
-            # Create orchestrator if not exists
-            if not self.orchestrator:
-                self.orchestrator = DataCleaningOrchestrator(agent_config, self.config)
-            
-            # Run intelligent cleaning
-            logger.info(f"Starting intelligent cleaning for sector: {user_context.get('secteur_activite')}")
-            cleaned_df, report = await self.orchestrator.clean_dataset(df, user_context)
-            
-            return cleaned_df, report
-            
-        except Exception as e:
-            logger.error(f"Intelligent cleaning failed: {e}")
-            
-            if use_traditional_fallback:
-                logger.info("Falling back to traditional cleaning")
-                cleaned_df = self.preprocessor.fit_transform(df)
-                report = {
-                    "method": "traditional_fallback",
-                    "error": str(e),
-                    "quality_report": self.preprocessor.quality_report
-                }
-                return cleaned_df, report
-            else:
-                raise
-    
-    def assess_quality(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Assess data quality without cleaning
-        
-        Args:
-            df: Input dataframe
-            
-        Returns:
-            Quality assessment report
-        """
-        return self.preprocessor.check_data_quality(df)
-    
-    async def validate_against_standards(
-        self, 
-        df: pd.DataFrame, 
-        sector: str
-    ) -> Dict[str, Any]:
-        """
-        Validate data against sector standards
-        
-        Args:
-            df: Input dataframe
-            sector: Business sector
-            
-        Returns:
-            Validation report
-        """
-        try:
-            from automl_platform.agents import ValidatorAgent, AgentConfig
-            
-            agent_config = AgentConfig(
-                openai_api_key=self.openai_api_key,
-                user_context={"secteur_activite": sector}
-            )
-            
-            validator = ValidatorAgent(agent_config)
-            
-            # Get basic profile first
-            profile = self.preprocessor.check_data_quality(df)
-            
-            # Validate against standards
-            validation_report = await validator.validate(df, profile)
-            
-            return validation_report
-            
-        except Exception as e:
-            logger.error(f"Validation failed: {e}")
-            return {"error": str(e), "valid": False}
-    
-    @staticmethod
-    def create_from_config(config_path: str) -> 'IntelligentDataCleaner':
-        """
-        Create IntelligentDataCleaner from YAML config file
-        
-        Args:
-            config_path: Path to configuration file
-            
-        Returns:
-            IntelligentDataCleaner instance
-        """
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        return IntelligentDataCleaner(config)
-
-
-# Convenience functions
-def create_intelligent_cleaner(
-    openai_api_key: Optional[str] = None,
-    model: str = "gpt-4-1106-preview"
-) -> IntelligentDataCleaner:
-    """
-    Create an intelligent data cleaner instance
+    Quick Agent-First AutoML without any templates.
     
     Args:
-        openai_api_key: OpenAI API key (uses env var if not provided)
-        model: OpenAI model to use
+        df: Input dataframe
+        target_col: Target column name
+        config: Optional configuration
         
     Returns:
-        IntelligentDataCleaner instance
+        Tuple of (processed_dataframe, ml_pipeline_result)
+    """
+    if config is None:
+        config = {'enable_agent_first': True}
+    
+    preprocessor = EnhancedDataPreprocessor(config)
+    
+    if not preprocessor.enable_agent_first:
+        raise ValueError("Agent-First mode must be enabled in config")
+    
+    return await preprocessor.agent_first_automl(df, target_col)
+
+
+async def detect_and_clean(
+    df: pd.DataFrame,
+    target_col: Optional[str] = None
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Detect ML context and clean data automatically using Agent-First.
+    
+    Returns:
+        Tuple of (cleaned_dataframe, ml_context)
     """
     config = {
-        'enable_intelligent_cleaning': True,
-        'openai_cleaning_model': model,
-        'openai_api_key': openai_api_key or os.getenv('OPENAI_API_KEY')
+        'enable_agent_first': True,
+        'enable_intelligent_cleaning': True
     }
     
-    return IntelligentDataCleaner(config)
+    preprocessor = EnhancedDataPreprocessor(config)
+    
+    # Detect context
+    ml_context = await preprocessor.detect_ml_context(df, target_col)
+    
+    # Clean based on context
+    user_context = {
+        'secteur_activite': ml_context.get('business_sector', 'general'),
+        'target_variable': target_col,
+        'contexte_metier': ml_context.get('problem_type', 'unknown')
+    }
+    
+    cleaned_df = await preprocessor.intelligent_clean(df, user_context)
+    
+    return cleaned_df, ml_context
 
 
 # Example usage
@@ -1220,15 +1294,17 @@ if __name__ == "__main__":
     df['cat_2'] = np.random.choice(['X', 'Y', 'Z'], size=1000)
     df['date_1'] = pd.date_range('2023-01-01', periods=1000, freq='D')
     df['text_1'] = ['sample text ' * np.random.randint(1, 5) for _ in range(1000)]
+    df['target'] = y
     
-    # Create preprocessor
+    # Create preprocessor with Agent-First enabled
     config = {
         'handle_outliers': True,
         'outlier_method': 'iqr',
         'scaling_method': 'robust',
         'enable_quality_checks': True,
         'enable_drift_detection': True,
-        'enable_intelligent_cleaning': True  # Enable OpenAI agents
+        'enable_intelligent_cleaning': True,
+        'enable_agent_first': True  # Enable Agent-First
     }
     
     preprocessor = EnhancedDataPreprocessor(config)
@@ -1237,12 +1313,29 @@ if __name__ == "__main__":
     quality_report = preprocessor.check_data_quality(df)
     print(f"Data quality score: {quality_report['quality_score']:.1f}")
     
-    # Example of intelligent cleaning (requires async)
+    # Example of Agent-First AutoML (requires async)
+    async def test_agent_first():
+        # Complete AutoML without templates
+        cleaned_df, result = await preprocessor.agent_first_automl(
+            df=df,
+            target_col='target',
+            user_hints={'sector': 'finance', 'keywords': ['fraud', 'risk']}
+        )
+        
+        print(f"Agent-First AutoML completed!")
+        print(f"Detected problem: {result.context_detected.problem_type}")
+        print(f"Confidence: {result.context_detected.confidence:.1%}")
+        print(f"Best algorithm: {result.config_used.algorithms[0]}")
+        
+        # Get ML context summary
+        print(preprocessor.get_ml_context_summary())
+    
+    # Example of intelligent cleaning
     async def test_intelligent_cleaning():
         user_context = {
-            "industry": "finance",  # Changé pour correspondre à l'API finale
+            "secteur_activite": "finance",
             "target_variable": "target",
-            "business_context": "Risk prediction for B2B customers"
+            "contexte_metier": "Fraud detection for credit card transactions"
         }
         
         cleaned_df = await preprocessor.intelligent_clean(df, user_context)
@@ -1252,10 +1345,15 @@ if __name__ == "__main__":
     # Run if OpenAI API key is available
     if os.getenv('OPENAI_API_KEY'):
         import asyncio
-        asyncio.run(test_intelligent_cleaning())
+        
+        # Test Agent-First AutoML
+        asyncio.run(test_agent_first())
+        
+        # Test intelligent cleaning
+        # asyncio.run(test_intelligent_cleaning())
     else:
-        # Standard cleaning
-        X_transformed = preprocessor.fit_transform(df, y)
+        # Standard cleaning without agents
+        X_transformed = preprocessor.fit_transform(df.drop('target', axis=1), df['target'])
         print(f"Transformed shape: {X_transformed.shape}")
     
     # Detect drift (simulate with modified data)
