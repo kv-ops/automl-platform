@@ -1,7 +1,7 @@
 """
 Enhanced FastAPI application for AutoML Platform
 Production-ready with rate limiting, monitoring, and comprehensive endpoints
-Version: 3.1.0 - Full Enterprise Features with SSO, Audit, and RGPD
+Version: 3.2.1 - Full Enterprise Features with SSO, Audit, and RGPD
 """
 
 from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, BackgroundTasks, WebSocket, Request, status, APIRouter
@@ -224,7 +224,7 @@ automl_rgpd_requests_total = Counter(
 async def lifespan(app: FastAPI):
     """Manage application lifecycle"""
     # Startup
-    logger.info("Starting AutoML API v3.1.0...")
+    logger.info("Starting AutoML API v3.2.1...")
     
     # Initialize storage
     if config.storage.backend == "local":
@@ -334,7 +334,7 @@ async def lifespan(app: FastAPI):
     # Initialize cache for model pipelines
     app.state.pipeline_cache = {}
     
-    logger.info("AutoML API v3.1.0 started successfully")
+    logger.info("AutoML API v3.2.1 started successfully")
     
     yield
     
@@ -419,7 +419,7 @@ class WebSocketManager:
 app = FastAPI(
     title="AutoML Platform API",
     description="Enterprise AutoML platform with MLOps, distributed training, SSO, Audit, and RGPD compliance",
-    version="3.1.0",
+    version="3.2.1",
     docs_url="/docs" if getattr(config.api, 'enable_docs', True) else None,
     redoc_url="/redoc" if getattr(config.api, 'enable_docs', True) else None,
     lifespan=lifespan
@@ -911,7 +911,7 @@ async def health_check():
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "3.1.0",
+        "version": "3.2.1",
         "environment": getattr(config, 'environment', 'development'),
         "components": {
             "storage": "healthy" if app.state.storage else "not configured",
