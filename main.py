@@ -2,7 +2,7 @@
 """
 Main entry point for AutoML Platform CLI.
 Provides command-line interface for training and prediction with template support and expert mode.
-Version: 3.2.0
+Version: 3.2.1
 """
 
 import argparse
@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 def train(args):
     """Train AutoML model with optional template support and expert mode."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - TRAINING MODE - v3.2.0")
+    logger.info("AUTOML PLATFORM - TRAINING MODE - v3.2.1")
     if args.expert:
         logger.info("🎓 EXPERT MODE ENABLED - All advanced options available")
     else:
@@ -237,7 +237,7 @@ def train(args):
         "expert_mode": config.expert_mode,
         "simplified_algorithms": config.get_simplified_algorithms() if not config.expert_mode else None,
         "simplified_hpo": config.get_simplified_hpo_config() if not config.expert_mode else None,
-        "version": "3.2.0"
+        "version": "3.2.1"
     }
     mode_info_path = output_path / "mode_info.json"
     with open(mode_info_path, 'w') as f:
@@ -309,7 +309,7 @@ def train(args):
         "best_model": leaderboard.iloc[0]['model'] if len(leaderboard) > 0 else "Unknown",
         "expert_mode": config.expert_mode,
         "template_used": args.template if args.template else None,
-        "version": "3.2.0"
+        "version": "3.2.1"
     }
     metadata_path = output_path / "metadata.json"
     with open(metadata_path, 'w') as f:
@@ -356,7 +356,7 @@ def train(args):
         # Placeholder for now
         report_path = output_path / "report.html"
         with open(report_path, 'w') as f:
-            f.write(f"<h1>AutoML Report v3.2.0</h1><p>Report generation not fully implemented yet.</p>")
+            f.write(f"<h1>AutoML Report v3.2.1</h1><p>Report generation not fully implemented yet.</p>")
         logger.info(f"Report saved to {report_path}")
     
     logger.info("="*80)
@@ -372,7 +372,7 @@ def train(args):
 def list_templates(args):
     """List available templates."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - AVAILABLE TEMPLATES - v3.2.0")
+    logger.info("AUTOML PLATFORM - AVAILABLE TEMPLATES - v3.2.1")
     logger.info("="*80)
     
     template_loader = TemplateLoader()
@@ -411,7 +411,7 @@ def list_templates(args):
 def template_info(args):
     """Show detailed information about a template."""
     logger.info("="*80)
-    logger.info(f"TEMPLATE INFORMATION: {args.name} - v3.2.0")
+    logger.info(f"TEMPLATE INFORMATION: {args.name} - v3.2.1")
     logger.info("="*80)
     
     template_loader = TemplateLoader()
@@ -493,7 +493,7 @@ def template_info(args):
 def create_template(args):
     """Create a custom template from existing configuration."""
     logger.info("="*80)
-    logger.info("CREATE CUSTOM TEMPLATE - v3.2.0")
+    logger.info("CREATE CUSTOM TEMPLATE - v3.2.1")
     logger.info("="*80)
     
     template_loader = TemplateLoader()
@@ -568,7 +568,7 @@ def create_template(args):
 def predict_cmd(args):
     """Make predictions using saved model."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - PREDICTION MODE - v3.2.0")
+    logger.info("AUTOML PLATFORM - PREDICTION MODE - v3.2.1")
     if args.expert:
         logger.info("🎓 EXPERT MODE ENABLED")
     logger.info("="*80)
@@ -674,7 +674,7 @@ def predict_cmd(args):
 def api(args):
     """Start API server."""
     logger.info("="*80)
-    logger.info("AUTOML PLATFORM - API MODE - v3.2.0")
+    logger.info("AUTOML PLATFORM - API MODE - v3.2.1")
     if args.expert:
         logger.info("🎓 EXPERT MODE ENABLED - All API endpoints available")
     else:
@@ -711,7 +711,7 @@ def api(args):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='AutoML Platform v3.2.0 - Production-ready AutoML with template support',
+        description='AutoML Platform v3.2.1 - Production-ready AutoML with template support',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -744,7 +744,7 @@ Examples:
         """
     )
     
-    parser.add_argument('--version', action='version', version='AutoML Platform 3.2.0')
+    parser.add_argument('--version', action='version', version='AutoML Platform 3.2.1')
     parser.add_argument('--verbose', '-v', action='count', default=1,
                        help='Increase verbosity (can be repeated: -v, -vv)')
     parser.add_argument('--quiet', '-q', action='store_true',
