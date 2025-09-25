@@ -14,6 +14,13 @@
 
 Production-ready AutoML platform with **Intelligent Data Cleaning Agents**, **Use Case Templates**, **Extended Data Connectors**, **Expert Mode** for advanced users, enterprise MLOps capabilities including incremental learning, real-time streaming, advanced scheduling, billing system, and LLM-powered insights.
 
+## 📋 Requirements
+
+- **Python**: 3.9+ (supports 3.9, 3.10, 3.11, 3.12)
+- **Operating System**: Linux, macOS, Windows
+- **Memory**: 8GB RAM minimum (16GB+ recommended)
+- **Storage**: 10GB minimum for models and data
+
 ## 🤖 NEW: Intelligent Data Cleaning with OpenAI Agents
 
 The platform now includes **AI-powered data cleaning agents** using OpenAI's GPT-4 for intelligent, context-aware data preprocessing.
@@ -390,6 +397,13 @@ Full control for ML engineers and researchers:
 ---
 
 ## 🚀 Installation
+
+### System Requirements
+
+- **Python**: 3.9, 3.10, 3.11, or 3.12
+- **Operating System**: Linux, macOS, Windows
+- **Memory**: 8GB RAM minimum (16GB recommended)
+- **Disk Space**: 10GB minimum
 
 ### Basic Installation
 
