@@ -1,7 +1,7 @@
 """
 Main API Entry Point for AutoML Platform
 =========================================
-Version: 3.2.0
+Version: 3.2.1
 Place in: automl_platform/api/api.py
 
 Central FastAPI application that integrates all modules.
@@ -189,7 +189,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="AutoML Platform API",
     description="Enterprise AutoML Platform with Advanced Features and Expert Mode",
-    version="3.2.0",  # Updated version
+    version="3.2.1",  # Updated version
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -529,7 +529,7 @@ async def root():
     """Root endpoint"""
     return {
         "message": "AutoML Platform API",
-        "version": "3.2.0",  # Updated version
+        "version": "3.2.1",  # Updated version
         "status": "operational",
         "documentation": "/docs",
         "metrics": "/metrics" if PROMETHEUS_AVAILABLE else "not available",
@@ -557,7 +557,7 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "3.2.0",  # Added version
+        "version": "3.2.1",  # Added version
         "expert_mode": EXPERT_MODE,  # Added expert mode
         "services": {
             "database": "connected" if AUTH_AVAILABLE else "not available",
@@ -623,7 +623,7 @@ async def get_status(current_user: User = Depends(get_current_user) if AUTH_AVAI
         # Return basic status if auth is not available
         return {
             "status": "operational",
-            "version": "3.2.0",
+            "version": "3.2.1",
             "expert_mode": EXPERT_MODE,
             "timestamp": datetime.utcnow().isoformat()
         }
@@ -641,7 +641,7 @@ async def get_status(current_user: User = Depends(get_current_user) if AUTH_AVAI
             "plan": current_user.plan_type if hasattr(current_user, 'plan_type') else "unknown",
             "organization": current_user.organization if hasattr(current_user, 'organization') else None
         },
-        "version": "3.2.0",
+        "version": "3.2.1",
         "expert_mode": EXPERT_MODE,
         "timestamp": datetime.utcnow().isoformat()
     }
@@ -677,7 +677,7 @@ def main():
     import sys
     import argparse
     
-    parser = argparse.ArgumentParser(description='AutoML Platform API Server v3.2.0')
+    parser = argparse.ArgumentParser(description='AutoML Platform API Server v3.2.1')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to')
     parser.add_argument('--workers', type=int, default=1, help='Number of worker processes')
