@@ -19,7 +19,7 @@ from .universal_ml_agent import UniversalMLAgent, MLPipelineResult, KnowledgeBas
 
 # Utilities
 from .yaml_config_handler import YAMLConfigHandler
-from .unified_cleaning import UnifiedDataCleaner, smart_clean_data
+from .intelligent_data_cleaning import IntelligentDataCleaner, smart_clean_data
 
 __all__ = [
     # Core agents
@@ -44,7 +44,7 @@ __all__ = [
     
     # Utilities
     'YAMLConfigHandler',
-    'UnifiedDataCleaner',
+    'IntelligentDataCleaner',
     'smart_clean_data'
 ]
 
