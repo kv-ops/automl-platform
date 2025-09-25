@@ -58,15 +58,20 @@ export MAX_CLEANING_COST_PER_DATASET=5.00
 #### Basic Usage
 
 ```python
-from automl_platform.agents import IntelligentDataCleaner
+from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
 import pandas as pd
 import asyncio
 
 # Load your data
 df = pd.read_csv("data.csv")
 
-# Initialize intelligent cleaner
-cleaner = IntelligentDataCleaner()
+# Initialize configuration
+config = AgentConfig(
+    openai_api_key="your_api_key_here"
+)
+
+# Initialize orchestrator
+orchestrator = DataCleaningOrchestrator(config)
 
 # Define context for sector-specific cleaning
 user_context = {
@@ -77,7 +82,7 @@ user_context = {
 
 # Run intelligent cleaning
 async def clean_data():
-    cleaned_df, report = await cleaner.smart_clean(df, user_context)
+    cleaned_df, report = await orchestrator.clean_dataset(df, user_context)
     return cleaned_df, report
 
 # Execute
@@ -160,19 +165,19 @@ cleaned_df = asyncio.run(clean_financial_data())
 The system automatically chooses the best cleaning approach:
 
 ```python
-from automl_platform.agents import IntelligentDataCleaner
+from automl_platform.agents import DataCleaningOrchestrator
 
-cleaner = IntelligentDataCleaner()
+orchestrator = DataCleaningOrchestrator(config)
 
 # Auto mode: Automatically selects best approach
-cleaned_df, report = await cleaner.smart_clean(
+cleaned_df, report = await orchestrator.clean_dataset(
     df, 
     user_context, 
     mode="auto"  # auto, agents, conversational, hybrid
 )
 
 # Get recommendations without cleaning
-recommendations = await cleaner.recommend_cleaning_approach(df, user_context)
+recommendations = await orchestrator.recommend_cleaning_approach(df, user_context)
 ```
 
 #### Chunking for Large Datasets
@@ -261,7 +266,7 @@ The system tracks comprehensive metrics:
 ```python
 # If OpenAI fails, falls back to traditional cleaning
 try:
-    cleaned_df, report = await cleaner.smart_clean(df, user_context)
+    cleaned_df, report = await orchestrator.clean_dataset(df, user_context)
 except:
     # Automatic fallback to EnhancedDataPreprocessor
     cleaned_df = preprocessor.fit_transform(df)
@@ -472,4 +477,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 *Your data, anywhere: Excel, Google Sheets, CRM, Databases - all connected*
 
-*Version 3.2.1 - Last updated: January 2025*
+*Version 3.2.1 - Last updated: September 2025*
