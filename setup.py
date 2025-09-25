@@ -18,7 +18,7 @@ if version_file.exists():
     with open(version_file) as f:
         exec(f.read())
 
-# Core requirements (essential dependencies for basic functionality)
+# Core requirements - harmonized with pyproject.toml and requirements.txt
 install_requires = [
     # Core ML libraries
     "pandas>=2.0.0,<3.0.0",
@@ -39,74 +39,152 @@ install_requires = [
     "catboost>=1.2.0,<2.0.0",
     "imbalanced-learn>=0.10.0,<1.0.0",
 
-    # API Framework (Essential)
+    # API Framework
     "fastapi>=0.104.0,<1.0.0",
     "uvicorn[standard]>=0.24.0,<1.0.0",
     "starlette>=0.27.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.2.0",
 
     # HTTP & Core Auth
     "httpx>=0.25.0",
     "authlib>=1.2.0",
     "requests>=2.31.0",
+    "aiohttp>=3.9.0",
 
-    # Storage (Essential)
+    # Storage
     "sqlalchemy>=2.0.0",
     "psycopg2-binary>=2.9.0",
     "redis>=5.0.0",
+    "alembic>=1.13.0",
 
-    # Security (Essential)
+    # Security
     "cryptography>=41.0.0",
     "pyjwt>=2.8.0",
     "passlib[bcrypt]>=1.7.4",
 
-    # MLOps (Essential)
+    # MLOps
     "mlflow>=2.9.0,<3.0.0",
+
+    # Model Export
+    "onnx>=1.15.0,<2.0.0",
+    "onnxruntime>=1.16.0,<2.0.0",
+    "skl2onnx>=1.16.0,<2.0.0",
+
+    # Data Quality
+    "deepchecks>=0.17.0",
+    "evidently>=0.4.0",
 
     # UI Framework (Essential for no-code)
     "streamlit>=1.30.0",
     "plotly>=5.18.0",
     "streamlit-option-menu>=0.3.6",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "altair>=4.2.1,<5.0.0",
+    "bokeh>=3.3.0",
+    "holoviews>=1.18.0",
+    "panel>=1.3.0",
+
+    # UI Components
+    "streamlit-extras>=0.3.6",
+    "streamlit-aggrid>=0.3.4",
+    "streamlit-authenticator>=0.2.3",
+    "streamlit-chat>=0.1.1",
+    "streamlit-elements>=0.1.0",
+    "streamlit-lottie>=0.0.5",
+    "streamlit-drawable-canvas>=0.9.3",
+    "streamlit-autorefresh>=1.0.1",
+    "streamlit-folium>=0.15.0",
+    "streamlit-ace>=0.1.1",
+    "streamlit-tags>=1.2.8",
+    "streamlit-tree-select>=0.0.5",
+
+    # Report Generation
+    "reportlab>=4.0.0",
+    "python-docx>=1.1.0",
+    "xlsxwriter>=3.1.0",
+    "fpdf2>=2.7.0",
+    "jinja2>=3.1.0",
+
+    # Essential connectors
+    "openpyxl>=3.1.0",
+    "gspread>=5.7.2",
+    "google-auth>=2.14.1",
+    "google-auth-oauthlib>=1.0.0",
+    "pyarrow>=14.0.0",
+    "fastparquet>=2023.10.0",
+    "xlrd>=2.0.0",
+
+    # Task Queue
+    "celery[redis]>=5.3.0",
+    "flower>=2.0.0",
+
+    # Templates
+    "chevron>=0.14.0",
+    "jsonschema>=4.20.0",
 
     # Utilities
     "tqdm>=4.66.0",
     "click>=8.1.0",
     "prometheus-client>=0.19.0",
-
-    # Additional utilities
-    "python-multipart>=0.0.6",
-    "aiofiles>=23.2.0",
-    "aiohttp>=3.9.0",
     "tabulate>=0.9.0",
     "tenacity>=8.2.0",
     "psutil>=5.9.6",
-    
-    # NEW: Essential connectors for Excel and Google Sheets
-    "openpyxl>=3.1.0",           # Pour Excel avancé
-    "xlsxwriter>=3.1.0",          # Pour l'export Excel
-    "gspread>=5.7.2",             # Pour Google Sheets
-    "google-auth>=2.14.1",        # Pour l'authentification Google
-    "google-auth-oauthlib>=1.0.0", # Pour OAuth Google
-    "pyarrow>=14.0.0",            # Pour Parquet
+    "python-dateutil>=2.8.0",
+    "humanize>=4.9.0",
+
+    # File Processing
+    "python-magic>=0.4.27",
+    "chardet>=5.2.0",
+    "pypdf>=3.17.0",
+
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+    "hypothesis>=6.98.0",
+
+    # Code Quality
+    "black>=24.0.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    "isort>=5.13.0",
+
+    # Documentation
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=2.0.0",
+    "myst-parser>=2.0.0",
+
+    # Development Tools
+    "ipython>=8.12.0",
+    "jupyter>=1.0.0",
+    "notebook>=7.0.0",
+    "jupyterlab>=4.0.0",
+
+    # Production
+    "gunicorn>=21.2.0",
+    "supervisor>=4.2.0",
 ]
 
-# Optional dependencies organized by feature
+# Optional dependencies organized by feature - harmonized with pyproject.toml
 extras_require = {
-    # Extended connectors bundle (now mostly included in core)
+    # Intelligent Agents (NEW)
+    "agents": [
+        "openai>=1.10.0",
+        "beautifulsoup4>=4.11.0",
+        "tiktoken>=0.6.0",
+    ],
+
+    # Extended connectors
     "connectors": [
-        # Excel support (déjà dans core maintenant)
-        "xlrd>=2.0.1",  # Pour lire les anciens fichiers Excel
-        
-        # Google Sheets support (déjà dans core maintenant)
+        "xlrd>=2.0.1",
         "google-auth-httplib2>=0.2.0",
-        "pygsheets>=2.0.6",  # Alternative à gspread
-        
-        # CRM connectors
-        "hubspot-api-client>=8.2.0",  # HubSpot
-        "simple-salesforce>=1.12.5",  # Salesforce
-        "pipedrive-python-lib>=1.2.0",  # Pipedrive
-        "zoho-crm>=0.5.0",  # Zoho CRM
-        
-        # Database connectors (extended)
+        "pygsheets>=2.0.6",
+        "hubspot-api-client>=8.2.0",
+        "simple-salesforce>=1.12.5",
+        "pipedrive-python-lib>=1.2.0",
+        "zoho-crm>=0.5.0",
         "snowflake-connector-python>=3.7.0",
         "google-cloud-bigquery>=3.15.0",
         "databricks-connect>=14.1.0",
@@ -119,31 +197,16 @@ extras_require = {
         "mysqlclient>=2.2.0",
         "pymysql>=1.1.0",
     ],
-    
+
     # Enhanced UI/Dashboard components
     "ui_advanced": [
-        "streamlit-extras>=0.3.6",
-        "streamlit-aggrid>=0.3.4",
-        "streamlit-authenticator>=0.2.3",
-        "streamlit-chat>=0.1.1",
-        "streamlit-elements>=0.1.0",
-        "streamlit-lottie>=0.0.5",
-        "streamlit-drawable-canvas>=0.9.3",
-        "streamlit-autorefresh>=1.0.1",
         "streamlit-webrtc>=0.47.0",
-        "streamlit-folium>=0.15.0",
-        "streamlit-ace>=0.1.1",
-        "streamlit-tags>=1.2.8",
-        "streamlit-tree-select>=0.0.5",
+        "voila>=0.5.0",
+        "papermill>=2.5.0",
     ],
 
     # Report generation
     "reporting": [
-        "reportlab>=4.0.0",
-        "python-docx>=1.1.0",
-        "xlsxwriter>=3.1.0",
-        "fpdf2>=2.7.0",
-        "jinja2>=3.1.0",
         "weasyprint>=60.0",
         "python-pptx>=0.6.0",
     ],
@@ -154,8 +217,7 @@ extras_require = {
         "python-saml>=1.15.0",
         "okta>=2.9.0",
         "python-jose[cryptography]>=3.3.0",
-        "msal>=1.26.0",  # Microsoft Authentication
-        "google-auth>=2.27.0",
+        "msal>=1.26.0",
         "oauthlib>=3.2.0",
     ],
 
@@ -172,12 +234,27 @@ extras_require = {
         "torch-tb-profiler>=0.4.0",
     ],
 
-    # Advanced distributed GPU training
-    "distributed_gpu": [
+    # Distributed GPU training
+    "distributed-gpu": [
         "horovod>=0.28.0,<1.0.0",
         "fairscale>=0.4.0,<1.0.0",
         "deepspeed>=0.12.0,<1.0.0",
-        "ray[train]>=2.8.0",
+    ],
+
+    # AutoML GPU
+    "automl-gpu": [
+        "autogluon[torch]>=1.0.0",
+        "nni>=3.0,<4.0",
+    ],
+
+    # GPU serving
+    "serving-gpu": [
+        "tritonclient[all]>=2.40.0",
+    ],
+
+    # Alternative GPU
+    "gpu-alt": [
+        "jax[cuda11_pip]>=0.4.20",
     ],
 
     # Hyperparameter optimization
@@ -243,37 +320,26 @@ extras_require = {
 
     # Enhanced API features
     "api": [
-        "python-multipart>=0.0.6",
-        "aiofiles>=23.2.0",
         "websockets>=12.0",
         "slowapi>=0.1.9",
-        "gunicorn>=21.2.0",
         "python-socketio>=5.11.0",
         "fastapi-limiter>=0.1.5",
         "fastapi-versioning>=0.10.0",
     ],
 
-    # Database & Storage (updated with connectors)
+    # Storage
     "storage": [
-        "alembic>=1.13.0",
-        "pymongo>=4.6.0",
         "minio>=7.2.0",
         "boto3>=1.34.0",
         "google-cloud-storage>=2.10.0",
         "azure-storage-blob>=12.19.0",
         "aioboto3>=12.0.0",
-        # Database connectors now included here too
-        "snowflake-connector-python>=3.7.0",
-        "mysqlclient>=2.2.0",
-        "pymysql>=1.1.0",
     ],
 
     # Distributed Computing
     "distributed": [
         "ray[default,train,tune]>=2.8.0,<3.0.0",
         "dask[complete]>=2023.12.0",
-        "celery[redis]>=5.3.0",
-        "flower>=2.0.0",
         "dramatiq[redis]>=1.15.0",
     ],
 
@@ -283,9 +349,7 @@ extras_require = {
         "wandb>=0.16.0",
         "neptune-client>=1.8.0",
         "bentoml>=1.1.0",
-        "evidently>=0.4.0",
         "great-expectations>=0.18.0",
-        "deepchecks>=0.17.0",
     ],
 
     # Workflow Orchestration
@@ -299,9 +363,6 @@ extras_require = {
 
     # Model Export & Serving
     "export": [
-        "onnx>=1.15.0,<2.0.0",
-        "onnxruntime>=1.16.0,<2.0.0",
-        "skl2onnx>=1.16.0,<2.0.0",
         "sklearn2pmml>=0.104.0",
         "tensorflow-lite>=2.15.0",
         "coremltools>=7.1",
@@ -319,7 +380,7 @@ extras_require = {
     ],
 
     # Feature Store
-    "feature_store": [
+    "feature-store": [
         "feast>=0.36.0",
         "featuretools>=1.28.0",
         "featureform>=1.12.0",
@@ -348,45 +409,27 @@ extras_require = {
         "instructor>=0.5.0",
     ],
 
-    # Visualization
+    # Visualization (beyond core)
     "viz": [
-        "matplotlib>=3.8.0",
-        "seaborn>=0.13.0",
-        "plotly>=5.18.0",
-        "altair>=5.2.0",
-        "bokeh>=3.3.0",
-        "holoviews>=1.18.0",
-        "panel>=1.3.0",
         "hvplot>=0.9.0",
     ],
 
-    # Development & Testing
+    # Development & Testing (beyond core)
     "dev": [
-        "pytest>=8.0.0",
-        "pytest-cov>=4.1.0",
-        "pytest-asyncio>=0.23.0",
         "pytest-mock>=3.12.0",
         "pytest-benchmark>=4.0.0",
-        "hypothesis>=6.98.0",
         "faker>=22.0.0",
         "factory-boy>=3.3.0",
-        "black>=24.0.0",
-        "ruff>=0.2.0",
-        "mypy>=1.8.0",
-        "isort>=5.13.0",
         "pre-commit>=3.6.0",
         "bandit>=1.7.0",
         "safety>=3.0.0",
         "locust>=2.20.0",
     ],
 
-    # Documentation
+    # Documentation (beyond core)
     "docs": [
-        "sphinx>=7.2.0",
-        "sphinx-rtd-theme>=2.0.0",
         "sphinx-autodoc-typehints>=1.25.0",
         "sphinx-copybutton>=0.5.0",
-        "myst-parser>=2.0.0",
         "jupyter-book>=0.15.0",
         "mkdocs>=1.5.0",
         "mkdocs-material>=9.5.0",
@@ -403,50 +446,52 @@ extras_require = {
         "snowflake-connector-python>=3.7.0",
         "databricks-sql-connector>=2.9.0",
     ],
+
+    # Production deployment
+    "production": [
+        "docker>=7.0.0",
+        "kubernetes>=29.0.0",
+        "nginx>=0.2.0",
+    ],
 }
 
-# No-code bundle - Everything needed for non-technical users (updated)
-extras_require["nocode"] = list(set([
-    *extras_require["connectors"],  # Include all connectors
-    *extras_require["ui_advanced"],
-    *extras_require["reporting"],
-    *extras_require["viz"],
-    "jupyter>=1.0.0",
-    "notebook>=7.0.0",
-    "voila>=0.5.0",
-    "papermill>=2.5.0",
-]))
+# Meta-extras that combine multiple groups
+extras_require["nocode"] = list(set(
+    extras_require["connectors"] +
+    extras_require["ui_advanced"] +
+    extras_require["reporting"] +
+    extras_require["viz"]
+))
 
-# Enterprise edition includes production essentials (updated)
-extras_require["enterprise"] = list(set([
-    *extras_require["api"],
-    *extras_require["storage"],
-    *extras_require["distributed"],
-    *extras_require["mlops"],
-    *extras_require["monitoring"],
-    *extras_require["auth"],
-    *extras_require["orchestration"],
-    *extras_require["export"],
-    *extras_require["streaming"],
-    *extras_require["cloud"],
-    *extras_require["nocode"],
-    *extras_require["connectors"],  # Include connectors
-]))
+extras_require["enterprise"] = list(set(
+    extras_require["api"] +
+    extras_require["storage"] +
+    extras_require["distributed"] +
+    extras_require["mlops"] +
+    extras_require["monitoring"] +
+    extras_require["auth"] +
+    extras_require["orchestration"] +
+    extras_require["export"] +
+    extras_require["streaming"] +
+    extras_require["cloud"] +
+    extras_require["nocode"] +
+    extras_require["connectors"]
+))
 
-# Combine all extras for complete installation
+extras_require["gpu-complete"] = list(set(
+    extras_require["gpu"] +
+    extras_require["deep"] +
+    extras_require["distributed-gpu"] +
+    extras_require["automl-gpu"] +
+    extras_require["serving-gpu"]
+))
+
+# Combine all extras
 all_extras = []
-for extra in extras_require.values():
-    all_extras.extend(extra)
+for key, extra in extras_require.items():
+    if key not in ["nocode", "enterprise", "gpu-complete"]:  # Avoid duplicates from meta-extras
+        all_extras.extend(extra)
 extras_require["all"] = list(set(all_extras))
-
-# Production deployment essentials
-extras_require["production"] = [
-    "gunicorn>=21.2.0",
-    "supervisor>=4.2.0",
-    "docker>=7.0.0",
-    "kubernetes>=29.0.0",
-    "nginx>=0.2.0",
-]
 
 # Setup configuration
 setup(
@@ -540,6 +585,9 @@ setup(
             "automl-excel=automl_platform.cli.connectors:excel_cli",
             "automl-gsheets=automl_platform.cli.connectors:gsheets_cli",
             "automl-crm=automl_platform.cli.connectors:crm_cli",
+
+            # Intelligent cleaning
+            "automl-clean=automl_platform.cli.clean:clean_cli",
         ],
     },
 
@@ -569,7 +617,7 @@ setup(
         "Natural Language :: French",
     ],
 
-    # Keywords (updated)
+    # Keywords
     keywords=[
         "automl",
         "machine-learning",
@@ -603,6 +651,9 @@ setup(
         "hubspot",
         "salesforce",
         "data-connectors",
+        "intelligent-agents",
+        "openai",
+        "data-cleaning",
     ],
 
     # Project URLs
@@ -622,6 +673,7 @@ setup(
         "Commercial Support": "https://automl-platform.com/support",
         "Enterprise": "https://automl-platform.com/enterprise",
         "Connectors Guide": "https://docs.automl-platform.com/connectors",
+        "Agents Guide": "https://docs.automl-platform.com/agents",
     },
 
     # Testing
