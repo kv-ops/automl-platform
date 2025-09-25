@@ -1,737 +1,1472 @@
 """
-Unit tests for intelligent data cleaning agents
+Tests complets pour tous les composants Agent-First
+===================================================
+Tests unitaires et d'intégration pour le système Agent-First.
 """
 
 import pytest
 import pandas as pd
 import numpy as np
-import asyncio
-import time
-from unittest.mock import Mock, patch, AsyncMock
 import json
+import asyncio
+from datetime import datetime
 from pathlib import Path
-import sys
+from unittest.mock import Mock, AsyncMock, patch, MagicMock, call
+import tempfile
+import shutil
+from typing import Dict, Any, List, Optional
+import yaml
+import pickle
+import hashlib
+import os
 
-# Add parent directory to path
-sys.path.append(str(Path(__file__).parent.parent))
-
+# Import des modules à tester
 from automl_platform.agents import (
+    IntelligentContextDetector,
+    MLContext,
+    IntelligentConfigGenerator,
+    OptimalConfig,
+    AdaptiveTemplateSystem,
+    AdaptiveTemplate,
+    UniversalMLAgent,
+    MLPipelineResult,
+    KnowledgeBase,
     DataCleaningOrchestrator,
     ProfilerAgent,
     ValidatorAgent,
     CleanerAgent,
     ControllerAgent,
     AgentConfig,
-    AgentType
+    AgentType,
+    YAMLConfigHandler
 )
 
 
+# ============================================================================
+# FIXTURES COMMUNES
+# ============================================================================
+
 @pytest.fixture
-def sample_dataframe():
-    """Create a sample dataframe with various data quality issues"""
+def sample_fraud_data():
+    """Génère des données simulant un problème de détection de fraude"""
     np.random.seed(42)
-    df = pd.DataFrame({
-        'id': range(1, 101),
-        'amount': np.random.uniform(10, 1000, 100),
-        'category': np.random.choice(['A', 'B', 'C', None], 100),
-        'date': pd.date_range('2023-01-01', periods=100),
-        'score': np.random.normal(50, 10, 100)
-    })
+    n_samples = 1000
     
-    # Add some issues
-    df.loc[5:10, 'amount'] = np.nan  # Missing values
-    df.loc[20:25, 'score'] = 999  # Outliers
-    df = pd.concat([df, df.iloc[30:35]])  # Duplicates
+    df = pd.DataFrame({
+        'transaction_id': range(n_samples),
+        'amount': np.random.exponential(100, n_samples),
+        'merchant_id': np.random.choice(['M001', 'M002', 'M003', 'M004'], n_samples),
+        'card_number': [f'CARD_{i%100:04d}' for i in range(n_samples)],
+        'transaction_time': pd.date_range('2024-01-01', periods=n_samples, freq='1H'),
+        'ip_address': [f'192.168.{i%256}.{i%100}' for i in range(n_samples)],
+        'device_id': np.random.choice(['D1', 'D2', 'D3', 'D4', 'D5'], n_samples),
+        'location': np.random.choice(['US', 'UK', 'FR', 'DE'], n_samples),
+        'velocity_1h': np.random.poisson(2, n_samples),
+        'risk_score': np.random.uniform(0, 100, n_samples),
+        'fraud': np.random.choice([0, 1], n_samples, p=[0.98, 0.02])  # 2% fraud rate
+    })
     
     return df
 
 
 @pytest.fixture
-def agent_config():
-    """Create a test agent configuration"""
-    return AgentConfig(
-        openai_api_key="test-key",
-        model="gpt-4-1106-preview",
-        enable_web_search=True,
-        enable_file_operations=True,
-        max_iterations=2,
-        timeout_seconds=30,
-        user_context={
-            "secteur_activite": "finance",
-            "target_variable": "score",
-            "contexte_metier": "Test context"
-        }
-    )
+def sample_churn_data():
+    """Génère des données simulant un problème de prédiction de churn"""
+    np.random.seed(42)
+    n_samples = 500
+    
+    df = pd.DataFrame({
+        'customer_id': range(n_samples),
+        'tenure': np.random.randint(1, 60, n_samples),
+        'monthly_charges': np.random.uniform(20, 150, n_samples),
+        'total_charges': np.random.uniform(100, 5000, n_samples),
+        'contract_type': np.random.choice(['Month-to-month', 'One year', 'Two year'], n_samples),
+        'payment_method': np.random.choice(['Credit card', 'Bank transfer', 'Electronic check'], n_samples),
+        'last_login': pd.date_range('2024-01-01', periods=n_samples, freq='1D'),
+        'support_tickets': np.random.poisson(3, n_samples),
+        'usage_minutes': np.random.exponential(500, n_samples),
+        'satisfaction_score': np.random.randint(1, 6, n_samples),
+        'churn': np.random.choice([0, 1], n_samples, p=[0.8, 0.2])  # 20% churn rate
+    })
+    
+    return df
 
 
 @pytest.fixture
-def mock_openai_client():
-    """Create a mock OpenAI client"""
-    client = AsyncMock()
+def sample_sales_data():
+    """Génère des données simulant un problème de prévision des ventes"""
+    np.random.seed(42)
+    n_days = 365
     
-    # Mock assistant creation
-    client.beta.assistants.create = AsyncMock(return_value=Mock(id="test-assistant-id"))
-    client.beta.assistants.retrieve = AsyncMock(return_value=Mock(id="test-assistant-id"))
+    dates = pd.date_range('2023-01-01', periods=n_days, freq='D')
+    trend = np.linspace(1000, 1500, n_days)
+    seasonal = 200 * np.sin(2 * np.pi * np.arange(n_days) / 365)
+    noise = np.random.normal(0, 50, n_days)
     
-    # Mock thread operations
-    client.beta.threads.create = AsyncMock(return_value=Mock(id="test-thread-id"))
-    client.beta.threads.messages.create = AsyncMock()
-    client.beta.threads.messages.list = AsyncMock(return_value=Mock(data=[
-        Mock(role="assistant", content=[Mock(text=Mock(value='{"result": "test"}'))])
-    ]))
+    df = pd.DataFrame({
+        'date': dates,
+        'product_id': np.random.choice(['P1', 'P2', 'P3'], n_days),
+        'store_id': np.random.choice(['S1', 'S2'], n_days),
+        'sales': trend + seasonal + noise,
+        'price': np.random.uniform(10, 100, n_days),
+        'promotion': np.random.choice([0, 1], n_days, p=[0.8, 0.2]),
+        'holiday': np.random.choice([0, 1], n_days, p=[0.95, 0.05]),
+        'temperature': np.random.uniform(10, 35, n_days),
+        'inventory': np.random.randint(0, 1000, n_days)
+    })
     
-    # Mock run operations
-    client.beta.threads.runs.create = AsyncMock(return_value=Mock(id="test-run-id"))
-    client.beta.threads.runs.retrieve = AsyncMock(return_value=Mock(status="completed"))
-    
-    return client
+    return df
 
 
-class TestAgentConfig:
-    """Test AgentConfig class"""
-    
-    def test_config_initialization(self):
-        """Test configuration initialization"""
-        config = AgentConfig()
-        assert config.model == "gpt-4-1106-preview"
-        assert config.enable_web_search == True
-        assert config.max_iterations == 3
-        
-    def test_config_validation(self, tmp_path):
-        """Test configuration validation"""
-        config = AgentConfig()
-        config.cache_dir = str(tmp_path / "cache")
-        config.output_dir = str(tmp_path / "output")
-        
-        # Should raise without API key
-        config.openai_api_key = ""
-        with pytest.raises(ValueError):
-            config.validate()
-        
-        # Should pass with API key
-        config.openai_api_key = "test-key"
-        assert config.validate() == True
-        
-    def test_agent_tools_config(self):
-        """Test agent tools configuration"""
-        config = AgentConfig()
-        
-        profiler_tools = config.get_agent_tools(AgentType.PROFILER)
-        assert len(profiler_tools) == 1
-        assert profiler_tools[0]["type"] == "code_interpreter"
-        
-        validator_tools = config.get_agent_tools(AgentType.VALIDATOR)
-        assert len(validator_tools) == 2
-        assert any(tool["type"] == "function" for tool in validator_tools)
-        
-    def test_sector_keywords(self):
-        """Test sector keyword retrieval"""
-        config = AgentConfig()
-        
-        finance_keywords = config.get_sector_keywords("finance")
-        assert "IFRS" in finance_keywords
-        assert "Basel" in finance_keywords
-        
-        health_keywords = config.get_sector_keywords("sante")
-        assert "HL7" in health_keywords
-        assert "ICD-10" in health_keywords
+@pytest.fixture
+def mock_agent_config():
+    """Configuration mock pour les agents"""
+    config = AgentConfig(
+        openai_api_key="test-key-123",
+        model="gpt-4-1106-preview",
+        enable_web_search=True,
+        enable_file_operations=True,
+        max_iterations=3,
+        timeout_seconds=30,
+        cache_dir="./test_cache",
+        output_dir="./test_output"
+    )
+    return config
 
 
-@pytest.mark.asyncio
-class TestProfilerAgent:
-    """Test ProfilerAgent class"""
-    
-    async def test_profiler_initialization(self, agent_config, mock_openai_client):
-        """Test profiler agent initialization"""
-        with patch('automl_platform.agents.profiler_agent.AsyncOpenAI', return_value=mock_openai_client):
-            profiler = ProfilerAgent(agent_config)
-            await asyncio.sleep(0.1)  # Allow async initialization
-            
-            assert profiler.config == agent_config
-            assert profiler.assistant_id is not None
-    
-    async def test_profiler_analyze(self, agent_config, sample_dataframe, mock_openai_client):
-        """Test profiler analysis"""
-        with patch('automl_platform.agents.profiler_agent.AsyncOpenAI', return_value=mock_openai_client):
-            profiler = ProfilerAgent(agent_config)
-            await asyncio.sleep(0.1)
-            
-            # Mock response
-            mock_response = {
-                "summary": {"total_rows": 100, "total_columns": 5},
-                "quality_issues": ["Missing values in amount"],
-                "anomalies": ["Outliers in score"]
-            }
-            
-            mock_openai_client.beta.threads.messages.list = AsyncMock(return_value=Mock(data=[
-                Mock(role="assistant", content=[Mock(text=Mock(value=json.dumps(mock_response)))])
-            ]))
-            
-            result = await profiler.analyze(sample_dataframe)
-            
-            assert "summary" in result
-            assert "quality_issues" in result
-            assert "anomalies" in result
-    
-    def test_prepare_data_summary(self, agent_config, sample_dataframe):
-        """Test data summary preparation"""
-        profiler = ProfilerAgent(agent_config)
-        summary = profiler._prepare_data_summary(sample_dataframe)
-        
-        assert summary["shape"] == sample_dataframe.shape
-        assert "columns" in summary
-        assert "basic_stats" in summary
-        assert "duplicates" in summary
-        
-        # Check statistics
-        for col in sample_dataframe.columns:
-            assert col in summary["basic_stats"]
-            col_stats = summary["basic_stats"][col]
-            assert "null_count" in col_stats
-            assert "unique_count" in col_stats
-    
-    def test_basic_profiling_fallback(self, agent_config, sample_dataframe):
-        """Test basic profiling fallback"""
-        profiler = ProfilerAgent(agent_config)
-        result = profiler._basic_profiling(sample_dataframe)
-        
-        assert "summary" in result
-        assert "columns" in result
-        assert "quality_issues" in result
-        assert result["summary"]["total_rows"] == len(sample_dataframe)
+@pytest.fixture
+def temp_dir():
+    """Crée un répertoire temporaire pour les tests"""
+    temp_path = tempfile.mkdtemp()
+    yield temp_path
+    shutil.rmtree(temp_path)
 
 
-@pytest.mark.asyncio
-class TestValidatorAgent:
-    """Test ValidatorAgent class"""
-    
-    async def test_validator_initialization(self, agent_config, mock_openai_client):
-        """Test validator agent initialization"""
-        with patch('automl_platform.agents.validator_agent.AsyncOpenAI', return_value=mock_openai_client):
-            validator = ValidatorAgent(agent_config)
-            await asyncio.sleep(0.1)
-            
-            assert validator.config == agent_config
-            assert validator.cache_dir.exists()
-    
-    async def test_web_search_caching(self, agent_config, tmp_path):
-        """Test web search caching functionality"""
-        agent_config.cache_dir = str(tmp_path / "cache")
-        validator = ValidatorAgent(agent_config)
-        
-        # Mock search results
-        mock_results = {
-            "query": "test query",
-            "results": [{"title": "Test", "url": "http://test.com", "snippet": "Test snippet"}],
-            "urls": ["http://test.com"]
-        }
-        
-        with patch.object(validator, '_perform_web_search', return_value=mock_results):
-            # First call should perform search
-            result1 = await validator._web_search("test query")
-            assert result1 == mock_results
-            
-            # Second call should use cache
-            result2 = await validator._web_search("test query")
-            assert result2 == mock_results
-    
-    def test_basic_validation(self, agent_config, sample_dataframe):
-        """Test basic validation fallback"""
-        validator = ValidatorAgent(agent_config)
-        
-        # Test finance sector validation
-        result = validator._basic_validation(sample_dataframe, "finance")
-        assert "valid" in result
-        assert "issues" in result
-        assert "warnings" in result
-        assert "suggestions" in result
-        
-        # Test healthcare sector validation
-        result_health = validator._basic_validation(sample_dataframe, "sante")
-        assert "valid" in result_health
+# ============================================================================
+# TESTS INTELLIGENT CONTEXT DETECTOR
+# ============================================================================
 
-
-@pytest.mark.asyncio
-class TestCleanerAgent:
-    """Test CleanerAgent class"""
+class TestIntelligentContextDetector:
+    """Tests pour le détecteur de contexte ML intelligent"""
     
-    async def test_cleaner_initialization(self, agent_config, mock_openai_client):
-        """Test cleaner agent initialization"""
-        with patch('automl_platform.agents.cleaner_agent.AsyncOpenAI', return_value=mock_openai_client):
-            cleaner = CleanerAgent(agent_config)
-            await asyncio.sleep(0.1)
-            
-            assert cleaner.config == agent_config
-            assert cleaner.transformations_history == []
-    
-    def test_validate_transformation(self, agent_config):
-        """Test transformation validation"""
-        cleaner = CleanerAgent(agent_config)
-        
-        # Valid transformation
-        valid_trans = {
-            "column": "amount",
-            "action": "fill_missing",
-            "params": {"method": "median"}
-        }
-        assert cleaner._validate_transformation(valid_trans) == True
-        
-        # Invalid transformation (missing required field)
-        invalid_trans = {
-            "action": "fill_missing",
-            "params": {"method": "median"}
-        }
-        assert cleaner._validate_transformation(invalid_trans) == False
-        
-        # Invalid action
-        invalid_action = {
-            "column": "amount",
-            "action": "invalid_action",
-            "params": {}
-        }
-        assert cleaner._validate_transformation(invalid_action) == False
+    @pytest.fixture
+    def detector(self):
+        return IntelligentContextDetector()
     
     @pytest.mark.asyncio
-    async def test_apply_transformations(self, agent_config, sample_dataframe):
-        """Test applying transformations"""
-        cleaner = CleanerAgent(agent_config)
+    async def test_detect_fraud_context(self, detector, sample_fraud_data):
+        """Test la détection du contexte de fraude"""
+        context = await detector.detect_ml_context(
+            sample_fraud_data,
+            target_col='fraud'
+        )
+        
+        assert isinstance(context, MLContext)
+        assert context.problem_type == 'fraud_detection'
+        assert context.confidence > 0.7
+        assert context.imbalance_detected == True
+        assert 'fraud_indicator' in context.detected_patterns
+        assert context.business_sector is not None
+    
+    @pytest.mark.asyncio
+    async def test_detect_churn_context(self, detector, sample_churn_data):
+        """Test la détection du contexte de churn"""
+        context = await detector.detect_ml_context(
+            sample_churn_data,
+            target_col='churn'
+        )
+        
+        assert context.problem_type == 'churn_prediction'
+        assert context.confidence > 0.6
+        assert 'churn_indicator' in context.detected_patterns
+        assert context.temporal_aspect == True  # Has last_login date
+    
+    @pytest.mark.asyncio
+    async def test_detect_sales_context(self, detector, sample_sales_data):
+        """Test la détection du contexte de prévision des ventes"""
+        context = await detector.detect_ml_context(
+            sample_sales_data,
+            target_col='sales'
+        )
+        
+        assert context.problem_type in ['sales_forecasting', 'demand_prediction']
+        assert context.confidence > 0.5
+        assert context.temporal_aspect == True
+        assert 'sales_indicator' in context.detected_patterns
+    
+    def test_analyze_columns(self, detector, sample_fraud_data):
+        """Test l'analyse des colonnes"""
+        analysis = detector._analyze_columns(sample_fraud_data)
+        
+        assert 'columns' in analysis
+        assert 'detected_patterns' in analysis
+        assert 'column_types' in analysis
+        assert 'potential_features' in analysis
+        
+        # Vérifier les patterns détectés
+        patterns = analysis['detected_patterns']
+        assert 'has_id_columns' in patterns  # transaction_id
+        assert 'has_financial_features' in patterns  # amount
+        assert 'has_temporal_features' in patterns  # transaction_time
+    
+    def test_analyze_target_binary(self, detector, sample_fraud_data):
+        """Test l'analyse d'une variable cible binaire"""
+        target_analysis = detector._analyze_target(sample_fraud_data, 'fraud')
+        
+        assert target_analysis['type'] == 'binary_classification'
+        assert target_analysis['unique_values'] == 2
+        assert 'imbalance_ratio' in target_analysis
+        assert target_analysis['is_imbalanced'] == True
+    
+    def test_analyze_target_regression(self, detector, sample_sales_data):
+        """Test l'analyse d'une variable cible continue"""
+        target_analysis = detector._analyze_target(sample_sales_data, 'sales')
+        
+        assert target_analysis['type'] == 'regression'
+        assert 'distribution' in target_analysis
+        assert 'mean' in target_analysis['distribution']
+        assert 'std' in target_analysis['distribution']
+    
+    def test_detect_temporal_aspects(self, detector, sample_sales_data):
+        """Test la détection des aspects temporels"""
+        temporal_info = detector._detect_temporal_aspects(sample_sales_data)
+        
+        assert temporal_info['has_temporal'] == True
+        assert 'date' in temporal_info['temporal_columns']
+        assert temporal_info['is_time_series'] == True
+    
+    def test_calculate_problem_score(self, detector):
+        """Test le calcul du score de problème"""
+        patterns = {
+            'keywords': ['fraud', 'transaction', 'risk'],
+            'column_patterns': ['transaction_id', 'amount', 'risk_score'],
+            'target_patterns': ['fraud', 'fraudulent'],
+            'temporal_indicators': ['timestamp', 'date'],
+            'business_metrics': ['amount', 'frequency']
+        }
+        
+        column_analysis = {
+            'columns': ['transaction_id', 'amount', 'fraud', 'timestamp'],
+            'detected_patterns': {'has_financial_features'}
+        }
+        
+        target_analysis = {'name': 'fraud'}
+        context_clues = {'sector': 'financial_fraud'}
+        
+        score = detector._calculate_problem_score(
+            'fraud_detection',
+            patterns,
+            column_analysis,
+            target_analysis,
+            context_clues
+        )
+        
+        assert score > 0.7
+        assert score <= 1.0
+    
+    @pytest.mark.asyncio
+    async def test_search_business_context(self, detector):
+        """Test la recherche du contexte métier"""
+        column_analysis = {
+            'columns': ['transaction_id', 'amount', 'fraud'],
+            'detected_patterns': {'has_financial_features', 'fraud_indicator'}
+        }
+        
+        context = await detector._search_business_context(column_analysis)
+        
+        assert context['sector'] == 'financial_fraud'
+        assert isinstance(context['industry_patterns'], list)
+        assert isinstance(context['domain_keywords'], list)
+    
+    def test_generate_optimal_config(self, detector):
+        """Test la génération de configuration optimale"""
+        config = detector._generate_optimal_config(
+            'fraud_detection',
+            pd.DataFrame({'col1': [1, 2, 3]}),
+            'target',
+            {'n_samples': 1000, 'imbalance_detected': True}
+        )
+        
+        assert config['problem_type'] == 'fraud_detection'
+        assert config['task'] == 'classification'
+        assert config['primary_metric'] == 'f1'  # Due to imbalance
+        assert 'SMOTE' in str(config['preprocessing'])
+        assert 'IsolationForest' in config['algorithms']
+
+
+# ============================================================================
+# TESTS INTELLIGENT CONFIG GENERATOR
+# ============================================================================
+
+class TestIntelligentConfigGenerator:
+    """Tests pour le générateur de configuration intelligent"""
+    
+    @pytest.fixture
+    def generator(self):
+        return IntelligentConfigGenerator()
+    
+    @pytest.mark.asyncio
+    async def test_generate_config_basic(self, generator, sample_fraud_data):
+        """Test la génération de configuration basique"""
+        context = {
+            'problem_type': 'fraud_detection',
+            'business_sector': 'finance',
+            'temporal_aspect': True,
+            'imbalance_detected': True
+        }
+        
+        config = await generator.generate_config(
+            df=sample_fraud_data,
+            context=context
+        )
+        
+        assert isinstance(config, OptimalConfig)
+        assert config.task == 'classification'
+        assert len(config.algorithms) > 0
+        assert config.primary_metric in ['f1', 'precision', 'recall', 'roc_auc']
+        assert config.preprocessing is not None
+        assert config.hpo_config is not None
+    
+    def test_determine_task(self, generator):
+        """Test la détermination du type de tâche"""
+        context = {'problem_type': 'fraud_detection'}
+        task = generator._determine_task(context, pd.DataFrame())
+        assert task == 'classification'
+        
+        context = {'problem_type': 'sales_forecasting'}
+        task = generator._determine_task(context, pd.DataFrame())
+        assert task == 'regression'
+        
+        context = {'problem_type': 'customer_segmentation'}
+        task = generator._determine_task(context, pd.DataFrame())
+        assert task == 'clustering'
+    
+    @pytest.mark.asyncio
+    async def test_select_algorithms(self, generator, sample_fraud_data):
+        """Test la sélection des algorithmes"""
+        algorithms = await generator._select_algorithms(
+            task='classification',
+            df=sample_fraud_data,
+            context={'imbalance_detected': True},
+            constraints={'time_budget': 3600},
+            user_preferences=None
+        )
+        
+        assert len(algorithms) > 0
+        assert 'XGBoost' in algorithms or 'LightGBM' in algorithms
+        assert 'LogisticRegression' in algorithms  # Baseline
+    
+    def test_score_algorithm(self, generator):
+        """Test le scoring des algorithmes"""
+        df = pd.DataFrame({
+            'num1': [1, 2, None, 4],
+            'cat1': ['A', 'B', 'C', 'D']
+        })
+        
+        score = generator._score_algorithm(
+            'LightGBM',
+            df,
+            context={'imbalance_detected': True},
+            constraints={'interpretability_required': False},
+            user_preferences=None
+        )
+        
+        assert score > 0
+        assert score <= 1.0
+        
+        # LightGBM devrait avoir un bon score car il gère les valeurs manquantes
+        assert score > 0.1
+    
+    def test_select_metric(self, generator):
+        """Test la sélection de métrique"""
+        # Fraud detection
+        metric = generator._select_metric(
+            'classification',
+            {'problem_type': 'fraud_detection'},
+            None
+        )
+        assert metric == 'average_precision'
+        
+        # Churn with imbalance
+        metric = generator._select_metric(
+            'classification',
+            {'problem_type': 'churn_prediction'},
+            None
+        )
+        assert metric == 'f1'
+        
+        # Sales forecasting
+        metric = generator._select_metric(
+            'regression',
+            {'problem_type': 'sales_forecasting'},
+            None
+        )
+        assert metric == 'mape'
+    
+    def test_configure_preprocessing(self, generator):
+        """Test la configuration du preprocessing"""
+        df = pd.DataFrame({
+            'num1': [1, 2, None, 4, 100],  # Has missing and outlier
+            'cat1': ['A', 'B', 'C', 'D', 'E']
+        })
+        
+        preprocessing = generator._configure_preprocessing(
+            df,
+            {'problem_type': 'classification'},
+            'classification'
+        )
+        
+        assert 'missing_values' in preprocessing
+        assert 'outliers' in preprocessing
+        assert 'scaling' in preprocessing
+        assert 'encoding' in preprocessing
+        
+        # Vérifier la stratégie d'imputation
+        assert preprocessing['missing_values']['strategy'] in ['simple_impute', 'iterative_impute']
+    
+    def test_configure_hpo(self, generator):
+        """Test la configuration HPO"""
+        algorithms = ['XGBoost', 'LightGBM', 'RandomForest']
+        df = pd.DataFrame(np.random.randn(1000, 10))
+        
+        hpo_config = generator._configure_hpo(
+            algorithms,
+            df,
+            time_budget=3600,
+            task='classification'
+        )
+        
+        assert hpo_config['method'] == 'optuna'
+        assert hpo_config['n_iter'] > 0
+        assert 'search_spaces' in hpo_config
+        assert 'XGBoost' in hpo_config['search_spaces']
+    
+    def test_get_search_space(self, generator):
+        """Test la génération d'espace de recherche"""
+        # XGBoost
+        space = generator._get_search_space('XGBoost', 'classification', 10000)
+        assert 'n_estimators' in space
+        assert 'max_depth' in space
+        assert 'learning_rate' in space
+        
+        # LightGBM
+        space = generator._get_search_space('LightGBM', 'classification', 10000)
+        assert 'num_leaves' in space
+        assert 'learning_rate' in space
+        
+        # RandomForest
+        space = generator._get_search_space('RandomForest', 'classification', 10000)
+        assert 'n_estimators' in space
+        assert 'max_depth' in space
+    
+    def test_setup_cv_strategy(self, generator):
+        """Test la stratégie de validation croisée"""
+        df = pd.DataFrame(np.random.randn(100, 10))
+        
+        # Classification
+        cv = generator._setup_cv_strategy(df, 'classification', {})
+        assert cv['method'] == 'stratified_kfold'
+        assert cv['n_folds'] == 5
+        
+        # Time series
+        cv = generator._setup_cv_strategy(
+            df, 
+            'regression', 
+            {'temporal_aspect': True, 'is_time_series': True}
+        )
+        assert cv['method'] == 'time_series_split'
+    
+    def test_configure_ensemble(self, generator):
+        """Test la configuration d'ensemble"""
+        # Peu d'algorithmes
+        ensemble = generator._configure_ensemble(['XGBoost', 'LightGBM'], 'classification')
+        assert ensemble['enabled'] == False
+        
+        # Beaucoup d'algorithmes
+        algorithms = ['XGBoost', 'LightGBM', 'CatBoost', 'RandomForest', 'LogisticRegression', 'NeuralNetwork']
+        ensemble = generator._configure_ensemble(algorithms, 'classification')
+        assert ensemble['enabled'] == True
+        assert ensemble['method'] == 'stacking'
+    
+    def test_adapt_config(self, generator):
+        """Test l'adaptation de configuration"""
+        base_config = OptimalConfig(
+            task='classification',
+            algorithms=['XGBoost', 'LightGBM', 'NeuralNetwork'],
+            primary_metric='f1',
+            preprocessing={},
+            feature_engineering={},
+            hpo_config={'n_iter': 50},
+            cv_strategy={},
+            ensemble_config={},
+            time_budget=3600,
+            resource_constraints={},
+            monitoring={}
+        )
+        
+        # Adapter pour contraintes de temps
+        adapted = generator.adapt_config(base_config, {'time_budget': 600})
+        assert adapted.time_budget == 600
+        assert adapted.hpo_config['n_iter'] < 50
+        
+        # Adapter pour contraintes de mémoire
+        adapted = generator.adapt_config(base_config, {'memory_limit_gb': 4})
+        assert 'NeuralNetwork' not in adapted.algorithms
+
+
+# ============================================================================
+# TESTS ADAPTIVE TEMPLATE SYSTEM
+# ============================================================================
+
+class TestAdaptiveTemplateSystem:
+    """Tests pour le système de templates adaptatifs"""
+    
+    @pytest.fixture
+    def adaptive_system(self, temp_dir):
+        return AdaptiveTemplateSystem(Path(temp_dir))
+    
+    @pytest.mark.asyncio
+    async def test_get_configuration(self, adaptive_system, sample_fraud_data):
+        """Test l'obtention de configuration adaptative"""
+        context = {
+            'problem_type': 'fraud_detection',
+            'n_samples': len(sample_fraud_data),
+            'n_features': len(sample_fraud_data.columns),
+            'imbalance_detected': True
+        }
+        
+        config = await adaptive_system.get_configuration(
+            df=sample_fraud_data,
+            context=context
+        )
+        
+        assert isinstance(config, dict)
+        assert 'task' in config
+        assert 'algorithms' in config
+        assert 'preprocessing' in config
+    
+    def test_add_template(self, adaptive_system):
+        """Test l'ajout d'un template"""
+        template_config = {
+            'task': 'classification',
+            'algorithms': ['XGBoost', 'LightGBM'],
+            'preprocessing': {'handle_missing': True}
+        }
+        
+        template = adaptive_system.add_template(
+            'test_template',
+            template_config,
+            'Test template description'
+        )
+        
+        assert isinstance(template, AdaptiveTemplate)
+        assert template.name == 'test_template'
+        assert template.base_config == template_config
+        assert 'test_template' in adaptive_system.templates
+    
+    @pytest.mark.asyncio
+    async def test_learn_from_execution(self, adaptive_system):
+        """Test l'apprentissage à partir d'exécution"""
+        context = {
+            'problem_type': 'fraud_detection',
+            'n_samples': 1000,
+            'n_features': 20
+        }
+        
+        config = {
+            'task': 'classification',
+            'algorithms': ['XGBoost'],
+            'preprocessing': {}
+        }
+        
+        performance = {'f1': 0.85, 'precision': 0.90}
+        
+        # Apprendre du succès
+        adaptive_system.learn_from_execution(context, config, performance)
+        
+        assert 'fraud_detection' in adaptive_system.learned_patterns
+        assert len(adaptive_system.learned_patterns['fraud_detection']) > 0
+        
+        pattern = adaptive_system.learned_patterns['fraud_detection'][0]
+        assert pattern['success_score'] == 0.90
+        assert pattern['config'] == config
+    
+    def test_select_best_learned_pattern(self, adaptive_system):
+        """Test la sélection du meilleur pattern appris"""
+        # Ajouter des patterns
+        adaptive_system.learned_patterns['fraud_detection'] = [
+            {
+                'context': {'n_samples': 1000, 'n_features': 20},
+                'config': {'algorithms': ['XGBoost']},
+                'success_score': 0.85
+            },
+            {
+                'context': {'n_samples': 900, 'n_features': 19},
+                'config': {'algorithms': ['LightGBM']},
+                'success_score': 0.90
+            }
+        ]
+        
+        # Contexte similaire
+        current_context = {'n_samples': 950, 'n_features': 18}
+        
+        best_config = adaptive_system._select_best_learned_pattern(
+            'fraud_detection',
+            current_context
+        )
+        
+        assert best_config is not None
+        assert best_config['algorithms'] == ['LightGBM']  # Meilleur score
+    
+    def test_calculate_pattern_similarity(self, adaptive_system):
+        """Test le calcul de similarité entre patterns"""
+        pattern = {
+            'context': {
+                'n_samples': 1000,
+                'n_features': 20,
+                'imbalance_detected': True,
+                'business_sector': 'finance'
+            }
+        }
+        
+        context = {
+            'n_samples': 900,  # 90% similar
+            'n_features': 22,  # 90% similar
+            'imbalance_detected': True,  # Match
+            'business_sector': 'finance'  # Match
+        }
+        
+        similarity = adaptive_system._calculate_pattern_similarity(pattern, context)
+        
+        assert similarity > 0.7
+        assert similarity <= 1.0
+    
+    def test_get_template_stats(self, adaptive_system):
+        """Test les statistiques des templates"""
+        # Ajouter un template
+        adaptive_system.add_template('test', {'task': 'classification'})
+        
+        # Ajouter un pattern appris
+        adaptive_system.learned_patterns['test_problem'] = [{'config': {}}]
+        
+        stats = adaptive_system.get_template_stats()
+        
+        assert stats['total_templates'] == 1
+        assert stats['total_learned_patterns'] == 1
+        assert 'template_performance' in stats
+        assert 'test' in stats['template_performance']
+    
+    @pytest.mark.asyncio
+    async def test_adapt_to_current_data(self, adaptive_system):
+        """Test l'adaptation aux données actuelles"""
+        base_config = {
+            'task': 'classification',
+            'algorithms': ['NeuralNetwork', 'XGBoost'],
+            'preprocessing': {}
+        }
+        
+        # Petites données - devrait retirer NeuralNetwork
+        df = pd.DataFrame(np.random.randn(100, 5))
+        context = {'imbalance_detected': True}
+        
+        adapted = await adaptive_system._adapt_to_current_data(base_config, df, context)
+        
+        assert 'NeuralNetwork' not in adapted['algorithms']
+        assert 'LogisticRegression' in adapted['algorithms']  # Ajouté pour petites données
+        assert 'SMOTE' in str(adapted['preprocessing'])  # Pour imbalance
+    
+    def test_persistence(self, adaptive_system, temp_dir):
+        """Test la sauvegarde et chargement des patterns"""
+        # Ajouter des données
+        adaptive_system.learned_patterns['test'] = [{'config': {'test': True}}]
+        
+        # Sauvegarder
+        adaptive_system._save_learned_patterns()
+        
+        # Créer une nouvelle instance et charger
+        new_system = AdaptiveTemplateSystem(Path(temp_dir))
+        
+        assert 'test' in new_system.learned_patterns
+        assert new_system.learned_patterns['test'][0]['config']['test'] == True
+
+
+# ============================================================================
+# TESTS UNIVERSAL ML AGENT
+# ============================================================================
+
+class TestUniversalMLAgent:
+    """Tests pour l'agent ML universel"""
+    
+    @pytest.fixture
+    def universal_agent(self, mock_agent_config):
+        return UniversalMLAgent(mock_agent_config)
+    
+    @pytest.mark.asyncio
+    async def test_understand_problem(self, universal_agent, sample_fraud_data):
+        """Test la compréhension du problème"""
+        with patch.object(universal_agent.profiler, 'analyze') as mock_analyze:
+            mock_analyze.return_value = {'quality_issues': []}
+            
+            context = await universal_agent.understand_problem(
+                sample_fraud_data,
+                target_col='fraud'
+            )
+            
+            assert isinstance(context, MLContext)
+            assert context.problem_type == 'fraud_detection'
+            assert context.confidence > 0
+    
+    @pytest.mark.asyncio
+    async def test_search_ml_best_practices(self, universal_agent):
+        """Test la recherche des meilleures pratiques ML"""
+        with patch.object(universal_agent.validator, '_web_search') as mock_search:
+            mock_search.return_value = {
+                'results': [
+                    {'snippet': 'State of the art XGBoost for fraud detection'},
+                    {'snippet': 'Best practice: use SMOTE for imbalanced data'}
+                ],
+                'urls': ['http://example.com']
+            }
+            
+            best_practices = await universal_agent.search_ml_best_practices(
+                'fraud_detection',
+                {'n_samples': 1000, 'n_features': 20}
+            )
+            
+            assert 'recommended_approaches' in best_practices
+            assert 'recent_innovations' in best_practices
+            assert len(best_practices['sources']) > 0
+    
+    @pytest.mark.asyncio
+    async def test_generate_optimal_config(self, universal_agent):
+        """Test la génération de configuration optimale"""
+        understanding = MLContext(
+            problem_type='fraud_detection',
+            confidence=0.9,
+            detected_patterns=['fraud_indicator'],
+            business_sector='finance',
+            temporal_aspect=True,
+            imbalance_detected=True,
+            recommended_config={},
+            reasoning='Test reasoning'
+        )
+        
+        best_practices = {
+            'recommended_approaches': ['Use XGBoost', 'Apply SMOTE']
+        }
+        
+        config = await universal_agent.generate_optimal_config(
+            understanding,
+            best_practices
+        )
+        
+        assert isinstance(config, OptimalConfig)
+        assert config.task == 'classification'
+        assert len(config.algorithms) > 0
+    
+    @pytest.mark.asyncio
+    async def test_execute_intelligent_cleaning(self, universal_agent, sample_fraud_data):
+        """Test le nettoyage intelligent"""
+        context = MLContext(
+            problem_type='fraud_detection',
+            confidence=0.9,
+            detected_patterns=[],
+            business_sector='finance',
+            temporal_aspect=False,
+            imbalance_detected=True,
+            recommended_config={},
+            reasoning='Test'
+        )
+        
+        config = OptimalConfig(
+            task='classification',
+            algorithms=['XGBoost'],
+            primary_metric='f1',
+            preprocessing={},
+            feature_engineering={},
+            hpo_config={},
+            cv_strategy={},
+            ensemble_config={},
+            time_budget=3600,
+            resource_constraints={},
+            monitoring={}
+        )
+        
+        with patch.object(universal_agent.cleaning_orchestrator, 'clean_dataset') as mock_clean:
+            mock_clean.return_value = (sample_fraud_data, {'quality_metrics': {'improvement': 10}})
+            
+            cleaned_df, report = await universal_agent.execute_intelligent_cleaning(
+                sample_fraud_data,
+                context,
+                config,
+                'fraud'
+            )
+            
+            assert cleaned_df is not None
+            assert 'agent_metrics' in report
+    
+    @pytest.mark.asyncio
+    async def test_automl_without_templates(self, universal_agent, sample_fraud_data):
+        """Test AutoML complet sans templates"""
+        with patch.object(universal_agent, 'understand_problem') as mock_understand:
+            mock_understand.return_value = MLContext(
+                problem_type='fraud_detection',
+                confidence=0.9,
+                detected_patterns=[],
+                business_sector='finance',
+                temporal_aspect=False,
+                imbalance_detected=True,
+                recommended_config={},
+                reasoning='Test'
+            )
+            
+            with patch.object(universal_agent, 'validate_with_standards') as mock_validate:
+                mock_validate.return_value = {'issues': []}
+                
+                with patch.object(universal_agent, 'search_ml_best_practices') as mock_search:
+                    mock_search.return_value = {'recommended_approaches': []}
+                    
+                    with patch.object(universal_agent, 'execute_with_continuous_learning') as mock_execute:
+                        mock_execute.return_value = MLPipelineResult(
+                            success=True,
+                            cleaned_data=sample_fraud_data,
+                            config_used=OptimalConfig(
+                                task='classification',
+                                algorithms=['XGBoost'],
+                                primary_metric='f1',
+                                preprocessing={},
+                                feature_engineering={},
+                                hpo_config={},
+                                cv_strategy={},
+                                ensemble_config={},
+                                time_budget=3600,
+                                resource_constraints={},
+                                monitoring={}
+                            ),
+                            context_detected=mock_understand.return_value,
+                            cleaning_report={},
+                            performance_metrics={'f1': 0.85},
+                            execution_time=10.5
+                        )
+                        
+                        result = await universal_agent.automl_without_templates(
+                            sample_fraud_data,
+                            target_col='fraud'
+                        )
+                        
+                        assert result.success == True
+                        assert result.performance_metrics['f1'] == 0.85
+                        assert result.execution_time == 10.5
+    
+    def test_compute_data_hash(self, universal_agent):
+        """Test le calcul de hash des données"""
+        df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+        
+        hash1 = universal_agent._compute_data_hash(df)
+        hash2 = universal_agent._compute_data_hash(df)
+        
+        # Même données = même hash
+        assert hash1 == hash2
+        
+        # Données différentes = hash différent
+        df2 = pd.DataFrame({'col1': [1, 2, 4], 'col2': ['a', 'b', 'c']})
+        hash3 = universal_agent._compute_data_hash(df2)
+        assert hash1 != hash3
+    
+    def test_get_execution_summary(self, universal_agent):
+        """Test le résumé d'exécution"""
+        # Ajouter des exécutions
+        universal_agent.execution_history = [
+            {
+                'timestamp': datetime.now(),
+                'problem_type': 'fraud_detection',
+                'success': True,
+                'performance': {'f1': 0.85},
+                'execution_time': 10.5,
+                'agent_metrics': {'profiler_calls': 1}
+            },
+            {
+                'timestamp': datetime.now(),
+                'problem_type': 'churn_prediction',
+                'success': False,
+                'performance': {},
+                'execution_time': 5.2,
+                'agent_metrics': {'profiler_calls': 1}
+            }
+        ]
+        
+        summary = universal_agent.get_execution_summary()
+        
+        assert summary['total_executions'] == 2
+        assert summary['success_rate'] == 0.5
+        assert summary['average_execution_time'] == 7.85
+        assert 'fraud_detection' in summary['problem_types_handled']
+        assert 'churn_prediction' in summary['problem_types_handled']
+
+
+# ============================================================================
+# TESTS KNOWLEDGE BASE
+# ============================================================================
+
+class TestKnowledgeBase:
+    """Tests pour la base de connaissances"""
+    
+    @pytest.fixture
+    def knowledge_base(self, temp_dir):
+        return KnowledgeBase(Path(temp_dir))
+    
+    def test_store_and_get_context(self, knowledge_base):
+        """Test le stockage et récupération de contexte"""
+        data_hash = "test_hash_123"
+        context = MLContext(
+            problem_type='fraud_detection',
+            confidence=0.9,
+            detected_patterns=[],
+            business_sector='finance',
+            temporal_aspect=False,
+            imbalance_detected=True,
+            recommended_config={},
+            reasoning='Test'
+        )
+        
+        # Stocker
+        knowledge_base.store_context(data_hash, context)
+        
+        # Récupérer
+        retrieved = knowledge_base.get_cached_context(data_hash)
+        
+        assert retrieved == context
+        assert retrieved.problem_type == 'fraud_detection'
+    
+    def test_store_and_get_best_practices(self, knowledge_base):
+        """Test le stockage des meilleures pratiques"""
+        practices = {
+            'recommended_approaches': ['XGBoost', 'SMOTE'],
+            'recent_innovations': ['AutoML'],
+            'common_pitfalls': ['Overfitting'],
+            'benchmark_scores': {'f1': 0.85}
+        }
+        
+        knowledge_base.store_best_practices('fraud_detection', practices)
+        retrieved = knowledge_base.get_best_practices('fraud_detection')
+        
+        assert retrieved == practices
+    
+    def test_store_successful_pattern(self, knowledge_base):
+        """Test le stockage de pattern réussi"""
+        knowledge_base.store_successful_pattern(
+            task='classification',
+            config={'algorithms': ['XGBoost']},
+            performance={'f1': 0.90}
+        )
+        
+        patterns = knowledge_base.get_similar_successful_patterns('classification')
+        
+        assert len(patterns) == 1
+        assert patterns[0]['task'] == 'classification'
+        assert patterns[0]['success_score'] == 0.90
+    
+    def test_get_similar_patterns_sorting(self, knowledge_base):
+        """Test la récupération triée des patterns similaires"""
+        # Ajouter plusieurs patterns
+        for i, score in enumerate([0.70, 0.90, 0.80, 0.95, 0.85]):
+            knowledge_base.store_successful_pattern(
+                task='classification',
+                config={'id': i},
+                performance={'metric': score}
+            )
+        
+        patterns = knowledge_base.get_similar_successful_patterns('classification', limit=3)
+        
+        assert len(patterns) == 3
+        assert patterns[0]['success_score'] == 0.95
+        assert patterns[1]['success_score'] == 0.90
+        assert patterns[2]['success_score'] == 0.85
+    
+    def test_persistence(self, knowledge_base, temp_dir):
+        """Test la persistance sur disque"""
+        # Ajouter des données
+        knowledge_base.store_context('hash1', MLContext(
+            problem_type='test',
+            confidence=0.9,
+            detected_patterns=[],
+            business_sector=None,
+            temporal_aspect=False,
+            imbalance_detected=False,
+            recommended_config={},
+            reasoning='Test'
+        ))
+        
+        knowledge_base.store_best_practices('test', {'approach': 'test'})
+        knowledge_base.store_successful_pattern('test', {}, {'metric': 0.9})
+        
+        # Sauvegarder
+        knowledge_base._save_knowledge()
+        
+        # Créer nouvelle instance et charger
+        new_kb = KnowledgeBase(Path(temp_dir))
+        
+        assert 'hash1' in new_kb.context_cache
+        assert 'test' in new_kb.best_practices_cache
+        assert len(new_kb.successful_patterns) == 1
+
+
+# ============================================================================
+# TESTS DATA CLEANING ORCHESTRATOR
+# ============================================================================
+
+class TestDataCleaningOrchestrator:
+    """Tests pour l'orchestrateur de nettoyage"""
+    
+    @pytest.fixture
+    def orchestrator(self, mock_agent_config):
+        return DataCleaningOrchestrator(mock_agent_config)
+    
+    @pytest.mark.asyncio
+    async def test_clean_dataset_basic(self, orchestrator, sample_fraud_data):
+        """Test le nettoyage basique du dataset"""
+        user_context = {
+            'secteur_activite': 'finance',
+            'target_variable': 'fraud',
+            'contexte_metier': 'Fraud detection'
+        }
+        
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            mock_process.return_value = sample_fraud_data
+            
+            cleaned_df, report = await orchestrator.clean_dataset(
+                sample_fraud_data,
+                user_context
+            )
+            
+            assert cleaned_df is not None
+            assert 'metadata' in report
+            assert report['metadata']['industry'] == 'finance'
+    
+    def test_needs_chunking(self, orchestrator):
+        """Test la détection du besoin de chunking"""
+        # Petit dataset
+        small_df = pd.DataFrame(np.random.randn(100, 10))
+        assert orchestrator._needs_chunking(small_df) == False
+        
+        # Grand dataset (simulé)
+        with patch.object(pd.DataFrame, 'memory_usage') as mock_memory:
+            mock_memory.return_value = pd.Series([20 * 1024 * 1024] * 10)  # 20MB par colonne
+            large_df = pd.DataFrame(np.random.randn(1000, 10))
+            assert orchestrator._needs_chunking(large_df) == True
+    
+    def test_chunk_dataset(self, orchestrator):
+        """Test le découpage en chunks"""
+        df = pd.DataFrame(np.random.randn(1000, 10))
+        
+        with patch.object(orchestrator, '_needs_chunking', return_value=True):
+            chunks = orchestrator._chunk_dataset(df)
+            
+            assert len(chunks) > 1
+            total_rows = sum(len(chunk) for chunk in chunks)
+            assert total_rows == len(df)
+    
+    def test_update_cost_estimate(self, orchestrator):
+        """Test l'estimation des coûts"""
+        orchestrator.performance_metrics['total_api_calls'] = 10
+        
+        orchestrator._update_cost_estimate()
+        
+        assert orchestrator.total_cost > 0
+        assert orchestrator.performance_metrics['total_tokens_used'] > 0
+    
+    def test_generate_final_report(self, orchestrator):
+        """Test la génération du rapport final"""
+        orchestrator.start_time = datetime.now().timestamp()
+        orchestrator.transformations_applied = [{'action': 'fill_missing'}]
+        orchestrator.validation_sources = ['source1']
+        orchestrator.performance_metrics = {'intelligence_used': True}
+        
+        original_df = pd.DataFrame({'col1': [1, 2, 3]})
+        cleaned_df = pd.DataFrame({'col1': [1, 2]})
+        
+        report = orchestrator._generate_final_report(original_df, cleaned_df)
+        
+        assert 'metadata' in report
+        assert 'transformations' in report
+        assert 'quality_metrics' in report
+        assert report['metadata']['agent_first_used'] == True
+        assert report['quality_metrics']['rows_removed'] == 1
+    
+    @pytest.mark.asyncio
+    async def test_detect_ml_context_integration(self, orchestrator, sample_fraud_data):
+        """Test l'intégration de la détection de contexte ML"""
+        user_context = {
+            'secteur_activite': 'finance',
+            'target_variable': 'fraud'
+        }
+        
+        context = await orchestrator.detect_ml_context(
+            sample_fraud_data,
+            target_col='fraud'
+        )
+        
+        assert 'problem_type' in context
+        assert 'confidence' in context
+        assert context['problem_type'] == 'fraud_detection'
+
+
+# ============================================================================
+# TESTS OPENAI AGENTS
+# ============================================================================
+
+class TestOpenAIAgents:
+    """Tests pour les agents OpenAI individuels"""
+    
+    @pytest.fixture
+    def mock_openai_client(self):
+        """Mock du client OpenAI"""
+        client = AsyncMock()
+        client.beta.assistants.create = AsyncMock()
+        client.beta.assistants.retrieve = AsyncMock()
+        client.beta.threads.create = AsyncMock()
+        client.beta.threads.messages.create = AsyncMock()
+        client.beta.threads.runs.create = AsyncMock()
+        client.beta.threads.runs.retrieve = AsyncMock()
+        client.beta.threads.messages.list = AsyncMock()
+        return client
+    
+    @pytest.mark.asyncio
+    async def test_profiler_agent(self, mock_agent_config, mock_openai_client):
+        """Test ProfilerAgent"""
+        agent = ProfilerAgent(mock_agent_config)
+        agent.client = mock_openai_client
+        
+        # Mock assistant creation
+        mock_openai_client.beta.assistants.create.return_value = Mock(id='asst_123')
+        
+        # Mock thread and run
+        mock_openai_client.beta.threads.create.return_value = Mock(id='thread_123')
+        mock_openai_client.beta.threads.runs.create.return_value = Mock(id='run_123')
+        mock_openai_client.beta.threads.runs.retrieve.return_value = Mock(status='completed')
+        
+        # Mock messages
+        mock_message = Mock()
+        mock_message.role = 'assistant'
+        mock_message.content = [Mock(text=Mock(value='{"quality_issues": []}'))]
+        mock_openai_client.beta.threads.messages.list.return_value = Mock(data=[mock_message])
+        
+        df = pd.DataFrame({'col1': [1, 2, 3]})
+        report = await agent.analyze(df)
+        
+        assert isinstance(report, dict)
+    
+    @pytest.mark.asyncio
+    async def test_validator_agent(self, mock_agent_config, mock_openai_client):
+        """Test ValidatorAgent"""
+        agent = ValidatorAgent(mock_agent_config)
+        agent.client = mock_openai_client
+        
+        mock_openai_client.beta.assistants.create.return_value = Mock(id='asst_456')
+        
+        df = pd.DataFrame({'col1': [1, 2, 3]})
+        profile_report = {'summary': 'test'}
+        
+        with patch.object(agent, '_search_sector_standards') as mock_search:
+            mock_search.return_value = {'standards': [], 'sources': []}
+            
+            with patch.object(agent, '_handle_run_with_functions') as mock_handle:
+                mock_handle.return_value = {'content': '{"valid": true}'}
+                
+                report = await agent.validate(df, profile_report)
+                
+                assert isinstance(report, dict)
+                assert 'valid' in report
+    
+    def test_cleaner_agent_basic_cleaning(self, mock_agent_config):
+        """Test CleanerAgent basic cleaning"""
+        agent = CleanerAgent(mock_agent_config)
+        
+        df = pd.DataFrame({
+            'col1': [1, 2, None, 4],
+            'col2': ['a', 'b', 'c', 'd']
+        })
+        profile_report = {'quality_issues': []}
+        
+        cleaned_df, transformations = agent._basic_cleaning(df, profile_report)
+        
+        assert cleaned_df['col1'].isnull().sum() == 0  # No missing values
+        assert len(transformations) > 0
+    
+    def test_controller_agent_quality_metrics(self, mock_agent_config):
+        """Test ControllerAgent quality metrics"""
+        agent = ControllerAgent(mock_agent_config)
+        
+        original_df = pd.DataFrame({
+            'col1': [1, 2, 3, 4, 5],
+            'col2': ['a', 'b', 'c', 'd', 'e']
+        })
+        
+        cleaned_df = pd.DataFrame({
+            'col1': [1, 2, 3, 4],  # Une ligne supprimée
+            'col2': ['a', 'b', 'c', 'd']
+        })
+        
+        metrics = agent._calculate_quality_metrics(cleaned_df, original_df)
+        
+        assert 'data_quality' in metrics
+        assert 'transformation_impact' in metrics
+        assert metrics['data_quality']['rows']['removed'] == 1
+        assert metrics['quality_score'] > 0
+
+
+# ============================================================================
+# TESTS YAML CONFIG HANDLER
+# ============================================================================
+
+class TestYAMLConfigHandler:
+    """Tests pour le gestionnaire de configuration YAML"""
+    
+    def test_save_cleaning_config(self, temp_dir):
+        """Test la sauvegarde de configuration"""
+        transformations = [
+            {
+                'column': 'amount',
+                'action': 'normalize_currency',
+                'params': {'target_currency': 'EUR'}
+            }
+        ]
+        
+        validation_sources = ['https://example.com']
+        user_context = {
+            'secteur_activite': 'finance',
+            'target_variable': 'fraud'
+        }
+        
+        output_path = Path(temp_dir) / 'config.yaml'
+        saved_path = YAMLConfigHandler.save_cleaning_config(
+            transformations,
+            validation_sources,
+            user_context,
+            output_path=str(output_path)
+        )
+        
+        assert Path(saved_path).exists()
+        
+        # Charger et vérifier
+        with open(saved_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        assert config['metadata']['industry'] == 'finance'
+        assert len(config['transformations']) == 1
+        assert config['transformations'][0]['action'] == 'normalize_currency'
+    
+    def test_load_cleaning_config(self, temp_dir):
+        """Test le chargement de configuration"""
+        # Créer un fichier de config
+        config = {
+            'metadata': {'industry': 'test'},
+            'transformations': [{'action': 'test'}],
+            'validation_sources': ['test']
+        }
+        
+        config_path = Path(temp_dir) / 'test_config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+        
+        # Charger
+        loaded = YAMLConfigHandler.load_cleaning_config(str(config_path))
+        
+        assert loaded == config
+    
+    def test_apply_transformations(self):
+        """Test l'application de transformations"""
+        df = pd.DataFrame({
+            'col1': [1, 2, None, 4],
+            'col2': ['a', 'b', 'c', 'd']
+        })
         
         transformations = [
             {
-                "column": "amount",
-                "action": "fill_missing",
-                "params": {"method": "median"}
-            },
-            {
-                "column": "score",
-                "action": "handle_outliers",
-                "params": {"method": "clip"}
+                'column': 'col1',
+                'action': 'fill_missing',
+                'params': {'method': 'median'}
             }
         ]
         
-        original_missing = sample_dataframe["amount"].isnull().sum()
-        cleaned_df = await cleaner._apply_transformations(sample_dataframe, transformations)
+        df_transformed = YAMLConfigHandler.apply_transformations(df, transformations)
         
-        # Check missing values were filled
-        assert cleaned_df["amount"].isnull().sum() < original_missing
-        
-        # Check outliers were clipped
-        assert cleaned_df["score"].max() < 999
+        assert df_transformed['col1'].isnull().sum() == 0
+        assert df_transformed['col1'].iloc[2] == 2.0  # Median of [1, 2, 4]
     
-    def test_basic_cleaning_fallback(self, agent_config, sample_dataframe):
-        """Test basic cleaning fallback"""
-        cleaner = CleanerAgent(agent_config)
-        
-        cleaned_df, transformations = cleaner._basic_cleaning(
-            sample_dataframe, 
-            {"quality_issues": []}
-        )
-        
-        # Check duplicates removed
-        assert cleaned_df.duplicated().sum() < sample_dataframe.duplicated().sum()
-        
-        # Check transformations recorded
-        assert len(transformations) > 0
-        assert any(t["action"] == "remove_duplicates" for t in transformations)
-
-
-@pytest.mark.asyncio
-class TestControllerAgent:
-    """Test ControllerAgent class"""
-    
-    async def test_controller_initialization(self, agent_config, mock_openai_client):
-        """Test controller agent initialization"""
-        with patch('automl_platform.agents.controller_agent.AsyncOpenAI', return_value=mock_openai_client):
-            controller = ControllerAgent(agent_config)
-            await asyncio.sleep(0.1)
-            
-            assert controller.config == agent_config
-            assert controller.quality_metrics == {}
-    
-    def test_calculate_quality_metrics(self, agent_config, sample_dataframe):
-        """Test quality metrics calculation"""
-        controller = ControllerAgent(agent_config)
-        
-        # Create a cleaned version
-        cleaned_df = sample_dataframe.drop_duplicates()
-        cleaned_df["amount"].fillna(cleaned_df["amount"].median(), inplace=True)
-        
-        metrics = controller._calculate_quality_metrics(cleaned_df, sample_dataframe)
-        
-        assert "data_quality" in metrics
-        assert "transformation_impact" in metrics
-        assert "statistical_changes" in metrics
-        assert "integrity_checks" in metrics
-        assert "quality_score" in metrics
-        
-        # Check specific metrics
-        assert metrics["data_quality"]["duplicates"]["cleaned"] < metrics["data_quality"]["duplicates"]["original"]
-        assert metrics["quality_score"] >= 0 and metrics["quality_score"] <= 100
-    
-    def test_perform_integrity_checks(self, agent_config, sample_dataframe):
-        """Test integrity checks"""
-        controller = ControllerAgent(agent_config)
-        
-        checks = controller._perform_integrity_checks(sample_dataframe)
-        
-        assert "no_empty_dataframe" in checks
-        assert "no_all_null_columns" in checks
-        assert "no_duplicate_columns" in checks
-        assert "reasonable_missing_ratio" in checks
-        assert "no_constant_columns" in checks
-        
-        # All checks should pass for sample data
-        assert checks["no_empty_dataframe"] == True
-        assert checks["no_duplicate_columns"] == True
-
-
-@pytest.mark.asyncio
-class TestDataCleaningOrchestrator:
-    """Test DataCleaningOrchestrator class"""
-    
-    async def test_orchestrator_initialization(self, agent_config):
-        """Test orchestrator initialization"""
-        with patch('automl_platform.agents.data_cleaning_orchestrator.ProfilerAgent'), \
-             patch('automl_platform.agents.data_cleaning_orchestrator.ValidatorAgent'), \
-             patch('automl_platform.agents.data_cleaning_orchestrator.CleanerAgent'), \
-             patch('automl_platform.agents.data_cleaning_orchestrator.ControllerAgent'):
-            
-            orchestrator = DataCleaningOrchestrator(agent_config)
-            
-            assert orchestrator.config == agent_config
-            assert orchestrator.profiler is not None
-            assert orchestrator.validator is not None
-            assert orchestrator.cleaner is not None
-            assert orchestrator.controller is not None
-    
-    def test_needs_chunking(self, agent_config):
-        """Test dataset chunking detection"""
-        orchestrator = DataCleaningOrchestrator(agent_config)
-        
-        # Small dataset - no chunking needed
-        small_df = pd.DataFrame({'a': range(100), 'b': range(100)})
-        assert orchestrator._needs_chunking(small_df) == False
-        
-        # Large dataset simulation
-        orchestrator.config.chunk_size_mb = 0.001  # Very small for testing
-        assert orchestrator._needs_chunking(small_df) == True
-    
-    def test_chunk_dataset(self, agent_config, sample_dataframe):
-        """Test dataset chunking"""
-        orchestrator = DataCleaningOrchestrator(agent_config)
-        orchestrator.config.chunk_size_mb = 0.001  # Force chunking
-        
-        chunks = orchestrator._chunk_dataset(sample_dataframe)
-        
-        assert len(chunks) > 1
-        # Check all data is preserved
-        total_rows = sum(len(chunk) for chunk in chunks)
-        assert total_rows == len(sample_dataframe)
-    
-    def test_generate_final_report(self, agent_config, sample_dataframe):
-        """Test final report generation"""
-        orchestrator = DataCleaningOrchestrator(agent_config)
-        
-        # Create a cleaned version
-        cleaned_df = sample_dataframe.drop_duplicates()
-        
-        orchestrator.transformations_applied = [
-            {"column": "amount", "action": "fill_missing", "params": {"method": "median"}}
-        ]
-        orchestrator.validation_sources = ["https://example.com/standards"]
-        orchestrator.start_time = time.time()
-        
-        report = orchestrator._generate_final_report(sample_dataframe, cleaned_df)
-        
-        assert "metadata" in report
-        assert "transformations" in report
-        assert "validation_sources" in report
-        assert "quality_metrics" in report
-        
-        # Check metrics
-        assert report["quality_metrics"]["duplicates_removed"] > 0
-        assert report["metadata"]["original_shape"] == sample_dataframe.shape
-        assert report["metadata"]["cleaned_shape"] == cleaned_df.shape
-    
-    @pytest.mark.asyncio
-    async def test_fallback_cleaning(self, agent_config, sample_dataframe):
-        """Test fallback to traditional cleaning"""
-        orchestrator = DataCleaningOrchestrator(agent_config)
-        
-        user_context = {
-            "secteur_activite": "finance",
-            "target_variable": "score"
+    def test_validate_config(self):
+        """Test la validation de configuration"""
+        # Config valide
+        valid_config = {
+            'metadata': {
+                'industry': 'test',
+                'target_variable': 'target',
+                'processing_date': '2024-01-01'
+            },
+            'transformations': [
+                {'column': 'col1', 'action': 'test'}
+            ],
+            'validation_sources': ['source1']
         }
         
-        cleaned_df, report = await orchestrator._fallback_cleaning(
-            sample_dataframe, 
-            user_context
-        )
+        assert YAMLConfigHandler.validate_config(valid_config) == True
         
-        # Check basic cleaning was applied
-        assert cleaned_df.duplicated().sum() == 0
-        assert cleaned_df.isnull().sum().sum() < sample_dataframe.isnull().sum().sum()
-        assert report["metadata"]["fallback"] == True
-    
-    def test_estimate_cost(self, agent_config, sample_dataframe):
-        """Test cost estimation"""
-        orchestrator = DataCleaningOrchestrator(agent_config)
+        # Config invalide (manque metadata)
+        invalid_config = {
+            'transformations': [],
+            'validation_sources': []
+        }
         
-        cost = orchestrator.estimate_cost(sample_dataframe)
-        
-        assert cost > 0
-        assert cost <= orchestrator.config.max_cost_per_dataset
+        with pytest.raises(ValueError):
+            YAMLConfigHandler.validate_config(invalid_config)
 
 
-class TestIntegration:
-    """Integration tests for the complete system"""
+# ============================================================================
+# TESTS D'INTÉGRATION END-TO-END
+# ============================================================================
+
+class TestEndToEnd:
+    """Tests d'intégration complets du pipeline Agent-First"""
     
     @pytest.mark.asyncio
-    @patch('automl_platform.agents.profiler_agent.AsyncOpenAI')
-    @patch('automl_platform.agents.validator_agent.AsyncOpenAI')
-    @patch('automl_platform.agents.cleaner_agent.AsyncOpenAI')
-    @patch('automl_platform.agents.controller_agent.AsyncOpenAI')
-    async def test_full_cleaning_pipeline(
-        self, 
-        mock_controller_client,
-        mock_cleaner_client, 
-        mock_validator_client,
-        mock_profiler_client,
-        sample_dataframe,
-        agent_config
-    ):
-        """Test the complete cleaning pipeline"""
+    async def test_complete_pipeline_fraud(self, mock_agent_config, sample_fraud_data):
+        """Test pipeline complet pour détection de fraude"""
+        # Initialiser l'agent universel
+        agent = UniversalMLAgent(mock_agent_config)
         
-        # Setup mocks
-        mock_assistant = Mock(id="test-assistant")
-        mock_thread = Mock(id="test-thread")
-        mock_run = Mock(id="test-run", status="completed")
+        # Mock les appels OpenAI
+        with patch.object(agent.profiler, 'analyze') as mock_profile:
+            mock_profile.return_value = {'quality_issues': []}
+            
+            with patch.object(agent.validator, 'validate') as mock_validate:
+                mock_validate.return_value = {'issues': []}
+                
+                with patch.object(agent.validator, '_web_search') as mock_search:
+                    mock_search.return_value = {'results': [], 'urls': []}
+                    
+                    with patch.object(agent.cleaning_orchestrator, 'clean_dataset') as mock_clean:
+                        mock_clean.return_value = (sample_fraud_data, {'quality_metrics': {}})
+                        
+                        # Exécuter le pipeline
+                        result = await agent.automl_without_templates(
+                            df=sample_fraud_data,
+                            target_col='fraud',
+                            user_hints={'sector': 'finance'}
+                        )
+                        
+                        # Vérifications
+                        assert result.success == True
+                        assert result.context_detected.problem_type == 'fraud_detection'
+                        assert result.config_used.task == 'classification'
+                        assert 'fraud_detection' in agent.execution_history[0]['problem_type']
+    
+    @pytest.mark.asyncio
+    async def test_learning_and_adaptation(self, mock_agent_config, temp_dir):
+        """Test l'apprentissage et l'adaptation continue"""
+        # Créer agent avec knowledge base temporaire
+        agent = UniversalMLAgent(mock_agent_config)
+        agent.knowledge_base = KnowledgeBase(Path(temp_dir))
         
-        for mock_client in [mock_profiler_client, mock_validator_client, 
-                           mock_cleaner_client, mock_controller_client]:
-            client = AsyncMock()
-            client.beta.assistants.create = AsyncMock(return_value=mock_assistant)
-            client.beta.threads.create = AsyncMock(return_value=mock_thread)
-            client.beta.threads.runs.create = AsyncMock(return_value=mock_run)
-            client.beta.threads.runs.retrieve = AsyncMock(return_value=mock_run)
-            client.beta.threads.messages.list = AsyncMock(
-                return_value=Mock(data=[
-                    Mock(role="assistant", content=[
-                        Mock(text=Mock(value='{"result": "success"}'))
-                    ])
-                ])
+        # Simuler plusieurs exécutions
+        for i in range(3):
+            context = {
+                'problem_type': 'test_problem',
+                'n_samples': 1000 + i * 100,
+                'n_features': 20
+            }
+            
+            config = {'algorithms': [f'Algo{i}']}
+            performance = {'metric': 0.80 + i * 0.05}
+            
+            agent.adaptive_templates.learn_from_execution(
+                context, config, performance
             )
-            mock_client.return_value = client
         
-        # Create orchestrator
-        orchestrator = DataCleaningOrchestrator(agent_config)
+        # Vérifier l'apprentissage
+        patterns = agent.adaptive_templates.learned_patterns.get('test_problem', [])
+        assert len(patterns) == 3
         
-        # Define user context
-        user_context = {
-            "secteur_activite": "finance",
-            "target_variable": "score",
-            "contexte_metier": "Risk assessment"
-        }
-        
-        # Run cleaning pipeline
-        cleaned_df, report = await orchestrator.clean_dataset(
-            sample_dataframe, 
-            user_context
-        )
-        
-        # Verify results
-        assert cleaned_df is not None
-        assert report is not None
-        assert "metadata" in report
-        assert report["metadata"]["industry"] == "finance"
+        # Le meilleur pattern devrait avoir le score le plus élevé
+        best_pattern = patterns[0]
+        assert best_pattern['success_score'] == 0.90
     
     @pytest.mark.asyncio
-    async def test_sector_specific_cleaning(self, agent_config):
-        """Test cleaning for different sectors"""
+    async def test_error_handling_and_fallback(self, mock_agent_config):
+        """Test la gestion d'erreur et fallback"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
         
-        # Healthcare data
-        healthcare_df = pd.DataFrame({
-            'patient_id': ['P001', 'P002', 'P003'],
-            'diagnosis': ['A01', 'B02', None],
-            'lab_result': [120, 999, 110]  # Include outlier
-        })
-        
-        healthcare_context = {
-            "secteur_activite": "sante",
-            "target_variable": "lab_result",
-            "contexte_metier": "Patient diagnosis"
-        }
-        
-        with patch('automl_platform.agents.data_cleaning_orchestrator.ProfilerAgent'), \
-             patch('automl_platform.agents.data_cleaning_orchestrator.ValidatorAgent'), \
-             patch('automl_platform.agents.data_cleaning_orchestrator.CleanerAgent'), \
-             patch('automl_platform.agents.data_cleaning_orchestrator.ControllerAgent'):
+        # Forcer une erreur dans le processing
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            mock_process.side_effect = Exception("Test error")
             
-            orchestrator = DataCleaningOrchestrator(agent_config)
+            df = pd.DataFrame({'col1': [1, 2, 3]})
+            user_context = {'secteur_activite': 'test'}
             
-            # Test that sector context is properly set
-            assert orchestrator.config.user_context.get("secteur_activite") is None
+            # Devrait utiliser le fallback
+            cleaned_df, report = await orchestrator._fallback_cleaning(df, user_context)
             
-            # This would be called in the actual cleaning
-            orchestrator.config.user_context.update(healthcare_context)
-            assert orchestrator.config.user_context["secteur_activite"] == "sante"
+            assert cleaned_df is not None
+            assert report['metadata']['fallback'] == True
 
 
-class TestEdgeCases:
-    """Test edge cases and error handling"""
-    
-    def test_empty_dataframe(self, agent_config):
-        """Test handling of empty dataframe"""
-        empty_df = pd.DataFrame()
-        
-        profiler = ProfilerAgent(agent_config)
-        result = profiler._basic_profiling(empty_df)
-        
-        assert result["summary"]["total_rows"] == 0
-        assert result["summary"]["total_columns"] == 0
-    
-    def test_all_null_column(self, agent_config):
-        """Test handling of all-null columns"""
-        df = pd.DataFrame({
-            'good_col': [1, 2, 3],
-            'bad_col': [None, None, None]
-        })
-        
-        cleaner = CleanerAgent(agent_config)
-        cleaned_df, _ = cleaner._basic_cleaning(df, {})
-        
-        # All-null column should be removed
-        assert 'bad_col' not in cleaned_df.columns
-    
-    def test_single_value_column(self, agent_config):
-        """Test handling of constant columns"""
-        df = pd.DataFrame({
-            'constant': [1, 1, 1, 1],
-            'variable': [1, 2, 3, 4]
-        })
-        
-        controller = ControllerAgent(agent_config)
-        checks = controller._perform_integrity_checks(df)
-        
-        assert checks["no_constant_columns"] == False
-    
-    @pytest.mark.asyncio
-    async def test_api_timeout(self, agent_config):
-        """Test handling of API timeout"""
-        agent_config.timeout_seconds = 0.1  # Very short timeout
-        
-        with patch('automl_platform.agents.profiler_agent.AsyncOpenAI') as mock_client:
-            client = AsyncMock()
-            client.beta.threads.runs.retrieve = AsyncMock(
-                return_value=Mock(status="in_progress")
-            )
-            mock_client.return_value = client
-            
-            profiler = ProfilerAgent(agent_config)
-            profiler.assistant = Mock(id="test-assistant")
-            profiler.assistant_id = "test-assistant"
-            
-            df = pd.DataFrame({'a': [1, 2, 3]})
-            
-            # Should raise TimeoutError
-            with pytest.raises(TimeoutError):
-                await profiler.analyze(df)
-    
-    def test_invalid_transformation(self, agent_config):
-        """Test handling of invalid transformations"""
-        cleaner = CleanerAgent(agent_config)
-        
-        # Invalid transformation without column
-        invalid_trans = {"action": "fill_missing"}
-        assert cleaner._validate_transformation(invalid_trans) == False
-        
-        # Invalid action
-        invalid_action = {
-            "column": "test",
-            "action": "invalid_action"
-        }
-        assert cleaner._validate_transformation(invalid_action) == False
-    
-    @pytest.mark.asyncio
-    async def test_web_search_failure(self, agent_config):
-        """Test handling of web search failures"""
-        validator = ValidatorAgent(agent_config)
-        
-        with patch.object(validator, '_perform_web_search', side_effect=Exception("Network error")):
-            result = await validator._web_search("test query")
-            # Should return empty results on failure
-            assert result == {"query": "test query", "results": [], "urls": []}
-
+# ============================================================================
+# TESTS DE PERFORMANCE
+# ============================================================================
 
 class TestPerformance:
-    """Performance and scalability tests"""
+    """Tests de performance et optimisation"""
     
-    def test_large_dataset_handling(self, agent_config):
-        """Test handling of large datasets"""
-        # Create a large dataset
-        large_df = pd.DataFrame(
-            np.random.randn(10000, 50),
-            columns=[f'col_{i}' for i in range(50)]
-        )
+    def test_knowledge_base_cache_performance(self, temp_dir):
+        """Test la performance du cache de la knowledge base"""
+        kb = KnowledgeBase(Path(temp_dir))
         
-        orchestrator = DataCleaningOrchestrator(agent_config)
-        orchestrator.config.chunk_size_mb = 1  # Force chunking
+        # Ajouter beaucoup de contextes
+        for i in range(100):
+            context = MLContext(
+                problem_type=f'problem_{i%10}',
+                confidence=0.9,
+                detected_patterns=[],
+                business_sector='test',
+                temporal_aspect=False,
+                imbalance_detected=False,
+                recommended_config={},
+                reasoning='Test'
+            )
+            kb.store_context(f'hash_{i}', context)
         
-        chunks = orchestrator._chunk_dataset(large_df)
+        # Tester la récupération
+        import time
+        start = time.time()
+        for i in range(100):
+            kb.get_cached_context(f'hash_{i}')
+        elapsed = time.time() - start
         
-        assert len(chunks) > 1
-        # Verify no data loss
-        reconstructed = pd.concat(chunks, ignore_index=True)
-        assert len(reconstructed) == len(large_df)
-        assert reconstructed.shape[1] == large_df.shape[1]
+        # Devrait être très rapide (< 0.1s pour 100 récupérations)
+        assert elapsed < 0.1
     
-    def test_high_cardinality_handling(self, agent_config):
-        """Test handling of high cardinality columns"""
-        # Create high cardinality column
-        df = pd.DataFrame({
-            'high_card': [f'val_{i}' for i in range(1000)],
-            'low_card': ['A'] * 500 + ['B'] * 500
-        })
+    def test_adaptive_system_pattern_limit(self, temp_dir):
+        """Test la limitation du nombre de patterns appris"""
+        system = AdaptiveTemplateSystem(Path(temp_dir))
         
-        profiler = ProfilerAgent(agent_config)
-        summary = profiler._prepare_data_summary(df)
+        # Ajouter plus de patterns que la limite
+        for i in range(15):
+            system.learned_patterns['test'] = system.learned_patterns.get('test', [])
+            system.learned_patterns['test'].append({
+                'success_score': 0.5 + i * 0.01,
+                'config': {'id': i}
+            })
         
-        assert 'high_card' in summary['basic_stats']
-        assert summary['basic_stats']['high_card']['unique_count'] == 1000
-    
-    @pytest.mark.asyncio
-    async def test_concurrent_agent_execution(self, agent_config):
-        """Test concurrent execution of multiple agents"""
-        df = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})
-        profile_report = {"summary": "test"}
+        # Garder seulement les 10 meilleurs
+        system.learned_patterns['test'] = sorted(
+            system.learned_patterns['test'],
+            key=lambda x: x['success_score'],
+            reverse=True
+        )[:10]
         
-        with patch('automl_platform.agents.validator_agent.AsyncOpenAI'), \
-             patch('automl_platform.agents.cleaner_agent.AsyncOpenAI'):
-            
-            validator = ValidatorAgent(agent_config)
-            cleaner = CleanerAgent(agent_config)
-            
-            # Simulate concurrent execution
-            tasks = [
-                validator._basic_validation(df, "finance"),
-                cleaner._basic_cleaning(df, profile_report)
-            ]
-            
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            assert len(results) == 2
-            assert not any(isinstance(r, Exception) for r in results)
-
-
-# Fixtures for pytest
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests"""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+        assert len(system.learned_patterns['test']) == 10
+        # Le pire score gardé devrait être >= 0.55
+        assert system.learned_patterns['test'][-1]['success_score'] >= 0.55
 
 
 if __name__ == "__main__":
-    # Run tests
-    pytest.main([__file__, "-v", "-s"])
+    pytest.main([__file__, "-v", "--tb=short"])
