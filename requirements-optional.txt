@@ -41,7 +41,7 @@
 # - azure-storage-blob>=12.19.0    # Azure Blob Storage
 # - azure-identity>=1.15.0     # Azure authentication
 # - snowflake-connector-python>=3.7.0  # Snowflake
-# - databricks-sql-connector>=2.9.0    # Databricks
+# - databricks-sql-connector>=2.9.0    # Databricks SQL
 
 # ---------- EXTENDED CONNECTORS ----------
 # pip install automl-platform[connectors]
@@ -53,6 +53,9 @@
 # - simple-salesforce>=1.12.5  # Salesforce CRM
 # - pipedrive-python-lib>=1.2.0  # Pipedrive CRM
 # - zoho-crm>=0.5.0            # Zoho CRM
+# - databricks-connect>=14.1.0 # Databricks Spark connector
+# - snowflake-connector-python>=3.7.0  # Also in connectors for data access
+# - google-cloud-bigquery>=3.15.0  # Also in connectors for data access
 # - pyodbc>=5.0.1              # ODBC connections
 # - cx_Oracle>=8.3.0           # Oracle database
 # - pymongo>=4.6.0             # MongoDB
