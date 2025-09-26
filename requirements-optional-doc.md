@@ -180,7 +180,7 @@ Cloud storage and compute:
 - Google Cloud (BigQuery, Storage)
 - Azure (Blob Storage, Identity)
 - Snowflake
-- Databricks
+- Databricks (databricks-sql-connector for SQL)
 
 ### `[connectors]` - Extended Data Connectors
 CRM and database connectors:
@@ -188,6 +188,8 @@ CRM and database connectors:
 - Oracle, MongoDB, Cassandra, Elasticsearch
 - InfluxDB, MySQL
 - Advanced Excel and Google Sheets
+- Databricks (databricks-connect for Spark)
+- Snowflake, BigQuery (also available here for data access)
 
 ### `[streaming]` - Stream Processing
 Real-time data processing:
@@ -212,6 +214,12 @@ ML lifecycle management:
 - BentoML
 - Great Expectations
 
+### `[production]` - Production Deployment
+Production deployment tools:
+- Docker
+- Kubernetes
+- Nginx
+
 ## Development Extras
 
 ### `[dev]` - Development Tools
@@ -233,13 +241,13 @@ Documentation generation:
 ```bash
 pip install automl-platform[enterprise]
 ```
-Includes: api, storage, distributed, mlops, monitoring, auth, sso, orchestration, export, streaming, cloud, connectors
+Includes: api, storage, distributed, mlops, monitoring, auth, sso, orchestration, export, streaming, cloud, connectors, nocode
 
 ### No-Code Experience
 ```bash
 pip install automl-platform[nocode]
 ```
-Includes: connectors, ui_advanced, reporting, viz
+Includes: connectors, ui_advanced, reporting, viz, jupyter, notebook
 
 ### Complete Installation
 ```bash
@@ -256,6 +264,8 @@ Includes all available extras.
 | 3.11          | ✅ Fully Supported |
 | 3.12          | ✅ Fully Supported |
 | 3.13+         | ❌ Not Yet Supported |
+
+**Note**: For Python 3.9 and 3.10, the package automatically installs `tomli` for TOML parsing support.
 
 ## GPU Setup Requirements
 
@@ -277,10 +287,11 @@ if torch.cuda.is_available():
 
 ## Version Compatibility Matrix
 
-| Python | CUDA | PyTorch | TensorFlow |
-|--------|------|---------|------------|
-| 3.9-3.12 | 11.8 | 2.1.x | 2.15.x |
-| 3.10-3.12 | 12.1 | 2.2.x | 2.16.x |
+| Python | CUDA | PyTorch | TensorFlow | tomli |
+|--------|------|---------|------------|-------|
+| 3.9-3.10 | 11.8 | 2.1.x | 2.15.x | Required |
+| 3.11-3.12 | 11.8 | 2.1.x | 2.15.x | Built-in (tomllib) |
+| 3.10-3.12 | 12.1 | 2.2.x | 2.16.x | Conditional |
 
 ## Troubleshooting
 
@@ -308,6 +319,16 @@ import torch
 torch.cuda.empty_cache()
 ```
 
+### TOML Parsing on Python 3.9/3.10
+The platform automatically handles TOML parsing compatibility:
+- Python 3.11+: Uses built-in `tomllib`
+- Python 3.9-3.10: Automatically installs and uses `tomli`
+
+If you encounter issues with `generate_requirements.py`:
+```bash
+pip install tomli>=2.0.1
+```
+
 ## Support
 
 For issues or questions:
@@ -317,7 +338,7 @@ For issues or questions:
 
 ## Version History
 
-- **v3.2.1** (Current): Added intelligent agents extra, harmonized dependencies
+- **v3.2.1** (Current): Added intelligent agents extra, harmonized dependencies, fixed Python 3.9/3.10 compatibility
 - **v3.2.0**: Extended connectors, no-code UI enhancements
 - **v3.1.0**: GPU support, distributed training
 - **v3.0.0**: Enterprise features, SSO, RGPD compliance
