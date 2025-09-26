@@ -1,8 +1,26 @@
 # AutoML Platform pyproject configuration using PEP 621
 
+## Build system configuration
+##
+# Use the modern setuptools build backend.  Setuptools version 61 or
+# newer is required to support PEP 621 in pyproject.toml.  The wheel
+# package is included so that `python -m build` can produce wheels.
+
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = [
+  "setuptools>=61",
+  "wheel"
+]
 build-backend = "setuptools.build_meta"
+
+## Project metadata
+##
+# This section contains the package metadata normally provided to
+# `setup()` in setup.py.  Fields like `name`, `version` and `description`
+# are required, while others (authors, license, URLs) provide useful
+# context for downstream users.  Dependencies defined here correspond
+# to the `install_requires` list from setup.py and are required for
+# core operation of the AutoML platform.
 
 [project]
 name = "automl-platform"
@@ -15,7 +33,7 @@ authors = [
   { name = "AutoML Platform Team", email = "team@automl-platform.com" }
 ]
 
-# Core dependencies - harmonized with setup.py and requirements.txt
+# Core dependencies required by the platform at runtime - harmonized with setup.py and requirements.txt
 dependencies = [
   # Core ML libraries
   "pandas>=2.0.0,<3.0.0",
@@ -163,6 +181,11 @@ dependencies = [
   "gunicorn>=21.2.0",
   "supervisor>=4.2.0",
 ]
+
+# Optional dependency groups (extras)
+#
+# Each extra here corresponds to a logical feature area of the platform.
+# Install one or more extras to extend the platform with specific capabilities.
 
 [project.optional-dependencies]
 # Intelligent Agents (NEW)
@@ -458,6 +481,7 @@ cloud = [
 production = [
   "docker>=7.0.0",
   "kubernetes>=29.0.0",
+  "nginx>=0.2.0",
 ]
 
 # No-code bundle
