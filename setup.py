@@ -161,6 +161,7 @@ install_requires = [
     "jupyter>=1.0.0",
     "notebook>=7.0.0",
     "jupyterlab>=4.0.0",
+    "tomli>=2.0.1;python_version<'3.11'",  # TOML parser for Python 3.9/3.10
 
     # Production
     "gunicorn>=21.2.0",
