@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes all optional dependencies (extras) available for the AutoML Platform.
+This document describes all optional dependencies (extras) available for the AutoML Platform v3.2.1.
 The authoritative source for dependency versions is `pyproject.toml`.
 
 ## Installation
@@ -24,13 +24,25 @@ pip install automl-platform[gpu,deep,monitoring]
 pip install automl-platform[all]
 ```
 
+## NEW: Intelligent Agents Extra
+
+### `[agents]` - AI-Powered Data Cleaning
+Intelligent data cleaning with OpenAI GPT-4:
+- OpenAI API integration
+- Web scraping for validation standards
+- Token counting and cost management
+
+```bash
+pip install automl-platform[agents]
+```
+
 ## GPU-Related Extras
 
 ### `[gpu]` - Core GPU Support
 Essential GPU libraries for acceleration:
-- CUDA array processing (cupy, pycuda)
-- GPU monitoring (gputil, nvidia-ml-py3)
-- Memory profiling (pytorch-memlab)
+- CUDA array processing (cupy, numba)
+- GPU monitoring (gputil, nvidia-ml-py3, pynvml, gpustat)
+- Memory profiling (pytorch-memlab, torch-tb-profiler)
 - Optimized inference (onnxruntime-gpu)
 
 ```bash
@@ -42,6 +54,7 @@ Major deep learning frameworks with GPU support:
 - PyTorch ecosystem (torch, torchvision, torchaudio)
 - TensorFlow
 - PyTorch Lightning
+- PyTorch TabNet
 - Transformers
 
 ```bash
@@ -71,7 +84,6 @@ pip install automl-platform[automl-gpu]
 Production inference optimization:
 - Triton Inference Server client
 - TensorRT (requires manual installation)
-- Torch-TensorRT
 
 ```bash
 pip install automl-platform[serving-gpu]
@@ -90,7 +102,9 @@ Enhanced authentication support:
 - Keycloak integration
 - SAML support
 - Okta integration
+- Microsoft authentication (MSAL)
 - JOSE/JWT utilities
+- OAuth utilities
 
 ### `[sso]` - Single Sign-On
 SSO provider integrations:
@@ -101,10 +115,10 @@ SSO provider integrations:
 
 ### `[api]` - Enhanced API Features
 Production API server features:
-- Async file handling
 - WebSocket support
 - Rate limiting
-- Production WSGI server (Gunicorn)
+- Socket.IO
+- API versioning
 
 ### `[monitoring]` - Observability
 Monitoring and observability tools:
@@ -112,13 +126,13 @@ Monitoring and observability tools:
 - Prometheus metrics
 - Sentry error tracking
 - Datadog integration
-- Evidently for ML monitoring
+- Jaeger distributed tracing
 
 ### `[distributed]` - Distributed Computing
 Distributed processing frameworks:
 - Ray for distributed ML
 - Dask for parallel computing
-- Celery for task queues
+- Dramatiq for task queues
 
 ## ML/Data Science Extras
 
@@ -128,6 +142,8 @@ Model interpretation tools:
 - LIME
 - ELI5
 - InterpretML
+- Alibi
+- Captum
 
 ### `[timeseries]` - Time Series Analysis
 Time series forecasting:
@@ -135,7 +151,9 @@ Time series forecasting:
 - statsmodels
 - pmdarima
 - sktime
+- tsfresh
 - darts
+- neuralforecast
 
 ### `[nlp]` - Natural Language Processing
 NLP libraries:
@@ -143,12 +161,16 @@ NLP libraries:
 - spaCy
 - NLTK
 - Gensim
+- TextBlob
+- Language detection
 
 ### `[vision]` - Computer Vision
 Computer vision tools:
 - OpenCV
 - Pillow
 - Albumentations
+- Supervision
+- Ultralytics (YOLO)
 
 ## Infrastructure Extras
 
@@ -156,13 +178,20 @@ Computer vision tools:
 Cloud storage and compute:
 - AWS (boto3, s3fs)
 - Google Cloud (BigQuery, Storage)
-- Azure (Blob Storage)
+- Azure (Blob Storage, Identity)
 - Snowflake
 - Databricks
 
+### `[connectors]` - Extended Data Connectors
+CRM and database connectors:
+- HubSpot, Salesforce, Pipedrive, Zoho CRM
+- Oracle, MongoDB, Cassandra, Elasticsearch
+- InfluxDB, MySQL
+- Advanced Excel and Google Sheets
+
 ### `[streaming]` - Stream Processing
 Real-time data processing:
-- Kafka
+- Kafka (multiple clients)
 - Pulsar
 - Redis Streams
 - Faust
@@ -173,6 +202,7 @@ Workflow management:
 - Prefect
 - Dagster
 - Kedro
+- Luigi
 
 ### `[mlops]` - MLOps Tools
 ML lifecycle management:
@@ -186,15 +216,15 @@ ML lifecycle management:
 
 ### `[dev]` - Development Tools
 Testing and code quality:
-- pytest and plugins
-- Black, Ruff, mypy
-- pre-commit
-- Security scanners
+- pytest plugins (mock, benchmark)
+- Faker, Factory Boy
+- pre-commit, Bandit, Safety
+- Locust for load testing
 
 ### `[docs]` - Documentation
 Documentation generation:
-- Sphinx
-- MkDocs
+- Sphinx with extensions
+- MkDocs with Material theme
 - Jupyter Book
 
 ## Installation Profiles
@@ -203,7 +233,13 @@ Documentation generation:
 ```bash
 pip install automl-platform[enterprise]
 ```
-Includes: api, storage, distributed, mlops, monitoring, auth, sso, orchestration, export, streaming, cloud
+Includes: api, storage, distributed, mlops, monitoring, auth, sso, orchestration, export, streaming, cloud, connectors
+
+### No-Code Experience
+```bash
+pip install automl-platform[nocode]
+```
+Includes: connectors, ui_advanced, reporting, viz
 
 ### Complete Installation
 ```bash
@@ -211,11 +247,21 @@ pip install automl-platform[all]
 ```
 Includes all available extras.
 
+## Python Version Compatibility
+
+| Python Version | Status |
+|---------------|--------|
+| 3.9           | ✅ Fully Supported |
+| 3.10          | ✅ Fully Supported |
+| 3.11          | ✅ Fully Supported |
+| 3.12          | ✅ Fully Supported |
+| 3.13+         | ❌ Not Yet Supported |
+
 ## GPU Setup Requirements
 
 ### Prerequisites
 1. NVIDIA GPU with CUDA Capability >= 3.5
-2. CUDA Toolkit 11.8
+2. CUDA Toolkit 11.8+
 3. cuDNN 8.6+
 4. NVIDIA Driver >= 450.80.02
 
@@ -233,8 +279,8 @@ if torch.cuda.is_available():
 
 | Python | CUDA | PyTorch | TensorFlow |
 |--------|------|---------|------------|
-| 3.9+   | 11.8 | 2.1.x   | 2.15.x     |
-| 3.10+  | 12.1 | 2.2.x   | 2.16.x     |
+| 3.9-3.12 | 11.8 | 2.1.x | 2.15.x |
+| 3.10-3.12 | 12.1 | 2.2.x | 2.16.x |
 
 ## Troubleshooting
 
@@ -268,3 +314,10 @@ For issues or questions:
 - GitHub Issues: https://github.com/automl-platform/automl-platform/issues
 - Documentation: https://docs.automl-platform.com
 - Community Slack: https://automl-platform.slack.com
+
+## Version History
+
+- **v3.2.1** (Current): Added intelligent agents extra, harmonized dependencies
+- **v3.2.0**: Extended connectors, no-code UI enhancements
+- **v3.1.0**: GPU support, distributed training
+- **v3.0.0**: Enterprise features, SSO, RGPD compliance
