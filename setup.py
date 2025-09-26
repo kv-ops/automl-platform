@@ -221,6 +221,14 @@ extras_require = {
         "oauthlib>=3.2.0",
     ],
 
+    # SSO (subset for compatibility)
+    "sso": [
+        "python-keycloak>=3.7.0",
+        "python-saml>=1.15.0",
+        "okta>=2.9.0",
+        "authlib>=1.2.0",
+    ],
+
     # GPU Computing & Acceleration
     "gpu": [
         "cupy-cuda11x>=12.0.0,<13.0.0",
@@ -334,6 +342,9 @@ extras_require = {
         "google-cloud-storage>=2.10.0",
         "azure-storage-blob>=12.19.0",
         "aioboto3>=12.0.0",
+        "snowflake-connector-python>=3.7.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
     ],
 
     # Distributed Computing
@@ -460,7 +471,8 @@ extras_require["nocode"] = list(set(
     extras_require["connectors"] +
     extras_require["ui_advanced"] +
     extras_require["reporting"] +
-    extras_require["viz"]
+    extras_require["viz"] +
+    ["jupyter>=1.0.0", "notebook>=7.0.0"]
 ))
 
 extras_require["enterprise"] = list(set(
