@@ -2,13 +2,24 @@
 """
 Generate requirements files from pyproject.toml
 Ensures consistency across all dependency files
+Compatible with Python 3.9+ using conditional import
 """
 
-import tomllib
+import sys
 from pathlib import Path
 from typing import Dict, List, Set
 import argparse
-import sys
+
+# Conditional import for Python 3.9/3.10 compatibility
+try:
+    import tomllib
+except ImportError:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        print("Error: tomllib not available (Python 3.11+) and tomli not installed")
+        print("Install tomli with: pip install tomli>=2.0.1")
+        sys.exit(1)
 
 
 def load_pyproject() -> dict:
@@ -41,7 +52,7 @@ def extract_dependencies(pyproject: dict) -> Dict[str, List[str]]:
 def generate_requirements_gpu(deps: Dict[str, List[str]]) -> str:
     """Generate requirements-gpu.txt content"""
     header = """# ==============================================================================
-# GPU-specific requirements for AutoML Platform
+# GPU-specific requirements for AutoML Platform v3.2.1
 # Auto-generated from pyproject.toml - DO NOT EDIT MANUALLY
 # Run: python generate_requirements.py --gpu
 # ==============================================================================
@@ -103,7 +114,7 @@ def generate_requirements_gpu(deps: Dict[str, List[str]]) -> str:
 def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
     """Generate requirements-optional.txt content"""
     header = """# ==============================================================================
-# Optional dependencies for AutoML Platform
+# Optional dependencies for AutoML Platform v3.2.1
 # Auto-generated from pyproject.toml - DO NOT EDIT MANUALLY
 # Run: python generate_requirements.py --optional
 # 
@@ -116,18 +127,20 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
     
     content = header
     
-    # Group by category
+    # Group by category with agents first
     categories = {
+        "Intelligent Agents (NEW)": ["agents"],
         "Authentication & Security": ["auth", "sso"],
-        "GPU & Deep Learning": ["gpu", "deep", "distributed-gpu", "automl-gpu", "serving-gpu"],
+        "GPU & Deep Learning": ["gpu", "deep", "distributed-gpu", "automl-gpu", "serving-gpu", "gpu-alt"],
         "Cloud & Storage": ["cloud", "storage", "connectors"],
-        "ML & Data Science": ["explain", "timeseries", "nlp", "vision", "automl"],
+        "ML & Data Science": ["explain", "timeseries", "nlp", "vision", "hpo"],
         "Infrastructure": ["distributed", "streaming", "orchestration", "mlops"],
         "API & Serving": ["api", "export", "feature-store"],
         "Monitoring & Observability": ["monitoring"],
         "Development": ["dev", "docs"],
-        "Visualization": ["viz"],
+        "Visualization & UI": ["viz", "ui_advanced", "reporting"],
         "LLM Integration": ["llm"],
+        "Production": ["production"],
     }
     
     for category, extras in categories.items():
@@ -174,8 +187,24 @@ def main():
     
     if args.check:
         print("Dependencies found in pyproject.toml:")
-        for extra, packages in deps.items():
+        for extra, packages in sorted(deps.items()):
             print(f"  [{extra}]: {len(packages)} packages")
+        
+        # Check for agents extra
+        if "agents" in deps:
+            print("\n✅ Intelligent agents extra found:")
+            for pkg in deps["agents"]:
+                print(f"    - {pkg}")
+        else:
+            print("\n⚠️  Warning: 'agents' extra not found in pyproject.toml")
+        
+        # Check Python version
+        if "project" in pyproject:
+            requires_python = pyproject["project"].get("requires-python", "Not specified")
+            version = pyproject["project"].get("version", "Not specified")
+            print(f"\nProject version: {version}")
+            print(f"Python requirement: {requires_python}")
+        
         return
     
     # Generate files
