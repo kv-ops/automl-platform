@@ -40,10 +40,12 @@ pip install automl-platform[agents]
 
 ### `[gpu]` - Core GPU Support
 Essential GPU libraries for acceleration:
-- CUDA array processing (cupy, numba)
+- CUDA array processing (cupy, pycuda, numba)
 - GPU monitoring (gputil, nvidia-ml-py3, pynvml, gpustat)
 - Memory profiling (pytorch-memlab, torch-tb-profiler)
 - Optimized inference (onnxruntime-gpu)
+
+**Note**: This extra provides GPU infrastructure but NOT deep learning frameworks. For PyTorch/TensorFlow, add `[deep]` or use `[gpu-complete]`.
 
 ```bash
 pip install automl-platform[gpu]
@@ -60,6 +62,16 @@ Major deep learning frameworks with GPU support:
 ```bash
 pip install automl-platform[deep]
 ```
+
+### `[gpu,deep]` - Recommended GPU Setup
+**Best practice**: Install both for complete GPU-accelerated deep learning:
+```bash
+pip install automl-platform[gpu,deep]
+```
+This combination provides:
+- All GPU infrastructure and monitoring
+- All deep learning frameworks
+- Optimal compatibility and performance
 
 ### `[distributed-gpu]` - Distributed GPU Training
 Advanced distributed training frameworks:
@@ -90,10 +102,11 @@ pip install automl-platform[serving-gpu]
 ```
 
 ### `[gpu-complete]` - All GPU Features
-Installs all GPU-related extras:
+Installs ALL GPU-related extras (recommended for research/experimentation):
 ```bash
 pip install automl-platform[gpu-complete]
 ```
+Includes: gpu, deep, distributed-gpu, automl-gpu, serving-gpu
 
 ## Core Extras
 
@@ -237,43 +250,76 @@ Documentation generation:
 
 ## Installation Profiles
 
-### Enterprise Deployment
+### `[agents]` - Intelligent Data Cleaning (NEW)
 ```bash
-pip install automl-platform[enterprise]
+pip install automl-platform[agents]
 ```
-Includes: api, storage, distributed, mlops, monitoring, auth, sso, orchestration, export, streaming, cloud, connectors, nocode
+AI-powered data cleaning with OpenAI GPT-4
 
-### No-Code Experience
+### `[nocode]` - No-Code Experience
 ```bash
 pip install automl-platform[nocode]
 ```
-Includes: connectors, ui_advanced, reporting, viz, jupyter, notebook
+Complete no-code experience with UI, connectors, and reporting
 
-### Complete Installation
+### `[enterprise]` - Enterprise Deployment
+```bash
+pip install automl-platform[enterprise]
+```
+Production-ready enterprise deployment with all infrastructure
+
+### `[gpu-complete]` - Complete GPU Stack
+```bash
+pip install automl-platform[gpu-complete]
+```
+All GPU-related features and frameworks
+
+### `[all]` - Complete Installation
 ```bash
 pip install automl-platform[all]
 ```
-Includes all available extras.
+Everything - all available extras
 
 ## Python Version Compatibility
 
-| Python Version | Status |
-|---------------|--------|
-| 3.9           | ✅ Fully Supported |
-| 3.10          | ✅ Fully Supported |
-| 3.11          | ✅ Fully Supported |
-| 3.12          | ✅ Fully Supported |
-| 3.13+         | ❌ Not Yet Supported |
-
-**Note**: For Python 3.9 and 3.10, the package automatically installs `tomli` for TOML parsing support.
+| Python Version | Status | Notes |
+|---------------|--------|-------|
+| 3.9           | ✅ Fully Supported | Requires `tomli` for TOML parsing |
+| 3.10          | ✅ Fully Supported | Requires `tomli` for TOML parsing |
+| 3.11          | ✅ Fully Supported | Uses built-in `tomllib` |
+| 3.12          | ✅ Fully Supported | Uses built-in `tomllib` |
+| 3.13+         | ❌ Not Yet Supported | Pending dependency updates |
 
 ## GPU Setup Requirements
 
 ### Prerequisites
-1. NVIDIA GPU with CUDA Capability >= 3.5
-2. CUDA Toolkit 11.8+
-3. cuDNN 8.6+
-4. NVIDIA Driver >= 450.80.02
+1. **NVIDIA GPU** with CUDA Capability >= 3.5
+2. **CUDA Toolkit** 11.8+ (12.1 for newer features)
+3. **cuDNN** 8.6+
+4. **NVIDIA Driver** >= 450.80.02
+
+### Installation Options
+
+#### Option 1: Core GPU Support Only
+```bash
+pip install automl-platform[gpu]
+```
+**Includes**: CUDA libraries, GPU monitoring, memory optimization  
+**Use case**: GPU computation without deep learning
+
+#### Option 2: GPU + Deep Learning (RECOMMENDED)
+```bash
+pip install automl-platform[gpu,deep]
+```
+**Includes**: Everything from [gpu] plus PyTorch, TensorFlow, and DL frameworks  
+**Use case**: Standard GPU-accelerated machine learning
+
+#### Option 3: Complete GPU Stack
+```bash
+pip install automl-platform[gpu-complete]
+```
+**Includes**: All GPU features including distributed training and AutoML  
+**Use case**: Research, experimentation, or maximum capability
 
 ### Verification
 ```python
@@ -283,15 +329,63 @@ print(f"CUDA Version: {torch.version.cuda}")
 print(f"GPU Count: {torch.cuda.device_count()}")
 if torch.cuda.is_available():
     print(f"GPU Name: {torch.cuda.get_device_name(0)}")
+    
+# Check GPU memory
+import pynvml
+pynvml.nvmlInit()
+handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+print(f"GPU Memory: {info.free / 1024**3:.1f} GB free / {info.total / 1024**3:.1f} GB total")
+```
+
+## Recommended Installation Patterns
+
+### For Data Scientists
+```bash
+# Standard ML with GPU support
+pip install automl-platform[gpu,deep,explain,viz]
+
+# With intelligent agents
+pip install automl-platform[gpu,deep,explain,viz,agents]
+```
+
+### For ML Engineers
+```bash
+# Production deployment
+pip install automl-platform[gpu,deep,monitoring,mlops,api]
+
+# With distributed training
+pip install automl-platform[gpu-complete,monitoring,mlops,api]
+```
+
+### For Business Users
+```bash
+# No-code with intelligent cleaning
+pip install automl-platform[nocode,agents]
+```
+
+### For Researchers
+```bash
+# Everything GPU-related
+pip install automl-platform[gpu-complete,explain,timeseries,nlp,vision]
+```
+
+### For Enterprise
+```bash
+# Complete enterprise deployment
+pip install automl-platform[enterprise]
+
+# Enterprise with GPU
+pip install automl-platform[enterprise,gpu-complete]
 ```
 
 ## Version Compatibility Matrix
 
-| Python | CUDA | PyTorch | TensorFlow | tomli |
-|--------|------|---------|------------|-------|
-| 3.9-3.10 | 11.8 | 2.1.x | 2.15.x | Required |
-| 3.11-3.12 | 11.8 | 2.1.x | 2.15.x | Built-in (tomllib) |
-| 3.10-3.12 | 12.1 | 2.2.x | 2.16.x | Conditional |
+| Python | CUDA | PyTorch | TensorFlow | cupy | Notes |
+|--------|------|---------|------------|------|-------|
+| 3.9-3.10 | 11.8 | 2.1.x | 2.15.x | 12.x | Requires `tomli` |
+| 3.11-3.12 | 11.8 | 2.1.x | 2.15.x | 12.x | Built-in `tomllib` |
+| 3.10-3.12 | 12.1 | 2.2.x | 2.16.x | 13.x | Latest features |
 
 ## Troubleshooting
 
@@ -301,8 +395,12 @@ If you encounter CUDA version issues:
 # Check system CUDA version
 nvidia-smi
 
-# Install specific PyTorch version
+# Install specific PyTorch version for your CUDA
+# CUDA 11.8
 pip install torch==2.1.0+cu118 -f https://download.pytorch.org/whl/torch_stable.html
+
+# CUDA 12.1
+pip install torch==2.1.0+cu121 -f https://download.pytorch.org/whl/torch_stable.html
 ```
 
 ### Memory Issues
@@ -317,6 +415,20 @@ for gpu in gpus:
 # Clear PyTorch cache
 import torch
 torch.cuda.empty_cache()
+
+# Set memory fraction for TensorFlow
+gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.8)
+config = tf.compat.v1.ConfigProto(gpu_options=gpu_options)
+```
+
+### PyCUDA Installation Issues
+If PyCUDA fails to install:
+```bash
+# Install CUDA development tools first
+sudo apt-get install cuda-toolkit-11-8
+
+# Then install PyCUDA with specific CUDA path
+CUDA_ROOT=/usr/local/cuda-11.8 pip install pycuda
 ```
 
 ### TOML Parsing on Python 3.9/3.10
@@ -329,16 +441,56 @@ If you encounter issues with `generate_requirements.py`:
 pip install tomli>=2.0.1
 ```
 
+## Performance Optimization Tips
+
+### GPU Utilization
+```python
+# Monitor GPU usage during training
+import gpustat
+gpustat.print_gpustat()
+
+# Use mixed precision training
+from torch.cuda.amp import autocast, GradScaler
+scaler = GradScaler()
+
+with autocast():
+    output = model(input)
+    loss = criterion(output, target)
+```
+
+### Multi-GPU Setup
+```python
+# DataParallel for single node
+model = torch.nn.DataParallel(model)
+
+# DistributedDataParallel for multiple nodes
+import torch.distributed as dist
+dist.init_process_group("nccl")
+model = torch.nn.parallel.DistributedDataParallel(model)
+```
+
 ## Support
 
 For issues or questions:
-- GitHub Issues: https://github.com/automl-platform/automl-platform/issues
-- Documentation: https://docs.automl-platform.com
-- Community Slack: https://automl-platform.slack.com
+- **GitHub Issues**: https://github.com/automl-platform/automl-platform/issues
+- **Documentation**: https://docs.automl-platform.com
+- **Community Slack**: https://automl-platform.slack.com
+- **GPU Setup Guide**: https://docs.automl-platform.com/gpu-setup
 
 ## Version History
 
-- **v3.2.1** (Current): Added intelligent agents extra, harmonized dependencies, fixed Python 3.9/3.10 compatibility
+- **v3.2.1** (Current): Added intelligent agents extra, harmonized dependencies, fixed Python 3.9/3.10 compatibility, added PyCUDA to GPU extras
 - **v3.2.0**: Extended connectors, no-code UI enhancements
 - **v3.1.0**: GPU support, distributed training
-- **v3.0.0**: Enterprise features, SSO, RGPD compliance
+- **v3.0.0**: Enterprise features, SSO, GDPR compliance
+
+## Quick Reference
+
+| Task | Recommended Installation |
+|------|-------------------------|
+| Basic ML | `pip install automl-platform` |
+| ML with GPU | `pip install automl-platform[gpu,deep]` |
+| No-code UI | `pip install automl-platform[nocode]` |
+| Intelligent cleaning | `pip install automl-platform[agents]` |
+| Enterprise | `pip install automl-platform[enterprise]` |
+| Everything | `pip install automl-platform[all]` |
