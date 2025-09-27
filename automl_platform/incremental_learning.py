@@ -711,3 +711,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Backward compatibility export expected by orchestrator modules
+IncrementalLearner = IncrementalPipeline
