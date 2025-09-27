@@ -238,7 +238,7 @@ if SQLALCHEMY_AVAILABLE:
         response_format = Column(String(20))
         identity_verified = Column(Boolean, default=False)
         verification_method = Column(String(100))
-        metadata = Column(JSON)
+        metadata_json = Column(JSON)
 
     class PersonalDataRecord(Base):
         """Database model for tracking personal data"""
@@ -535,7 +535,7 @@ class RGPDComplianceService:
             status=RGPDRequestStatus.PENDING,
             details=request_data.get('details', ''),
             reason=request_data.get('reason'),
-            metadata=request_data,
+            metadata_json=request_data,
             tenant_id=request_data.get('tenant_id')
         )
         
@@ -547,7 +547,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='rgpd_request_created',
             user_id=user_id,
-            metadata=request_data
+            metadata_json=request_data,
         )
         
         # Simulate database insertion
@@ -570,13 +570,14 @@ class RGPDComplianceService:
                 user_id=f"user{request_id}",
                 type=RGPDRequestType.ACCESS,
                 status=RGPDRequestStatus.PENDING,
-                metadata={'identity_verified': True}
+                metadata_json={'identity_verified': True}
             )
             self.requests[request_id] = request
             self.db.mock_requests[request_id] = request
         
         # Check identity verification
-        if not request.metadata.get('identity_verified', True):
+        metadata = request.metadata_json or {}
+        if not metadata.get('identity_verified', True):
             request.status = RGPDRequestStatus.REJECTED
             request.response = "Identity not verified"
             self.db.commit()
@@ -590,7 +591,7 @@ class RGPDComplianceService:
             return False
         
         # Check admin approval
-        if request.metadata.get('requires_admin_approval') and not request.metadata.get('admin_approved'):
+        if metadata.get('requires_admin_approval') and not metadata.get('admin_approved'):
             request.status = RGPDRequestStatus.REJECTED
             request.response = "Insufficient permissions"
             self.db.commit()
@@ -616,7 +617,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='rgpd_request_processed',
             user_id=request.user_id,
-            metadata={'request_id': request_id, 'type': str(request_type)}
+            metadata_json={'request_id': request_id, 'type': str(request_type)}
         )
         
         self.db.commit()
@@ -714,7 +715,7 @@ class RGPDComplianceService:
             status=status,
             granted=status == ConsentStatus.GRANTED,
             details=consent_data.get('details', ''),
-            metadata=consent_data
+            metadata_json=consent_data
         )
         
         if consent.status == ConsentStatus.GRANTED:
@@ -726,7 +727,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='consent_created',
             user_id=user_id,
-            metadata=consent_data
+            metadata_json=consent_data
         )
         
         result = self.db.execute("INSERT", consent_data)
@@ -757,7 +758,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='consent_updated',
             user_id=consent.user_id,
-            metadata={'old_status': str(old_status), 'new_status': str(new_status)}
+            metadata_json={'old_status': str(old_status), 'new_status': str(new_status)}
         )
         
         self.db.commit()
@@ -826,7 +827,7 @@ class RGPDComplianceService:
         if old_data:
             self.audit_service.log_event(
                 event_type='data_retention_check',
-                metadata={'records_processed': len(old_data)}
+                metadata_json={'records_processed': len(old_data)}
             )
         
         return True
@@ -839,7 +840,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='user_notified',
             user_id=user_id,
-            metadata={'notification_type': notification_type, 'data': data}
+            metadata_json={'notification_type': notification_type, 'data': data}
         )
         
         return True
