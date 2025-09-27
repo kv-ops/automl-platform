@@ -15,34 +15,86 @@ import json
 import uuid
 from enum import Enum
 from pydantic import BaseModel, Field
-import ray
-from ray import serve
-import dask.dataframe as dd
+
+try:
+    import ray
+    from ray import serve
+    RAY_AVAILABLE = True
+except ImportError:
+    ray = None  # type: ignore[assignment]
+    serve = None  # type: ignore[assignment]
+    RAY_AVAILABLE = False
+
+if not RAY_AVAILABLE:
+    class _RayStub:
+        """Fallback implementation when Ray is unavailable."""
+
+        def remote(self, func=None, **kwargs):  # type: ignore[override]
+            if func is None:
+                def decorator(f):
+                    return f
+                return decorator
+            return func
+
+        def is_initialized(self):
+            return False
+
+        def init(self, *args, **kwargs):
+            raise ImportError("ray is not installed")
+
+        def get(self, *args, **kwargs):
+            raise ImportError("ray is not installed")
+
+        def kill(self, *args, **kwargs):
+            raise ImportError("ray is not installed")
+
+        def available_resources(self):
+            return {}
+
+        def shutdown(self):
+            return None
+
+    ray = _RayStub()  # type: ignore[assignment]
+
+try:
+    import dask.dataframe as dd
+    DASK_AVAILABLE = True
+except ImportError:
+    dd = None  # type: ignore[assignment]
+    DASK_AVAILABLE = False
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import pickle
 import joblib
 from sqlalchemy import create_engine
 from redis import Redis
-import boto3
-from azure.storage.blob import BlobServiceClient
+
+try:
+    import boto3
+    BOTO3_AVAILABLE = True
+except ImportError:
+    boto3 = None  # type: ignore[assignment]
+    BOTO3_AVAILABLE = False
+
+try:
+    from azure.storage.blob import BlobServiceClient
+    AZURE_BLOB_AVAILABLE = True
+except ImportError:
+    BlobServiceClient = None  # type: ignore[assignment]
+    AZURE_BLOB_AVAILABLE = False
 import psutil
 import traceback
 import time
 from io import BytesIO
 
 # Import des modules internes depuis votre structure existante
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
-
-from storage import StorageManager, ModelMetadata
-from monitoring import ModelMonitor, MonitoringService
-from data_prep import EnhancedDataPreprocessor
-from model_selection import get_available_models
-from metrics import calculate_metrics
-from infrastructure import TenantManager, ResourceMonitor
-from feature_store import FeatureStore
-from config import AutoMLConfig, load_config
+from ..storage import StorageManager, ModelMetadata
+from ..monitoring import ModelMonitor, MonitoringService
+from ..data_prep import EnhancedDataPreprocessor
+from ..model_selection import get_available_models
+from ..metrics import calculate_metrics
+from .infrastructure import TenantManager, ResourceMonitor
+from .feature_store import FeatureStore
+from ..config import AutoMLConfig, load_config
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
