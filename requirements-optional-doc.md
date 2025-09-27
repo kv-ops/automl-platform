@@ -424,13 +424,21 @@ config = tf.compat.v1.ConfigProto(gpu_options=gpu_options)
 ```
 
 ### PyCUDA Installation Issues
-If PyCUDA fails to install:
+PyCUDA requires CUDA development headers. If installation fails:
 ```bash
-# Install CUDA development tools first
-sudo apt-get install cuda-toolkit-11-8
+# Ubuntu/Debian
+sudo apt-get install cuda-toolkit-11-8 python3-dev
 
-# Then install PyCUDA with specific CUDA path
-CUDA_ROOT=/usr/local/cuda-11.8 pip install pycuda
+# CentOS/RHEL
+sudo yum install cuda-toolkit-11-8 python3-devel
+
+# Install PyCUDA with specific CUDA path
+export CUDA_ROOT=/usr/local/cuda-11.8
+export PATH=$CUDA_ROOT/bin:$PATH
+pip install pycuda
+
+# Alternative: Use conda for easier installation
+conda install -c conda-forge pycuda
 ```
 
 ### TOML Parsing on Python 3.9/3.10
