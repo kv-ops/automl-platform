@@ -52,10 +52,10 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Import from existing modules
-from ..config import AutoMLConfig, WorkerConfig, BillingConfig, PlanType
-from ..scheduler import JobRequest, JobStatus, QueueType, PLAN_LIMITS
-from ..infrastructure import TenantManager, ResourceMonitor
-from ..api.billing import BillingManager
+from .config import AutoMLConfig, WorkerConfig, BillingConfig, PlanType
+from .scheduler import JobRequest, JobStatus, QueueType, PLAN_LIMITS
+from .api.infrastructure import TenantManager, ResourceMonitor
+from .api.billing import BillingManager
 
 logger = logging.getLogger(__name__)
 
@@ -850,7 +850,7 @@ class AutoscalingService:
 def main():
     """Example usage of autoscaling service"""
     
-    from ..config import load_config
+    from .config import load_config
     
     # Load configuration
     config = load_config()
