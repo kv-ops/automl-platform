@@ -79,13 +79,6 @@ def generate_requirements_gpu(deps: Dict[str, List[str]]) -> str:
             content += f"{dep}\n"
         content += "\n"
     
-    # Deep learning frameworks
-    if "deep" in deps:
-        content += "# ---------- Deep Learning Frameworks ----------\n"
-        for dep in deps["deep"]:
-            content += f"{dep}\n"
-        content += "\n"
-    
     # Optional advanced features
     content += """# ==============================================================================
 # OPTIONAL: Advanced GPU Features
