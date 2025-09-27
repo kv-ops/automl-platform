@@ -43,6 +43,21 @@ try:
 except ImportError:
     DASK_AVAILABLE = False
 
+    class _DaskArrayPlaceholder:
+        """Fallback placeholder when Dask array is unavailable."""
+
+        Array = tuple  # type: ignore[assignment]
+
+    da = _DaskArrayPlaceholder()  # type: ignore[assignment]
+
+    class _DaskDataFramePlaceholder:
+        """Fallback placeholder when Dask dataframe is unavailable."""
+
+        DataFrame = pd.DataFrame
+        Series = pd.Series
+
+    dd = _DaskDataFramePlaceholder()  # type: ignore[assignment]
+
 # Spark support (optional)
 try:
     from pyspark.sql import SparkSession
@@ -772,8 +787,12 @@ def main():
             print(f"  Training Time: {result['training_time']:.2f}s")
     
     # Shutdown
-    orchestrator.shutdown()
+        orchestrator.shutdown()
 
 
 if __name__ == "__main__":
     main()
+
+
+# Backward compatibility export expected by other modules
+DistributedTrainer = DistributedTrainingOrchestrator
