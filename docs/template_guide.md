@@ -12,7 +12,8 @@ The AutoML Platform template system provides pre-configured machine learning pip
 4. [Creating Custom Templates](#creating-custom-templates)
 5. [Template Configuration](#template-configuration)
 6. [Advanced Usage](#advanced-usage)
-7. [Best Practices](#best-practices)
+7. [Expert Mode vs Simplified Mode](#expert-mode-vs-simplified-mode)
+8. [Best Practices](#best-practices)
 
 ## Quick Start
 
@@ -439,6 +440,191 @@ python main.py template-info customer_churn --export churn_template.yaml
 # Export as JSON
 python main.py template-info fraud_detection --export fraud_template.json
 ```
+
+## Expert Mode vs Simplified Mode
+
+The AutoML Platform adapts to different user expertise levels, offering two distinct modes of operation:
+
+### Simplified Mode (Default)
+
+Perfect for business users and data scientists who want quick results without complexity:
+
+**Features:**
+- **One-click model training**: Start training with minimal configuration
+- **Automatic feature engineering**: Platform handles feature creation and selection
+- **Pre-configured pipelines**: Best practices built-in for common use cases
+- **Visual interface**: Streamlit-based UI for no-code experience
+- **Smart defaults**: Optimized settings based on data characteristics
+- **Guided workflows**: Step-by-step wizards for common tasks
+
+**Best For:**
+- Business analysts exploring data
+- Quick prototyping and POCs
+- Users new to machine learning
+- Standard use cases with templates
+- Rapid iteration and experimentation
+
+**Example Usage:**
+```bash
+# Simple command line
+python main.py train --data sales.csv --target revenue
+
+# Using templates
+python main.py train --template customer_churn --data customers.csv --target churned
+
+# Web interface
+python main.py ui
+```
+
+### Expert Mode
+
+Full control for ML engineers, researchers, and advanced practitioners:
+
+**Features:**
+- **Custom pipeline configuration**: Build complex ML pipelines from scratch
+- **Advanced hyperparameter tuning**: Fine-grained control over optimization
+- **Direct algorithm access**: Use any algorithm with custom parameters
+- **API-first approach**: Programmatic control via REST API or Python SDK
+- **Custom metric definitions**: Define business-specific evaluation metrics
+- **Raw model artifacts**: Direct access to model files and metadata
+- **Distributed training**: Scale across multiple GPUs/nodes
+- **Custom preprocessing**: Implement domain-specific transformations
+- **Production optimizations**: Fine-tune for latency, throughput, or accuracy
+
+**Best For:**
+- ML engineers building production systems
+- Researchers experimenting with novel approaches
+- Teams with specific compliance requirements
+- Complex use cases requiring customization
+- Performance-critical applications
+
+**Example Usage:**
+```python
+from automl_platform import AutoMLPlatform
+
+# Initialize with expert configuration
+platform = AutoMLPlatform(mode='expert')
+
+# Custom pipeline
+pipeline = platform.create_pipeline(
+    preprocessor=CustomPreprocessor(),
+    feature_engineer=AdvancedFeatureEngine(
+        polynomial_features=True,
+        interaction_terms=True,
+        custom_transformers=[MyDomainTransformer()]
+    ),
+    algorithms=[
+        ('xgb', XGBClassifier(**custom_params)),
+        ('lgb', LGBMClassifier(**custom_params)),
+        ('custom', MyCustomAlgorithm())
+    ],
+    ensemble_strategy='stacking',
+    meta_learner=LogisticRegression()
+)
+
+# Advanced HPO
+hpo_config = {
+    'method': 'optuna',
+    'n_trials': 200,
+    'pruner': 'hyperband',
+    'sampler': 'tpe',
+    'custom_search_space': {
+        'xgb__max_depth': [3, 15],
+        'xgb__learning_rate': [0.001, 0.3, 'log'],
+        'custom__my_param': ['categorical', ['a', 'b', 'c']]
+    }
+}
+
+# Train with full control
+results = platform.train(
+    pipeline=pipeline,
+    hpo_config=hpo_config,
+    cv_strategy=TimeSeriesSplit(n_splits=10),
+    metrics=['roc_auc', 'precision_at_k', custom_metric],
+    callbacks=[
+        EarlyStopping(patience=10),
+        ModelCheckpoint(save_best_only=True),
+        TensorBoard(log_dir='./logs'),
+        CustomCallback()
+    ]
+)
+```
+
+### Switching Between Modes
+
+You can switch between modes at any time:
+
+```bash
+# Enable expert mode via CLI
+python main.py config set mode expert
+
+# Enable expert mode via environment variable
+export AUTOML_EXPERT_MODE=true
+
+# Enable in Python
+from automl_platform import set_mode
+set_mode('expert')
+```
+
+### Mode Comparison
+
+| Feature | Simplified Mode | Expert Mode |
+|---------|-----------------|-------------|
+| **Setup Time** | < 5 minutes | 30+ minutes |
+| **Configuration Options** | ~20 | 200+ |
+| **UI Access** | Full Streamlit UI | API + Limited UI |
+| **Template Support** | All templates | Custom only |
+| **Algorithm Access** | Curated set | All available |
+| **HPO Control** | Automatic | Full manual |
+| **Pipeline Customization** | Limited | Unlimited |
+| **Monitoring** | Basic metrics | Advanced + Custom |
+| **Export Options** | Standard formats | All formats |
+| **Performance Tuning** | Automatic | Manual |
+| **Resource Control** | Managed | Full control |
+| **API Access** | Basic endpoints | All endpoints |
+| **Debugging Tools** | Basic logs | Full debugging |
+
+### Gradual Progression
+
+Start with Simplified Mode and gradually enable expert features:
+
+```python
+# Start simple
+platform = AutoMLPlatform()
+
+# Enable specific expert features
+platform.enable_features([
+    'custom_metrics',
+    'advanced_hpo',
+    'pipeline_customization'
+])
+
+# Full expert mode when ready
+platform.set_mode('expert')
+```
+
+### Best Practices for Each Mode
+
+**For Simplified Mode:**
+1. Start with templates for your use case
+2. Use the UI for data exploration
+3. Let the platform handle optimization
+4. Focus on business metrics
+
+**For Expert Mode:**
+1. Profile your data thoroughly first
+2. Start with baseline models
+3. Incrementally add complexity
+4. Monitor resource usage
+5. Version control your configurations
+6. Document custom components
+
+### Getting Help
+
+- **Simplified Mode**: Use the built-in help wizard: `python main.py help`
+- **Expert Mode**: API documentation at `/docs` endpoint or `python main.py api-docs`
+- **Community**: Join our Slack for both modes
+- **Support**: Enterprise support covers both modes
 
 ## Best Practices
 
