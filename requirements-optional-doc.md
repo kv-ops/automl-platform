@@ -441,6 +441,8 @@ pip install pycuda
 conda install -c conda-forge pycuda
 ```
 
+**Note**: PyCUDA enables writing custom CUDA kernels in Python, useful for specialized GPU operations not covered by higher-level libraries like CuPy.
+
 ### TOML Parsing on Python 3.9/3.10
 The platform automatically handles TOML parsing compatibility:
 - Python 3.11+: Uses built-in `tomllib`
@@ -477,6 +479,36 @@ model = torch.nn.DataParallel(model)
 import torch.distributed as dist
 dist.init_process_group("nccl")
 model = torch.nn.parallel.DistributedDataParallel(model)
+```
+
+### PyCUDA Custom Kernels
+```python
+import pycuda.autoinit
+import pycuda.driver as drv
+import numpy as np
+from pycuda.compiler import SourceModule
+
+# Example custom CUDA kernel
+mod = SourceModule("""
+__global__ void multiply_them(float *dest, float *a, float *b)
+{
+  const int i = threadIdx.x;
+  dest[i] = a[i] * b[i];
+}
+""")
+
+multiply_them = mod.get_function("multiply_them")
+
+# Use the custom kernel
+a = np.random.randn(400).astype(np.float32)
+b = np.random.randn(400).astype(np.float32)
+dest = np.zeros_like(a)
+
+multiply_them(
+    drv.Out(dest), drv.In(a), drv.In(b),
+    block=(400,1,1), grid=(1,1))
+
+print(dest)
 ```
 
 ## Support
