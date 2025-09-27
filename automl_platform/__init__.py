@@ -49,6 +49,13 @@ __email__ = "support@automl-platform.com"
 from .config import AutoMLConfig, load_config
 from .orchestrator import AutoMLOrchestrator
 from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
+
+try:
+    from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
+    ENHANCED_ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    ENHANCED_ORCHESTRATOR_AVAILABLE = False
+    EnhancedAutoMLOrchestrator = None
 from .data_prep import DataPreprocessor, validate_data
 from .metrics import calculate_metrics, detect_task
 from .model_selection import get_available_models
@@ -77,16 +84,28 @@ from .inference import (
 )
 
 # LLM and Intelligence
-from .llm import (
-    LLMProvider,
-    OpenAIProvider,
-    AnthropicProvider,
-    LLMCache,
-    AdvancedRAGSystem,
-    EnhancedDataCleaningAgent,
-    AutoMLLLMAssistant,
-    WebSocketChatHandler
-)
+try:
+    from .llm import (
+        LLMProvider,
+        OpenAIProvider,
+        AnthropicProvider,
+        LLMCache,
+        AdvancedRAGSystem,
+        EnhancedDataCleaningAgent,
+        AutoMLLLMAssistant,
+        WebSocketChatHandler
+    )
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    LLMProvider = None
+    OpenAIProvider = None
+    AnthropicProvider = None
+    LLMCache = None
+    AdvancedRAGSystem = None
+    EnhancedDataCleaningAgent = None
+    AutoMLLLMAssistant = None
+    WebSocketChatHandler = None
 
 # Data Quality
 from .data_quality_agent import (
@@ -97,18 +116,35 @@ from .data_quality_agent import (
 )
 
 # Deployment and Export
-from .deployment import (
-    ModelExportService,
-    ExportFormat,
-    ServingMode,
-    DeploymentTarget,
-    ModelMetadata,
-    DeploymentSpec
-)
-from .export_service import (
-    ModelExporter,
-    ExportConfig
-)
+try:
+    from .deployment import (
+        ModelExportService,
+        ExportFormat,
+        ServingMode,
+        DeploymentTarget,
+        ModelMetadata,
+        DeploymentSpec
+    )
+    DEPLOYMENT_AVAILABLE = True
+except ImportError:
+    DEPLOYMENT_AVAILABLE = False
+    ModelExportService = None
+    ExportFormat = None
+    ServingMode = None
+    DeploymentTarget = None
+    ModelMetadata = None
+    DeploymentSpec = None
+
+try:
+    from .export_service import (
+        ModelExporter,
+        ExportConfig
+    )
+    EXPORT_SERVICE_AVAILABLE = True
+except ImportError:
+    EXPORT_SERVICE_AVAILABLE = False
+    ModelExporter = None
+    ExportConfig = None
 
 # A/B Testing
 from .ab_testing import (
@@ -142,8 +178,12 @@ from .monitoring import (
     MonitoringService,
     MonitoringIntegration,
     ModelPerformanceMetrics,
-    NotificationPriority
 )
+
+try:
+    from .api.websocket import NotificationPriority
+except ImportError:
+    NotificationPriority = None
 
 # MLOps Service
 from .mlops_service import (
@@ -190,20 +230,36 @@ from .scheduler import (
 )
 
 # Worker Management
-from .worker import (
-    AutoMLTask,
-    train_full_pipeline,
-    train_distributed_pipeline,
-    train_incremental_pipeline,
-    train_neural_pipeline_gpu,
-    predict_batch as worker_predict_batch,
-    warm_pipeline_cache,
-    check_cache_health,
-    clear_pipeline_cache,
-    optimize_memory_usage,
-    get_system_status,
-    GPUResourceManager
-)
+try:
+    from .worker import (
+        AutoMLTask,
+        train_full_pipeline,
+        train_distributed_pipeline,
+        train_incremental_pipeline,
+        train_neural_pipeline_gpu,
+        predict_batch as worker_predict_batch,
+        warm_pipeline_cache,
+        check_cache_health,
+        clear_pipeline_cache,
+        optimize_memory_usage,
+        get_system_status,
+        GPUResourceManager
+    )
+    WORKER_AVAILABLE = True
+except ImportError:
+    WORKER_AVAILABLE = False
+    AutoMLTask = None
+    train_full_pipeline = None
+    train_distributed_pipeline = None
+    train_incremental_pipeline = None
+    train_neural_pipeline_gpu = None
+    worker_predict_batch = None
+    warm_pipeline_cache = None
+    check_cache_health = None
+    clear_pipeline_cache = None
+    optimize_memory_usage = None
+    get_system_status = None
+    GPUResourceManager = None
 
 # TabNet Implementation
 from .tabnet_sklearn import (
@@ -267,39 +323,97 @@ except ImportError:
     CacheConfig = None
 
 # Authentication and Security imports
-from .auth import (
-    init_auth_system,
-    auth_router,
-    get_current_user,
-    require_permission,
-    require_plan,
-    AuthConfig,
-    PasswordService,
-    TokenService,
-    APIKeyService,
-    OAuthService,
-    RBACService,
-    QuotaService,
-    AuditService,
-    RateLimiter,
-    PlanType,
-    User,
-    Tenant,
-    Role,
-    Permission,
-    Project,
-    APIKey,
-    AuditLog
-)
-from .sso_service import SSOService, SSOProvider
-from .audit_service import AuditService as AuditServiceV2, AuditEventType, AuditSeverity
-from .rgpd_compliance_service import (
-    RGPDComplianceService,
-    GDPRRequestType,
-    ConsentType,
-    get_rgpd_service
-)
-from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
+try:
+    from .auth import (
+        init_auth_system,
+        auth_router,
+        get_current_user,
+        require_permission,
+        require_plan,
+        AuthConfig,
+        PasswordService,
+        TokenService,
+        APIKeyService,
+        OAuthService,
+        RBACService,
+        QuotaService,
+        AuditService,
+        RateLimiter,
+        PlanType,
+        User,
+        Tenant,
+        Role,
+        Permission,
+        Project,
+        APIKey,
+        AuditLog
+    )
+    AUTH_MODULE_AVAILABLE = True
+except ImportError:
+    AUTH_MODULE_AVAILABLE = False
+    init_auth_system = None
+    auth_router = None
+    get_current_user = None
+    require_permission = None
+    require_plan = None
+    AuthConfig = None
+    PasswordService = None
+    TokenService = None
+    APIKeyService = None
+    OAuthService = None
+    RBACService = None
+    QuotaService = None
+    AuditService = None
+    RateLimiter = None
+    PlanType = None
+    User = None
+    Tenant = None
+    Role = None
+    Permission = None
+    Project = None
+    APIKey = None
+    AuditLog = None
+
+try:
+    from .sso_service import SSOService, SSOProvider
+    SSO_AVAILABLE = True
+except ImportError:
+    SSO_AVAILABLE = False
+    SSOService = None
+    SSOProvider = None
+
+try:
+    from .audit_service import AuditService as AuditServiceV2, AuditEventType, AuditSeverity
+    AUDIT_SERVICE_AVAILABLE = True
+except ImportError:
+    AUDIT_SERVICE_AVAILABLE = False
+    AuditServiceV2 = None
+    AuditEventType = None
+    AuditSeverity = None
+
+try:
+    from .rgpd_compliance_service import (
+        RGPDComplianceService,
+        GDPRRequestType,
+        ConsentType,
+        get_rgpd_service
+    )
+    RGPD_AVAILABLE = True
+except ImportError:
+    RGPD_AVAILABLE = False
+    RGPDComplianceService = None
+    GDPRRequestType = None
+    ConsentType = None
+    get_rgpd_service = None
+
+try:
+    from .auth_middleware import UnifiedAuthMiddleware, RGPDMiddleware, setup_auth_middleware
+    AUTH_MIDDLEWARE_AVAILABLE = True
+except ImportError:
+    AUTH_MIDDLEWARE_AVAILABLE = False
+    UnifiedAuthMiddleware = None
+    RGPDMiddleware = None
+    setup_auth_middleware = None
 
 # ============================================================================
 # Dynamic detection of API module availability
