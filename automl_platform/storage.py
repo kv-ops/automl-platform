@@ -1289,3 +1289,7 @@ class FeatureStore:
     def list_feature_sets(self) -> List[str]:
         """List available feature sets."""
         return list(set(k.split(':')[0] for k in self.feature_cache.keys()))
+
+
+# Backward compatibility alias for modules expecting StorageService
+StorageService = StorageManager
