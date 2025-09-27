@@ -35,7 +35,8 @@ except ImportError:
 import jwt
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
 
 # Database
 import sqlalchemy
@@ -149,7 +150,7 @@ class TenantModel(Base):
     is_suspended = Column(Boolean, default=False)
     
     # Metadata
-    metadata = Column(JSON, default={})
+    metadata_json = Column(JSON, default={})
 
 
 class TenantManager:
@@ -461,11 +462,12 @@ class SecurityManager:
         if salt is None:
             salt = os.urandom(32)
         
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100000,
+            backend=default_backend()
         )
         key = kdf.derive(password.encode())
         
@@ -473,11 +475,12 @@ class SecurityManager:
     
     def verify_password(self, password: str, hashed: bytes, salt: bytes) -> bool:
         """Verify password against hash."""
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100000,
+            backend=default_backend()
         )
         
         try:
