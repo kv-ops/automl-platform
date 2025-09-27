@@ -127,7 +127,7 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
     
     content = header
     
-    # Group by category with agents first
+    # Group by category with agents first, INCLUDING META-EXTRAS
     categories = {
         "Intelligent Agents (NEW)": ["agents"],
         "Authentication & Security": ["auth", "sso"],
@@ -141,6 +141,8 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
         "Visualization & UI": ["viz", "ui_advanced", "reporting"],
         "LLM Integration": ["llm"],
         "Production": ["production"],
+        # AJOUT DES META-EXTRAS
+        "Bundled Configurations": ["nocode", "enterprise", "gpu-complete", "all"],
     }
     
     for category, extras in categories.items():
@@ -153,10 +155,49 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
         content += f"# {'='*70}\n\n"
         
         for extra in available_extras:
-            content += f"# [{extra}]\n"
-            for dep in deps[extra]:
-                content += f"# {dep}\n"
+            # Special handling for meta-extras
+            if extra in ["nocode", "enterprise", "gpu-complete", "all"]:
+                content += f"# [{extra}] - Meta-bundle\n"
+                if extra == "nocode":
+                    content += "# Complete no-code experience with UI, connectors, and reporting\n"
+                elif extra == "enterprise":
+                    content += "# Production-ready enterprise deployment bundle\n"
+                elif extra == "gpu-complete":
+                    content += "# All GPU-related features and frameworks\n"
+                elif extra == "all":
+                    content += "# Complete installation with all available features\n"
+                content += f"# Includes multiple extras - see pyproject.toml for details\n"
+                content += f"# Install with: pip install automl-platform[{extra}]\n"
+            else:
+                content += f"# [{extra}]\n"
+                for dep in deps[extra]:
+                    content += f"# {dep}\n"
             content += "\n"
+    
+    # Add installation examples at the end
+    content += """
+# ==============================================================================
+# INSTALLATION EXAMPLES
+# ==============================================================================
+
+# Minimal setup with intelligent agents
+# pip install automl-platform[agents]
+
+# No-code user experience
+# pip install automl-platform[nocode]
+
+# Enterprise deployment
+# pip install automl-platform[enterprise]
+
+# GPU-accelerated ML
+# pip install automl-platform[gpu-complete]
+
+# Complete installation
+# pip install automl-platform[all]
+
+# Custom combination
+# pip install automl-platform[gpu,monitoring,llm]
+"""
     
     return content
 
@@ -198,12 +239,28 @@ def main():
         else:
             print("\n⚠️  Warning: 'agents' extra not found in pyproject.toml")
         
+        # Check for meta-extras
+        meta_extras = ["nocode", "enterprise", "gpu-complete", "all"]
+        found_meta = [e for e in meta_extras if e in deps]
+        if found_meta:
+            print(f"\n✅ Meta-extras found: {', '.join(found_meta)}")
+        else:
+            print("\n⚠️  Warning: No meta-extras found")
+        
         # Check Python version
         if "project" in pyproject:
             requires_python = pyproject["project"].get("requires-python", "Not specified")
             version = pyproject["project"].get("version", "Not specified")
             print(f"\nProject version: {version}")
             print(f"Python requirement: {requires_python}")
+        
+        # Check for pycuda in GPU extras
+        if "gpu" in deps:
+            has_pycuda = any("pycuda" in pkg.lower() for pkg in deps["gpu"])
+            if has_pycuda:
+                print("\n✅ PyCUDA found in GPU dependencies")
+            else:
+                print("\n⚠️  Warning: PyCUDA not found in GPU dependencies")
         
         return
     
