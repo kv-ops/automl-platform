@@ -1,59 +1,56 @@
 # ==============================================================================
-# GPU-specific requirements for AutoML Platform
-# Version 3.2.1 - Harmonized with setup.py and pyproject.toml
+# GPU-specific requirements for AutoML Platform v3.2.1
+# Auto-generated from pyproject.toml - DO NOT EDIT MANUALLY
+# Run: python generate_requirements.py --gpu
 # ==============================================================================
 
-# ---------- Core GPU Dependencies ----------
-# PyTorch with CUDA support (using flexible versioning)
+# PyTorch with CUDA support
 --extra-index-url https://download.pytorch.org/whl/cu118
-torch>=2.1.0,<3.0.0
-torchvision>=0.16.0,<1.0.0
-torchaudio>=2.1.0,<3.0.0
 
-# Neural Networks for Tabular Data
-pytorch-tabnet>=4.1.0
-pytorch-lightning>=2.1.0
-
-# ---------- CUDA-accelerated libraries ----------
-cupy-cuda11x>=12.0.0,<13.0.0  # Harmonized with setup.py
+# ---------- Core GPU Dependencies ----------
+cupy-cuda11x>=12.0.0,<13.0.0
 pycuda>=2022.2.2
 numba[cuda]>=0.58.0
-
-# ---------- GPU Monitoring & Management ----------
 gputil>=1.4.0
 nvidia-ml-py3>=7.352.0
 pynvml>=11.5.0
 gpustat>=1.1.1
-
-# ---------- Optimized Inference ----------
-onnxruntime-gpu>=1.16.0,<2.0.0  # Harmonized with setup.py
-
-# ---------- GPU Memory Optimization ----------
+onnxruntime-gpu>=1.16.0,<2.0.0
 pytorch-memlab>=0.3.0
 torch-tb-profiler>=0.4.0
 
+# ---------- Deep Learning Frameworks ----------
+tensorflow>=2.15.0,<3.0.0
+torch>=2.1.0,<3.0.0
+torchvision>=0.16.0,<1.0.0
+torchaudio>=2.1.0,<3.0.0
+pytorch-tabnet>=4.1.0
+pytorch-lightning>=2.1.0
+transformers>=4.36.0
+
 # ==============================================================================
-# OPTIONAL: Advanced GPU Features (uncomment if needed)
+# OPTIONAL: Advanced GPU Features
+# Uncomment the sections you need
 # ==============================================================================
 
-# ---------- Distributed Training (move to [distributed-gpu] extra) ----------
-# horovod==0.28.1
-# fairscale>=0.4.13
-# deepspeed>=0.12.0
+# ---------- Distributed GPU Training ----------
+# horovod>=0.28.0,<1.0.0
+# fairscale>=0.4.0,<1.0.0
+# deepspeed>=0.12.0,<1.0.0
 
-# ---------- Mixed Precision (legacy, PyTorch now has native support) ----------
-# apex @ git+https://github.com/NVIDIA/apex
-
-# ---------- AutoML with GPU (move to [automl-gpu] extra) ----------
+# ---------- AutoML with GPU ----------
 # autogluon[torch]>=1.0.0
-# nni>=3.0
+# nni>=3.0,<4.0
+
+# ---------- GPU Inference Serving ----------
+# tritonclient[all]>=2.40.0
 
 # ---------- Alternative Frameworks ----------
 # jax[cuda11_pip]>=0.4.20
 # --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
-# ---------- Inference Server Client (move to [serving-gpu] extra) ----------
-# tritonclient[all]>=2.40.0
+# ---------- Mixed Precision (legacy, PyTorch now has native support) ----------
+# apex @ git+https://github.com/NVIDIA/apex
 
 # ---------- RAPIDS for GPU Data Processing (requires conda) ----------
 # Note: Install via conda, not pip:
@@ -63,12 +60,23 @@ torch-tb-profiler>=0.4.0
 # ==============================================================================
 # Installation Instructions:
 #
-# 1. Ensure CUDA 11.8 is installed:
+# 1. Ensure CUDA 11.8+ is installed:
 #    nvidia-smi  # Check CUDA version
 #
 # 2. Install GPU requirements:
 #    pip install -r requirements-gpu.txt
+#    
+#    OR use extras for the same result:
+#    pip install automl-platform[gpu,deep]
+#    
+#    OR for complete GPU stack:
+#    pip install automl-platform[gpu-complete]
 #
 # 3. Verify GPU availability:
 #    python -c "import torch; print(torch.cuda.is_available())"
+#
+# NOTE: This file combines packages from both [gpu] and [deep] extras.
+# - [gpu]: CUDA libraries, monitoring, optimization tools
+# - [deep]: PyTorch, TensorFlow, and other DL frameworks
+# - [gpu-complete]: Everything GPU-related including distributed training
 # ==============================================================================
