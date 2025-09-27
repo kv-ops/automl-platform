@@ -40,10 +40,12 @@ pip install automl-platform[agents]
 
 ### `[gpu]` - Core GPU Support
 Essential GPU libraries for acceleration:
-- CUDA array processing (cupy, pycuda, numba)
-- GPU monitoring (gputil, nvidia-ml-py3, pynvml, gpustat)
-- Memory profiling (pytorch-memlab, torch-tb-profiler)
-- Optimized inference (onnxruntime-gpu)
+- **CUDA array processing**: cupy for NumPy-like operations on GPU
+- **CUDA kernel programming**: pycuda for custom CUDA kernels
+- **GPU compilation**: numba for JIT compilation to CUDA
+- **GPU monitoring**: gputil, nvidia-ml-py3, pynvml, gpustat
+- **Memory profiling**: pytorch-memlab, torch-tb-profiler
+- **Optimized inference**: onnxruntime-gpu
 
 **Note**: This extra provides GPU infrastructure but NOT deep learning frameworks. For PyTorch/TensorFlow, add `[deep]` or use `[gpu-complete]`.
 
