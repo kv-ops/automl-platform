@@ -231,16 +231,17 @@ extras_require = {
     ],
 
     # GPU Computing & Acceleration
-    "gpu": [
-        "cupy-cuda11x>=12.0.0,<13.0.0",
-        "numba[cuda]>=0.58.0",
-        "gputil>=1.4.0",
-        "nvidia-ml-py3>=7.352.0",
-        "pynvml>=11.5.0",
-        "gpustat>=1.1.1",
-        "onnxruntime-gpu>=1.16.0,<2.0.0",
-        "pytorch-memlab>=0.3.0",
-        "torch-tb-profiler>=0.4.0",
+   "gpu": [
+    "cupy-cuda11x>=12.0.0,<13.0.0",
+    "pycuda>=2022.2.2",  # AJOUTÉ
+    "numba[cuda]>=0.58.0",
+    "gputil>=1.4.0",
+    "nvidia-ml-py3>=7.352.0",
+    "pynvml>=11.5.0",
+    "gpustat>=1.1.1",
+    "onnxruntime-gpu>=1.16.0,<2.0.0",
+    "pytorch-memlab>=0.3.0",
+    "torch-tb-profiler>=0.4.0",
     ],
 
     # Distributed GPU training
