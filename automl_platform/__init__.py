@@ -1160,9 +1160,9 @@ def create_orchestrator(config_path: str = None,
 
 # Check Python version compatibility
 import sys
-if sys.version_info < (3, 8):
+if sys.version_info < (3, 9):
     raise RuntimeError(
-        f"AutoML Platform requires Python 3.8 or later. "
+        f"AutoML Platform requires Python 3.9 or later. "
         f"Current version: {sys.version_info.major}.{sys.version_info.minor}"
     )
 
