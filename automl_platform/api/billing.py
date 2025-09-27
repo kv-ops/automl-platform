@@ -45,6 +45,7 @@ Base = declarative_base() if SQLALCHEMY_AVAILABLE else None
 class PlanType(Enum):
     """Subscription plan types."""
     FREE = "free"
+    TRIAL = "trial"
     STARTER = "starter"
     PROFESSIONAL = "professional"
     ENTERPRISE = "enterprise"
@@ -152,6 +153,33 @@ class PlanConfig:
 
 # Default pricing plans
 DEFAULT_PLANS = {
+    PlanType.TRIAL: PlanConfig(
+        plan_type=PlanType.TRIAL,
+        name="Trial",
+        description="Limited time evaluation plan",
+        monthly_price=Decimal("0"),
+        yearly_price=Decimal("0"),
+        max_models=1,
+        max_predictions_per_month=500,
+        max_api_calls_per_day=50,
+        max_storage_gb=0,
+        max_concurrent_jobs=1,
+        max_gpu_hours_per_month=0,
+        max_team_members=1,
+        features={
+            "automl": True,
+            "basic_models": True,
+            "advanced_models": False,
+            "gpu_training": False,
+            "llm_integration": False,
+            "custom_deployment": False,
+            "priority_support": False,
+            "sla": False,
+            "streaming": False,
+            "advanced_monitoring": False,
+            "white_label": False
+        }
+    ),
     PlanType.FREE: PlanConfig(
         plan_type=PlanType.FREE,
         name="Free",
@@ -243,7 +271,7 @@ if SQLALCHEMY_AVAILABLE:
         custom_features = Column(JSON)  # Override default features
         
         # Metadata
-        metadata = Column(JSON)
+        metadata_json = Column(JSON)
 
 
 class UsageTracker:
@@ -751,7 +779,7 @@ class BillingManager:
             intent = stripe.PaymentIntent.create(
                 amount=int(amount * 100),  # Convert to cents
                 currency='usd',
-                metadata={'tenant_id': tenant_id}
+                metadata_json={'tenant_id': tenant_id}
             )
             
             return {
