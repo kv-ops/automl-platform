@@ -153,7 +153,7 @@ PLAN_LIMITS = {
         "priority": 30,
         "distributed_training": False
     },
-    PlanType.PRO.value: {
+    PlanType.PROFESSIONAL.value: {
         "max_concurrent_jobs": 5,
         "max_workers": 8,
         "gpu_access": True,
@@ -857,7 +857,7 @@ def main():
     job = JobRequest(
         tenant_id="tenant_123",
         user_id="user_456",
-        plan_type=PlanType.PRO.value,
+        plan_type=PlanType.PROFESSIONAL.value,
         task_type="train",
         queue_type=QueueType.CPU_PRIORITY,
         payload={
