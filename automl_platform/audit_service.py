@@ -13,7 +13,7 @@ import hashlib
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 import uuid
 import gzip
@@ -26,7 +26,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.dialects.postgresql import UUID
 import pandas as pd
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 logger = logging.getLogger(__name__)
 
@@ -91,31 +91,32 @@ class AuditEvent:
     timestamp: datetime
     event_type: AuditEventType
     severity: AuditSeverity
+
     
     # Actor information
-    user_id: Optional[str]
-    tenant_id: Optional[str]
-    session_id: Optional[str]
-    ip_address: Optional[str]
-    user_agent: Optional[str]
+    user_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    session_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
     
     # Resource information
-    resource_type: Optional[str]
-    resource_id: Optional[str]
-    resource_name: Optional[str]
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    resource_name: Optional[str] = None
     
     # Event details
-    action: str
-    description: str
-    metadata: Dict[str, Any]
+    action: str = ""
+    description: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     # Request/Response
-    request_id: Optional[str]
-    request_method: Optional[str]
-    request_path: Optional[str]
-    request_data: Optional[Dict]
-    response_status: Optional[int]
-    response_time_ms: Optional[float]
+    request_id: Optional[str] = None
+    request_method: Optional[str] = None
+    request_path: Optional[str] = None
+    request_data: Optional[Dict] = None
+    response_status: Optional[int] = None
+    response_time_ms: Optional[float] = None
     
     # Compliance
     gdpr_relevant: bool = False
@@ -155,7 +156,7 @@ class AuditLogModel(Base):
     # Event details
     action = Column(String(255), nullable=False)
     description = Column(Text)
-    metadata = Column(JSON)
+    event_metadata = Column("metadata", JSON)
     
     # Request/Response
     request_id = Column(String(255), index=True)
@@ -226,7 +227,7 @@ class AuditService:
             return base64.b64decode(key_string)
         
         # Generate new key
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=b'stable_salt',  # In production, use proper salt management
@@ -393,7 +394,7 @@ class AuditService:
                     resource_name=event.resource_name,
                     action=event.action,
                     description=event.description,
-                    metadata=event.metadata,
+                    event_metadata=event.metadata,
                     request_id=event.request_id,
                     request_method=event.request_method,
                     request_path=event.request_path,
@@ -536,7 +537,7 @@ class AuditService:
                     "resource_name": event.resource_name,
                     "action": event.action,
                     "description": event.description,
-                    "metadata": event.metadata,
+                    "metadata": event.event_metadata,
                     "response_status": event.response_status,
                     "gdpr_relevant": event.gdpr_relevant
                 }
