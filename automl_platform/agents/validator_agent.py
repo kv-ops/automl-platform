@@ -52,15 +52,25 @@ class ValidatorAgent:
                 logger.warning("OpenAI API key missing; ValidatorAgent will use local validation heuristics only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.VALIDATOR)
+
         
         # Cache for web search results
         self.search_cache = {}
         self.cache_dir = Path(config.cache_dir) / "validator"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize assistant
+
+        # Assistant initialization tracking
+        self._initialization_task: Optional[asyncio.Task] = None
+        self._initialization_lock: Optional[asyncio.Lock] = None
+
         if self.client is not None:
-            asyncio.create_task(self._initialize_assistant())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None and loop.is_running():
+                self._initialization_task = loop.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
@@ -87,6 +97,24 @@ class ValidatorAgent:
                 
         except Exception as e:
             logger.error(f"Failed to initialize validator assistant: {e}")
+
+
+    async def _ensure_assistant_initialized(self):
+        if self.client is None or self.assistant:
+            return
+
+        if self._initialization_lock is None:
+            self._initialization_lock = asyncio.Lock()
+
+        async with self._initialization_lock:
+            if self.assistant:
+                return
+
+            if self._initialization_task is not None:
+                await self._initialization_task
+                self._initialization_task = None
+            else:
+                await self._initialize_assistant()
     
     async def validate(self, df: pd.DataFrame, profile_report: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -106,8 +134,7 @@ class ValidatorAgent:
                 return self._basic_validation(df, sector)
 
             # Ensure assistant is initialized
-            if not self.assistant:
-                await self._initialize_assistant()
+            await self._ensure_assistant_initialized()
             
             # Get sector-specific validation references
             sector = self.config.user_context.get("secteur_activite", "general")
