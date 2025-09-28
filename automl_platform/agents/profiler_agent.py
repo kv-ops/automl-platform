@@ -7,12 +7,21 @@ import numpy as np
 import json
 import logging
 import asyncio
-from typing import Dict, Any, Optional
-from openai import AsyncOpenAI
+import importlib.util
+from typing import Dict, Any, Optional, TYPE_CHECKING
 import time
 
 from .agent_config import AgentConfig, AgentType
 from .prompts.profiler_prompts import PROFILER_SYSTEM_PROMPT, PROFILER_USER_PROMPT
+
+_openai_spec = importlib.util.find_spec("openai")
+if _openai_spec is not None:
+    from openai import AsyncOpenAI  # type: ignore
+else:
+    AsyncOpenAI = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from openai import AsyncOpenAI as _AsyncOpenAIType
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +34,32 @@ class ProfilerAgent:
     
     def __init__(self, config: AgentConfig):
         """Initialize Profiler Agent"""
-        self.config = config
-        self.client = AsyncOpenAI(api_key=config.openai_api_key)
+            self.config = config
+                if AsyncOpenAI is not None and config.openai_api_key:
+            self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        else:
+            self.client = None
+            if AsyncOpenAI is None:
+                logger.warning(
+                    "AsyncOpenAI client unavailable because the 'openai' package is not installed. "
+                    "The ProfilerAgent will fall back to local profiling routines."
+                )
+            else:
+                logger.warning("OpenAI API key missing; ProfilerAgent will use local profiling only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.PROFILER)
         
         # Initialize assistant
-        asyncio.create_task(self._initialize_assistant())
+        if self.client is not None:
+            asyncio.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
         try:
+            if self.client is None:
+                logger.debug("ProfilerAgent _initialize_assistant skipped because client is unavailable.")
+                return
+
             if self.assistant_id:
                 # Retrieve existing assistant
                 self.assistant = await self.client.beta.assistants.retrieve(
@@ -68,6 +92,10 @@ class ProfilerAgent:
             Dictionary containing profiling results
         """
         try:
+            if self.client is None:
+                logger.info("ProfilerAgent using basic profiling because OpenAI client is unavailable.")
+                return self._basic_profiling(df)
+
             # Ensure assistant is initialized
             if not self.assistant:
                 await self._initialize_assistant()
