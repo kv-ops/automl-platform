@@ -7,14 +7,23 @@ import numpy as np
 import json
 import logging
 import asyncio
-from typing import Dict, Any, List, Tuple, Optional
-from openai import AsyncOpenAI
+import importlib.util
+from typing import Dict, Any, List, Tuple, Optional, TYPE_CHECKING
 import time
 import io
 import base64
 
 from .agent_config import AgentConfig, AgentType
 from .prompts.cleaner_prompts import CLEANER_SYSTEM_PROMPT, CLEANER_USER_PROMPT
+
+_openai_spec = importlib.util.find_spec("openai")
+if _openai_spec is not None:
+    from openai import AsyncOpenAI  # type: ignore
+else:
+    AsyncOpenAI = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover
+    from openai import AsyncOpenAI as _AsyncOpenAIType
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +37,17 @@ class CleanerAgent:
     def __init__(self, config: AgentConfig):
         """Initialize Cleaner Agent"""
         self.config = config
-        self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        if AsyncOpenAI is not None and config.openai_api_key:
+            self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        else:
+            self.client = None
+            if AsyncOpenAI is None:
+                logger.warning(
+                    "AsyncOpenAI client unavailable because the 'openai' package is not installed. "
+                    "CleanerAgent will fall back to local cleaning strategies."
+                )
+            else:
+                logger.warning("OpenAI API key missing; CleanerAgent will rely on local cleaning strategies only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.CLEANER)
         
@@ -36,11 +55,16 @@ class CleanerAgent:
         self.transformations_history = []
         
         # Initialize assistant
-        asyncio.create_task(self._initialize_assistant())
+        if self.client is not None:
+            asyncio.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
         try:
+            if self.client is None:
+                logger.debug("CleanerAgent _initialize_assistant skipped because client is unavailable.")
+                return
+
             if self.assistant_id:
                 self.assistant = await self.client.beta.assistants.retrieve(
                     assistant_id=self.assistant_id
@@ -78,6 +102,10 @@ class CleanerAgent:
             Tuple of (cleaned_dataframe, list_of_transformations)
         """
         try:
+            if self.client is None:
+                logger.info("CleanerAgent using basic cleaning because OpenAI client is unavailable.")
+                return self._basic_cleaning(df, profile_report)
+
             # Ensure assistant is initialized
             if not self.assistant:
                 await self._initialize_assistant()
