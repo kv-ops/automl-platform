@@ -20,25 +20,65 @@ import re
 from functools import lru_cache
 
 # LLM providers
-import openai
-from anthropic import Anthropic
+import importlib.util
+from typing import TYPE_CHECKING, Any
+
+openai_spec = importlib.util.find_spec("openai")
+if openai_spec is not None:
+    import openai  # type: ignore
+else:
+    openai = None  # type: ignore[assignment]
+
+anthropic_spec = importlib.util.find_spec("anthropic")
+if anthropic_spec is not None:
+    from anthropic import Anthropic
+else:
+    Anthropic = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover - typing helpers only
+    from anthropic import Anthropic as _Anthropic
+
+chromadb_spec = importlib.util.find_spec("chromadb")
+if chromadb_spec is not None:
+    import chromadb  # type: ignore
+    from chromadb.config import Settings  # type: ignore
+else:
+    chromadb = None  # type: ignore[assignment]
+    Settings = None  # type: ignore[assignment]
+
+faiss_spec = importlib.util.find_spec("faiss")
+if faiss_spec is not None:
+    import faiss  # type: ignore
+else:
+    faiss = None  # type: ignore[assignment]
+
+langchain_spec = importlib.util.find_spec("langchain")
+if langchain_spec is not None:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter  # type: ignore
+    from langchain.embeddings import OpenAIEmbeddings  # type: ignore
+    from langchain.schema import Document  # type: ignore
+    from langchain.chains import RetrievalQA  # type: ignore
+    from langchain.memory import ConversationBufferMemory  # type: ignore
+    from langchain.vectorstores import Chroma, FAISS  # type: ignore
+else:
+    RecursiveCharacterTextSplitter = None  # type: ignore[assignment]
+    OpenAIEmbeddings = None  # type: ignore[assignment]
+    Document = None  # type: ignore[assignment]
+    RetrievalQA = None  # type: ignore[assignment]
+    ConversationBufferMemory = None  # type: ignore[assignment]
+    Chroma = None  # type: ignore[assignment]
+    FAISS = None  # type: ignore[assignment]
+
+websockets_spec = importlib.util.find_spec("websockets")
+if websockets_spec is not None:
+    import websockets  # type: ignore
+else:
+    websockets = None  # type: ignore[assignment]
 
 # Vector stores and embeddings
-import chromadb
-from chromadb.config import Settings
-import faiss
 import pickle
 
-# Advanced RAG components
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.schema import Document
-from langchain.chains import RetrievalQA
-from langchain.memory import ConversationBufferMemory
-from langchain.vectorstores import Chroma, FAISS
-
 # WebSocket support
-import websockets
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
@@ -77,6 +117,13 @@ class OpenAIProvider(LLMProvider):
     
     def __init__(self, api_key: str, model_name: str = "gpt-4-turbo-preview"):
         super().__init__(api_key, model_name)
+        
+        if openai is None:
+            raise ImportError(
+                "The 'openai' package is required for OpenAIProvider but is not installed. "
+                "Install it via `pip install openai>=1.10.0`."
+            )
+
         openai.api_key = api_key
         
         # Updated pricing for 2024
@@ -145,9 +192,16 @@ class OpenAIProvider(LLMProvider):
 
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude provider with Claude 3 support."""
+
     
     def __init__(self, api_key: str, model_name: str = "claude-3-opus-20240229"):
         super().__init__(api_key, model_name)
+        if Anthropic is None:
+            raise ImportError(
+                "The 'anthropic' package is required for AnthropicProvider but is not installed. "
+                "Install it via `pip install anthropic`."
+            )
+
         self.client = Anthropic(api_key=api_key)
         
         # Pricing per 1K tokens
@@ -200,6 +254,11 @@ class LLMCache:
     def __init__(self, redis_url: str = "redis://localhost:6379/0", ttl: int = 3600):
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
         self.ttl = ttl
+        if OpenAIEmbeddings is None:
+            raise ImportError(
+                "langchain is required for semantic caching but is not installed. "
+                "Install it via `pip install langchain`."
+            )
         self.embeddings = OpenAIEmbeddings()
     
     def _get_key(self, prompt: str, model: str) -> str:
@@ -268,6 +327,11 @@ class AdvancedRAGSystem:
     def __init__(self, vector_store: str = "chromadb", embedding_model: str = "text-embedding-ada-002"):
         self.vector_store_type = vector_store
         self.embedding_model = embedding_model
+        if OpenAIEmbeddings is None or RecursiveCharacterTextSplitter is None or ConversationBufferMemory is None:
+            raise ImportError(
+                "langchain is required for AdvancedRAGSystem but is not installed. "
+                "Install it via `pip install langchain`."
+            )
         self.embeddings = OpenAIEmbeddings(model=embedding_model)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
@@ -276,9 +340,15 @@ class AdvancedRAGSystem:
             separators=["\n\n", "\n", " ", ""]
         )
         self.memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
         
         # Initialize vector store
         if vector_store == "chromadb":
+            if chromadb is None or Settings is None or Chroma is None:
+                raise ImportError(
+                    "chromadb and langchain-vectorstores are required for Chroma vector store support. "
+                    "Install them via `pip install chromadb langchain`."
+                )
             self.client = chromadb.Client(Settings(
                 chroma_db_impl="duckdb+parquet",
                 persist_directory="./chroma_db"
@@ -290,6 +360,11 @@ class AdvancedRAGSystem:
                 embedding_function=self.embeddings
             )
         elif vector_store == "faiss":
+           if faiss is None or FAISS is None:
+                raise ImportError(
+                    "faiss and langchain-vectorstores are required for FAISS vector store support. "
+                    "Install them via `pip install faiss-cpu langchain`."
+                )
             self.index = None
             self.documents = []
             self.metadata = []
