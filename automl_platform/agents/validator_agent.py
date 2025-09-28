@@ -8,8 +8,8 @@ import json
 import logging
 import asyncio
 import aiohttp
-from typing import Dict, Any, List, Optional
-from openai import AsyncOpenAI
+import importlib.util
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import time
 from bs4 import BeautifulSoup
 import hashlib
@@ -17,6 +17,15 @@ from pathlib import Path
 
 from .agent_config import AgentConfig, AgentType
 from .prompts.validator_prompts import VALIDATOR_SYSTEM_PROMPT, VALIDATOR_USER_PROMPT
+
+_openai_spec = importlib.util.find_spec("openai")
+if _openai_spec is not None:
+    from openai import AsyncOpenAI  # type: ignore
+else:
+    AsyncOpenAI = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from openai import AsyncOpenAI as _AsyncOpenAIType
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +39,17 @@ class ValidatorAgent:
     def __init__(self, config: AgentConfig):
         """Initialize Validator Agent"""
         self.config = config
-        self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        if AsyncOpenAI is not None and config.openai_api_key:
+            self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        else:
+            self.client = None
+            if AsyncOpenAI is None:
+                logger.warning(
+                    "AsyncOpenAI client unavailable because the 'openai' package is not installed. "
+                    "ValidatorAgent will rely on local validation heuristics."
+                )
+            else:
+                logger.warning("OpenAI API key missing; ValidatorAgent will use local validation heuristics only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.VALIDATOR)
         
@@ -40,11 +59,16 @@ class ValidatorAgent:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize assistant
-        asyncio.create_task(self._initialize_assistant())
+        if self.client is not None:
+            asyncio.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
         try:
+            if self.client is None:
+                logger.debug("ValidatorAgent _initialize_assistant skipped because client is unavailable.")
+                return
+
             if self.assistant_id:
                 self.assistant = await self.client.beta.assistants.retrieve(
                     assistant_id=self.assistant_id
@@ -76,6 +100,11 @@ class ValidatorAgent:
             Dictionary containing validation results
         """
         try:
+            if self.client is None:
+                logger.info("ValidatorAgent falling back to basic validation because OpenAI client is unavailable.")
+                sector = self.config.user_context.get("secteur_activite", "general")
+                return self._basic_validation(df, sector)
+
             # Ensure assistant is initialized
             if not self.assistant:
                 await self._initialize_assistant()
