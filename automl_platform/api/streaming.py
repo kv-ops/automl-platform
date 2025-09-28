@@ -853,11 +853,142 @@ class FlinkStreamProcessor(StreamProcessor):
             
         finally:
             self.stop()
-    
+
+
+class RedisStreamHandler(StreamProcessor):
+    """Redis Streams handler for lightweight streaming scenarios."""
+
+    def __init__(self, config: StreamConfig):
+        super().__init__(config)
+
+        if not REDIS_AVAILABLE:
+            raise ImportError("redis package is required for RedisStreamHandler. Install with: pip install redis")
+
+        # Support redis-py classic and asyncio versions via simple constructor
+        broker = config.brokers[0] if config.brokers else "localhost:6379"
+        host, _, port = broker.partition(":")
+        self.client = redis.Redis(host=host or "localhost", port=int(port) if port else 6379, decode_responses=True)
+        self.stream_key = config.topic
+        self.consumer_group = config.consumer_group
+        self.consumer_name = f"consumer-{os.getpid()}"
+
+    async def start_consumer(self, processor: StreamProcessor, output_stream: Optional[str] = None):
+        """Start consuming messages from Redis Streams."""
+
+        try:
+            self.client.xgroup_create(
+                name=self.stream_key,
+                groupname=self.consumer_group,
+                id="0",
+                mkstream=True
+            )
+        except Exception as exc:  # pragma: no cover - redis raises ResponseError for existing group
+            if "BUSYGROUP" not in str(exc):
+                raise
+
+        while True:
+            messages = self.client.xreadgroup(
+                groupname=self.consumer_group,
+                consumername=self.consumer_name,
+                streams={self.stream_key: ">"},
+                count=self.config.batch_size,
+                block=1000
+            )
+
+            if not messages:
+                await asyncio.sleep(0)
+                continue
+
+            for _, entries in messages:
+                for message_id, payload in entries:
+                    stream_message = StreamMessage(
+                        key=payload.get("key", message_id),
+                        value=json.loads(payload.get("value", "{}")) if payload.get("value") else payload,
+                        timestamp=datetime.now(),
+                    )
+
+                    await processor.process(stream_message)
+
+                    if output_stream:
+                        self.client.xadd(output_stream, {"processed": json.dumps(stream_message.value)})
+
+                    self.client.xack(self.stream_key, self.consumer_group, message_id)
+
+    async def process(self, message: StreamMessage) -> Optional[StreamMessage]:
+        """Default Redis processing simply returns the message."""
+        return message
+
+    async def process_batch(self, messages: List[StreamMessage]) -> List[StreamMessage]:
+        results = []
+        for message in messages:
+            processed = await self.process(message)
+            if processed:
+                results.append(processed)
+        return results
+
+
     def stop(self):
         """Stop the Flink job."""
         self.running = False
         logger.info("Flink stream processor stopped")
+
+
+# Backwards-compatible aliases expected by tests and legacy code
+KafkaStreamHandler = KafkaStreamProcessor
+PulsarStreamHandler = PulsarStreamProcessor
+FlinkStreamHandler = FlinkStreamProcessor
+RedisStreamProcessor = RedisStreamHandler
+
+
+class WindowedAggregator:
+    """Simple windowed aggregator for time-series metrics."""
+
+    def __init__(self, window_size: int = 60, slide_interval: int = 15):
+        self.window_size = window_size
+        self.slide_interval = slide_interval
+        self.windows: Dict[str, Dict[str, Any]] = {}
+
+    def _window_start(self, timestamp: datetime) -> datetime:
+        aligned_seconds = (timestamp.second // self.slide_interval) * self.slide_interval
+        return timestamp.replace(second=aligned_seconds, microsecond=0)
+
+    def _window_key(self, metric: str, timestamp: datetime) -> str:
+        return f"{metric}_{self._window_start(timestamp).isoformat()}"
+
+    def add(self, metric: str, value: float, timestamp: Optional[datetime] = None):
+        timestamp = timestamp or datetime.utcnow()
+        key = self._window_key(metric, timestamp)
+        window = self.windows.setdefault(key, {"start": self._window_start(timestamp), "values": []})
+        window["values"].append(float(value))
+        return key
+
+    def get_aggregates(self, metric: str, timestamp: Optional[datetime] = None) -> Dict[str, float]:
+        timestamp = timestamp or datetime.utcnow()
+        key = self._window_key(metric, timestamp)
+        window = self.windows.get(key)
+        if not window or not window["values"]:
+            return {"count": 0, "sum": 0.0, "mean": 0.0, "min": 0.0, "max": 0.0}
+
+        values = window["values"]
+        total = sum(values)
+        return {
+            "count": len(values),
+            "sum": total,
+            "mean": total / len(values),
+            "min": min(values),
+            "max": max(values),
+        }
+
+    def cleanup_old_windows(self, current_time: Optional[datetime] = None):
+        current_time = current_time or datetime.utcnow()
+        cutoff = current_time - timedelta(seconds=self.window_size)
+        to_remove = [
+            key
+            for key, window in self.windows.items()
+            if window["start"] < cutoff
+        ]
+        for key in to_remove:
+            del self.windows[key]
 
 
 class MLStreamProcessor(KafkaStreamProcessor):
@@ -1011,24 +1142,26 @@ def create_stream_processor(config: StreamConfig) -> StreamProcessor:
     
     if platform == "kafka":
         return KafkaStreamProcessor(config)
-    elif platform == "pulsar":
+    if platform == "pulsar":
         return PulsarStreamProcessor(config)
-    elif platform == "flink":
+    if platform == "flink":
         return FlinkStreamProcessor(config)
-    else:
-        raise ValueError(f"Unsupported streaming platform: {platform}")
+    if platform == "redis":
+        return RedisStreamHandler(config)
+
+    raise ValueError(f"Unsupported streaming platform: {platform}")
 
 
 # Export the registry and components so they can be imported by api.py
 __all__ = [
-    'streaming_registry', 
-    'StreamConfig', 
-    'StreamMessage', 
+    'streaming_registry',
+    'StreamConfig',
+    'StreamMessage',
     'StreamProcessor',
-    'KafkaStreamProcessor', 
+    'KafkaStreamProcessor',
     'PulsarStreamProcessor',
     'FlinkStreamProcessor',
-    'MLStreamProcessor', 
+    'MLStreamProcessor',
     'StreamingOrchestrator',
     'create_stream_processor'
 ]
