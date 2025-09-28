@@ -1,5 +1,5 @@
 """
-AutoML Platform - Production-ready machine learning automation with enterprise features
+AutoML Platform - Production-ready machine learning automation with enterprise feature
 
 Version: 3.2.1
 
