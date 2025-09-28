@@ -53,7 +53,7 @@ class ValidatorAgent:
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.VALIDATOR)
 
-        
+
         # Cache for web search results
         self.search_cache = {}
         self.cache_dir = Path(config.cache_dir) / "validator"
@@ -115,7 +115,7 @@ class ValidatorAgent:
                 self._initialization_task = None
             else:
                 await self._initialize_assistant()
-    
+
     async def validate(self, df: pd.DataFrame, profile_report: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate data against sector standards

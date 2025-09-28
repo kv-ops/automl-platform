@@ -48,7 +48,7 @@ class ProfilerAgent:
                 logger.warning("OpenAI API key missing; ProfilerAgent will use local profiling only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.PROFILER)
-      
+
         # Assistant initialization tracking
         self._initialization_task: Optional[asyncio.Task] = None
         self._initialization_lock: Optional[asyncio.Lock] = None
@@ -89,6 +89,23 @@ class ProfilerAgent:
                 
         except Exception as e:
             logger.error(f"Failed to initialize assistant: {e}")
+
+    async def _ensure_assistant_initialized(self):
+        if self.client is None or self.assistant:
+            return
+
+        if self._initialization_lock is None:
+            self._initialization_lock = asyncio.Lock()
+
+        async with self._initialization_lock:
+            if self.assistant:
+                return
+
+            if self._initialization_task is not None:
+                await self._initialization_task
+                self._initialization_task = None
+            else:
+                await self._initialize_assistant()
     
     async def _ensure_assistant_initialized(self):
         if self.client is None or self.assistant:
