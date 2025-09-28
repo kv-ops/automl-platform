@@ -53,9 +53,18 @@ class ControllerAgent:
         # Quality metrics tracking
         self.quality_metrics = {}
         
-        # Initialize assistant
+        # Assistant initialization tracking
+        self._initialization_task: Optional[asyncio.Task] = None
+        self._initialization_lock: Optional[asyncio.Lock] = None
+
         if self.client is not None:
-            asyncio.create_task(self._initialize_assistant())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None and loop.is_running():
+                self._initialization_task = loop.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
@@ -82,6 +91,23 @@ class ControllerAgent:
                 
         except Exception as e:
             logger.error(f"Failed to initialize controller assistant: {e}")
+
+    async def _ensure_assistant_initialized(self):
+        if self.client is None or self.assistant:
+            return
+
+        if self._initialization_lock is None:
+            self._initialization_lock = asyncio.Lock()
+
+        async with self._initialization_lock:
+            if self.assistant:
+                return
+
+            if self._initialization_task is not None:
+                await self._initialization_task
+                self._initialization_task = None
+            else:
+                await self._initialize_assistant()
     
     async def validate(
         self,
@@ -108,8 +134,7 @@ class ControllerAgent:
                 return self._basic_validation(cleaned_df, original_df, metrics)
 
             # Ensure assistant is initialized
-            if not self.assistant:
-                await self._initialize_assistant()
+            await self._ensure_assistant_initialized()
             
             # Calculate quality metrics
             metrics = self._calculate_quality_metrics(cleaned_df, original_df)

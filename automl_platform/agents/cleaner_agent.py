@@ -54,9 +54,18 @@ class CleanerAgent:
         # Track transformations
         self.transformations_history = []
         
-        # Initialize assistant
+        # Assistant initialization tracking
+        self._initialization_task: Optional[asyncio.Task] = None
+        self._initialization_lock: Optional[asyncio.Lock] = None
+
         if self.client is not None:
-            asyncio.create_task(self._initialize_assistant())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None and loop.is_running():
+                self._initialization_task = loop.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
@@ -83,6 +92,23 @@ class CleanerAgent:
                 
         except Exception as e:
             logger.error(f"Failed to initialize cleaner assistant: {e}")
+
+    async def _ensure_assistant_initialized(self):
+        if self.client is None or self.assistant:
+            return
+
+        if self._initialization_lock is None:
+            self._initialization_lock = asyncio.Lock()
+
+        async with self._initialization_lock:
+            if self.assistant:
+                return
+
+            if self._initialization_task is not None:
+                await self._initialization_task
+                self._initialization_task = None
+            else:
+                await self._initialize_assistant()
     
     async def clean(
         self, 
@@ -107,8 +133,7 @@ class CleanerAgent:
                 return self._basic_cleaning(df, profile_report)
 
             # Ensure assistant is initialized
-            if not self.assistant:
-                await self._initialize_assistant()
+            await self._ensure_assistant_initialized()
             
             # Create a thread
             thread = await self.client.beta.threads.create()

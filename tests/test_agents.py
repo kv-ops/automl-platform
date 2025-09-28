@@ -1174,10 +1174,33 @@ class TestOpenAIAgents:
                 mock_handle.return_value = {'content': '{"valid": true}'}
                 
                 report = await agent.validate(df, profile_report)
-                
+
                 assert isinstance(report, dict)
                 assert 'valid' in report
-    
+
+    def test_agent_instantiation_without_event_loop(self, mock_agent_config, monkeypatch):
+        """Ensure OpenAI-based agents defer initialization when no loop is running"""
+        from automl_platform.agents import cleaner_agent, controller_agent, profiler_agent, validator_agent
+
+        class DummyAsyncOpenAI:
+            def __init__(self, *args, **kwargs):
+                self.beta = MagicMock()
+
+        agents = [
+            (cleaner_agent, CleanerAgent),
+            (controller_agent, ControllerAgent),
+            (profiler_agent, ProfilerAgent),
+            (validator_agent, ValidatorAgent),
+        ]
+
+        for module, agent_cls in agents:
+            monkeypatch.setattr(module, "AsyncOpenAI", DummyAsyncOpenAI)
+            instance = agent_cls(mock_agent_config)
+
+            assert instance.client is not None
+            assert getattr(instance, "_initialization_task") is None
+            assert instance.assistant is None
+
     def test_cleaner_agent_basic_cleaning(self, mock_agent_config):
         """Test CleanerAgent basic cleaning"""
         agent = CleanerAgent(mock_agent_config)

@@ -360,7 +360,7 @@ class AdvancedRAGSystem:
                 embedding_function=self.embeddings
             )
         elif vector_store == "faiss":
-           if faiss is None or FAISS is None:
+            if faiss is None or FAISS is None:
                 raise ImportError(
                     "faiss and langchain-vectorstores are required for FAISS vector store support. "
                     "Install them via `pip install faiss-cpu langchain`."

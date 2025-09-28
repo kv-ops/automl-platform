@@ -34,8 +34,8 @@ class ProfilerAgent:
     
     def __init__(self, config: AgentConfig):
         """Initialize Profiler Agent"""
-            self.config = config
-                if AsyncOpenAI is not None and config.openai_api_key:
+        self.config = config
+        if AsyncOpenAI is not None and config.openai_api_key:
             self.client = AsyncOpenAI(api_key=config.openai_api_key)
         else:
             self.client = None
@@ -48,10 +48,19 @@ class ProfilerAgent:
                 logger.warning("OpenAI API key missing; ProfilerAgent will use local profiling only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.PROFILER)
-        
-        # Initialize assistant
+
+        # Assistant initialization tracking
+        self._initialization_task: Optional[asyncio.Task] = None
+        self._initialization_lock: Optional[asyncio.Lock] = None
+
         if self.client is not None:
-            asyncio.create_task(self._initialize_assistant())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None and loop.is_running():
+                self._initialization_task = loop.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
@@ -80,6 +89,23 @@ class ProfilerAgent:
                 
         except Exception as e:
             logger.error(f"Failed to initialize assistant: {e}")
+
+    async def _ensure_assistant_initialized(self):
+        if self.client is None or self.assistant:
+            return
+
+        if self._initialization_lock is None:
+            self._initialization_lock = asyncio.Lock()
+
+        async with self._initialization_lock:
+            if self.assistant:
+                return
+
+            if self._initialization_task is not None:
+                await self._initialization_task
+                self._initialization_task = None
+            else:
+                await self._initialize_assistant()
     
     async def analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
@@ -97,8 +123,7 @@ class ProfilerAgent:
                 return self._basic_profiling(df)
 
             # Ensure assistant is initialized
-            if not self.assistant:
-                await self._initialize_assistant()
+            await self._ensure_assistant_initialized()
             
             # Prepare data summary for the assistant
             data_summary = self._prepare_data_summary(df)
