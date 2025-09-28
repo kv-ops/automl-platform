@@ -261,15 +261,28 @@ except ImportError:
     get_system_status = None
     GPUResourceManager = None
 
-# TabNet Implementation
-from .tabnet_sklearn import (
-    TabNetClassifier,
-    TabNetRegressor,
-    TabNet,
-    TabNetLayer,
-    TabNetEncoder,
-    AttentiveTransformer
-)
+# TabNet Implementation (optional torch dependency)
+import importlib.util as _importlib_util
+
+_torch_spec = _importlib_util.find_spec("torch")
+if _torch_spec is not None:
+    from .tabnet_sklearn import (  # type: ignore
+        TabNetClassifier,
+        TabNetRegressor,
+        TabNet,
+        TabNetLayer,
+        TabNetEncoder,
+        AttentiveTransformer
+    )
+    TABNET_AVAILABLE = True
+else:
+    TABNET_AVAILABLE = False
+    TabNetClassifier = None  # type: ignore[assignment]
+    TabNetRegressor = None  # type: ignore[assignment]
+    TabNet = None  # type: ignore[assignment]
+    TabNetLayer = None  # type: ignore[assignment]
+    TabNetEncoder = None  # type: ignore[assignment]
+    AttentiveTransformer = None  # type: ignore[assignment]
 
 # Streamlit A/B Testing Dashboard
 try:
