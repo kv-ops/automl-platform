@@ -4,6 +4,7 @@ Interactive dashboard with LLM integration
 """
 
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -81,8 +82,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # API Configuration
-API_BASE_URL = st.secrets.get("API_BASE_URL", "http://localhost:8000")
-API_KEY = st.secrets.get("API_KEY", "")
+def _get_secret(key: str, default: str = "") -> str:
+    try:
+        return st.secrets.get(key, default)
+    except (StreamlitSecretNotFoundError, AttributeError, KeyError):
+        return default
+
+
+API_BASE_URL = _get_secret("API_BASE_URL", "http://localhost:8000")
+API_KEY = _get_secret("API_KEY", "")
 
 
 class AutoMLDashboard:
