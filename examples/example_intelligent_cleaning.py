@@ -14,9 +14,9 @@ import sys
 # If running this file directly, uncomment the next line:
 # sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from ..agents import DataCleaningOrchestrator, AgentConfig
-from ..data_prep import EnhancedDataPreprocessor
-from ..config import AutoMLConfig
+from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
+from automl_platform.data_prep import EnhancedDataPreprocessor
+from automl_platform.config import AutoMLConfig
 
 
 async def example_intelligent_cleaning():
