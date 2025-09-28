@@ -53,6 +53,7 @@ class ValidatorAgent:
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.VALIDATOR)
 
+
         # Cache for web search results
         self.search_cache = {}
         self.cache_dir = Path(config.cache_dir) / "validator"
@@ -96,6 +97,7 @@ class ValidatorAgent:
                 
         except Exception as e:
             logger.error(f"Failed to initialize validator assistant: {e}")
+
 
     async def _ensure_assistant_initialized(self):
         if self.client is None or self.assistant:

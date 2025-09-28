@@ -107,6 +107,23 @@ class ProfilerAgent:
             else:
                 await self._initialize_assistant()
     
+    async def _ensure_assistant_initialized(self):
+        if self.client is None or self.assistant:
+            return
+
+        if self._initialization_lock is None:
+            self._initialization_lock = asyncio.Lock()
+
+        async with self._initialization_lock:
+            if self.assistant:
+                return
+
+            if self._initialization_task is not None:
+                await self._initialization_task
+                self._initialization_task = None
+            else:
+                await self._initialize_assistant()
+                
     async def analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Analyze dataset and generate comprehensive profile report

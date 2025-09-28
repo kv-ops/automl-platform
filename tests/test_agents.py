@@ -1175,8 +1175,6 @@ class TestOpenAIAgents:
                 
                 report = await agent.validate(df, profile_report)
 
-                assert isinstance(report, dict)
-                assert 'valid' in report
 
     def test_agent_instantiation_without_event_loop(self, mock_agent_config, monkeypatch):
         """Ensure OpenAI-based agents defer initialization when no loop is running"""

@@ -53,7 +53,7 @@ class CleanerAgent:
         
         # Track transformations
         self.transformations_history = []
-        
+
         # Assistant initialization tracking
         self._initialization_task: Optional[asyncio.Task] = None
         self._initialization_lock: Optional[asyncio.Lock] = None
