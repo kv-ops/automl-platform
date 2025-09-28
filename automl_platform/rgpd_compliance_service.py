@@ -1136,5 +1136,10 @@ __all__ = [
     'DatabaseService',
     'AuditService',
     'DataCategory',
-    'get_rgpd_service'
+    'get_rgpd_service',
+    'rgpd_service',
+    'CRYPTO_AVAILABLE',
+    'REDIS_AVAILABLE',
+    'SQLALCHEMY_AVAILABLE',
+    'PANDAS_AVAILABLE',
 ]
