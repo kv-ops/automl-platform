@@ -255,7 +255,7 @@ def verify_installation():
         print("\n🎉 Migration completed successfully!")
         print("\n📝 Next steps:")
         print("1. Set your OpenAI API key in .env file")
-        print("2. Test with: python automl_platform/examples/example_intelligent_cleaning.py")
+        print("2. Test with: python examples/example_intelligent_cleaning.py")
     else:
         print("\n⚠️  Some checks failed. Please review and fix the issues above.")
 
