@@ -94,6 +94,12 @@ print(f"Quality Improvement: {report['summary']['improvement']:.1f} points")
 print(f"Mode Used: {report['summary']['mode']}")
 ```
 
+To try the full workflow without writing code, run the bundled example script:
+
+```bash
+python examples/example_intelligent_cleaning.py
+```
+
 ### 🎯 Sector-Specific Validation
 
 The system automatically validates data against industry standards:
@@ -293,7 +299,7 @@ pytest tests/test_agents.py -v
 pytest tests/test_agents.py::TestIntegration -v
 
 # Test with sample data
-python automl_platform/examples/example_intelligent_cleaning.py
+python examples/example_intelligent_cleaning.py
 ```
 
 ### 📋 Configuration Options
@@ -348,17 +354,14 @@ AGENT_EXPONENTIAL_BACKOFF=true
 
 ### 📚 Agent Documentation
 
-For detailed agent documentation:
+For detailed agent documentation, refer to the "🤖 NEW: Intelligent Data Cleaning with OpenAI Agents" section earlier in this README.
 
 ```bash
-# View agent architecture
-cat automl_platform/agents/README.md
+# Jump directly to the agent section in this README from the terminal
+rg "Intelligent Data Cleaning" README.md
 
-# Review example usage
-python automl_platform/examples/example_intelligent_cleaning.py --help
-
-# Generate cleaning report
-python main.py clean --intelligent --data data.csv --sector finance --export-yaml
+# Run the intelligent cleaning example and generate a report
+python examples/example_intelligent_cleaning.py
 ```
 
 ---
@@ -441,6 +444,9 @@ pip install "automl-platform[all]"
 git clone https://github.com/automl-platform/automl-platform.git
 cd automl-platform
 pip install -e ".[dev]"
+
+# Ensure the repository is discoverable when running CLI commands or examples
+export PYTHONPATH="$(pwd):${PYTHONPATH}"
 ```
 
 ## 📖 Documentation
