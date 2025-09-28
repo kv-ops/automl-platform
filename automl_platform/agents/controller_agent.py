@@ -7,13 +7,22 @@ import numpy as np
 import json
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional
-from openai import AsyncOpenAI
+import importlib.util
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import time
 from datetime import datetime
 
 from .agent_config import AgentConfig, AgentType
 from .prompts.controller_prompts import CONTROLLER_SYSTEM_PROMPT, CONTROLLER_USER_PROMPT
+
+_openai_spec = importlib.util.find_spec("openai")
+if _openai_spec is not None:
+    from openai import AsyncOpenAI  # type: ignore
+else:
+    AsyncOpenAI = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover
+    from openai import AsyncOpenAI as _AsyncOpenAIType
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +36,17 @@ class ControllerAgent:
     def __init__(self, config: AgentConfig):
         """Initialize Controller Agent"""
         self.config = config
-        self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        if AsyncOpenAI is not None and config.openai_api_key:
+            self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        else:
+            self.client = None
+            if AsyncOpenAI is None:
+                logger.warning(
+                    "AsyncOpenAI client unavailable because the 'openai' package is not installed. "
+                    "ControllerAgent will rely on local validation metrics."
+                )
+            else:
+                logger.warning("OpenAI API key missing; ControllerAgent will rely on local validation metrics only.")
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.CONTROLLER)
         
@@ -35,11 +54,16 @@ class ControllerAgent:
         self.quality_metrics = {}
         
         # Initialize assistant
-        asyncio.create_task(self._initialize_assistant())
+        if self.client is not None:
+            asyncio.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
         try:
+            if self.client is None:
+                logger.debug("ControllerAgent _initialize_assistant skipped because client is unavailable.")
+                return
+
             if self.assistant_id:
                 self.assistant = await self.client.beta.assistants.retrieve(
                     assistant_id=self.assistant_id
@@ -77,6 +101,12 @@ class ControllerAgent:
             Dictionary containing validation results and metrics
         """
         try:
+            if self.client is None:
+                logger.info("ControllerAgent using basic validation because OpenAI client is unavailable.")
+                metrics = self._calculate_quality_metrics(cleaned_df, original_df)
+                self.quality_metrics = metrics
+                return self._basic_validation(cleaned_df, original_df, metrics)
+
             # Ensure assistant is initialized
             if not self.assistant:
                 await self._initialize_assistant()
