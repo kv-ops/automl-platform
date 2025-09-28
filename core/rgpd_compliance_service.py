@@ -65,6 +65,15 @@ except ImportError:
     CRYPTO_AVAILABLE = False
     Fernet = None
 
+# Expose redis namespace for tests to patch even when optional dependency
+try:
+    from automl_platform.rgpd_compliance_service import redis
+except ImportError:
+    class _RedisNamespace:
+        Redis = None
+
+    redis = _RedisNamespace()
+
 # Try to import Redis availability flag
 try:
     from automl_platform.rgpd_compliance_service import REDIS_AVAILABLE
@@ -121,6 +130,7 @@ __all__ = [
     'REDIS_AVAILABLE',
     'SQLALCHEMY_AVAILABLE',
     'PANDAS_AVAILABLE',
+    'redis',
 ]
 
 # Add optional exports if they're available

@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict, field
 from enum import Enum
+from types import SimpleNamespace
 import uuid
 import secrets
 
@@ -32,7 +33,7 @@ try:
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    redis = None
+    redis = SimpleNamespace(Redis=None)
 
 try:
     from sqlalchemy import create_engine, Column, String, DateTime, Boolean, JSON, Text, Integer
