@@ -14,6 +14,7 @@ import pickle
 import json
 from pathlib import Path
 from collections import deque
+from types import SimpleNamespace
 import time
 
 # Scikit-learn incremental models
@@ -25,17 +26,127 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_extraction.text import HashingVectorizer
 from sklearn.base import BaseEstimator, clone
 
-# River (online learning library)
+river: SimpleNamespace = SimpleNamespace()
+linear_model: SimpleNamespace = SimpleNamespace()
+naive_bayes: SimpleNamespace = SimpleNamespace()
+tree: SimpleNamespace = SimpleNamespace()
+ensemble: SimpleNamespace = SimpleNamespace()
+river_metrics: SimpleNamespace = SimpleNamespace()
+river_preprocessing: SimpleNamespace = SimpleNamespace()
+river_feature: SimpleNamespace = SimpleNamespace()
+
 try:
-    import river
-    from river import (
-        linear_model, naive_bayes, tree, ensemble,
-        metrics as river_metrics, preprocessing as river_preprocessing,
-        feature_extraction as river_feature
+    import river as _river_module  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency
+    _river_module = None
+
+RIVER_AVAILABLE = _river_module is not None
+
+
+def _install_river_fallbacks() -> None:
+    """Populate minimal stand-ins when River cannot be imported."""
+
+    class _FallbackRiverClassifier:
+        """Very small classifier that mimics River's ``learn_one`` API."""
+
+        def __init__(self):
+            self._class_counts: Dict[Any, int] = {}
+            self._total = 0
+
+        def learn_one(self, x, y):  # pragma: no cover - simple fallback behaviour
+            self._class_counts[y] = self._class_counts.get(y, 0) + 1
+            self._total += 1
+
+        def predict_one(self, x):  # pragma: no cover - simple fallback behaviour
+            if not self._class_counts:
+                return 0
+            return max(self._class_counts, key=self._class_counts.get)
+
+        def predict_proba_one(self, x):  # pragma: no cover - simple fallback behaviour
+            if not self._class_counts or self._total == 0:
+                return {}
+            return {
+                cls: count / self._total
+                for cls, count in self._class_counts.items()
+            }
+
+    class _FallbackDriftDetector:
+        """Fallback drift detector that never signals drift."""
+
+        def __init__(self):
+            self.drift_detected = False
+
+        def update(self, *args, **kwargs):  # pragma: no cover - minimal behaviour
+            return self
+
+        def reset(self):  # pragma: no cover - minimal behaviour
+            self.drift_detected = False
+
+    class _FallbackAccuracy:
+        """Minimal accuracy tracker with River-like ``update``/``get`` API."""
+
+        def __init__(self):
+            self._correct = 0
+            self._total = 0
+
+        def update(self, y_true, y_pred):  # pragma: no cover - minimal behaviour
+            if y_true == y_pred:
+                self._correct += 1
+            self._total += 1
+
+        def get(self):  # pragma: no cover - minimal behaviour
+            if self._total == 0:
+                return 0.0
+            return self._correct / self._total
+
+    global river, linear_model, naive_bayes, tree, ensemble, river_metrics, river_preprocessing, river_feature
+    river = SimpleNamespace(
+        drift=SimpleNamespace(
+            ADWIN=_FallbackDriftDetector,
+            DDM=_FallbackDriftDetector,
+            EDDM=_FallbackDriftDetector,
+            PageHinkley=_FallbackDriftDetector,
+        )
     )
-    RIVER_AVAILABLE = True
-except ImportError:
-    RIVER_AVAILABLE = False
+    linear_model = SimpleNamespace(
+        LogisticRegression=_FallbackRiverClassifier,
+        Perceptron=_FallbackRiverClassifier,
+    )
+    naive_bayes = SimpleNamespace(
+        GaussianNB=_FallbackRiverClassifier,
+    )
+    tree = SimpleNamespace(
+        HoeffdingTreeClassifier=_FallbackRiverClassifier,
+        HoeffdingAdaptiveTreeClassifier=_FallbackRiverClassifier,
+    )
+    ensemble = SimpleNamespace(
+        AdaptiveRandomForestClassifier=_FallbackRiverClassifier,
+    )
+    river_metrics = SimpleNamespace(
+        Accuracy=_FallbackAccuracy,
+    )
+    river_preprocessing = SimpleNamespace()
+    river_feature = SimpleNamespace()
+
+
+def _use_real_river(module) -> None:
+    """Bind the actual River module to the global placeholders."""
+
+    global river, linear_model, naive_bayes, tree, ensemble, river_metrics, river_preprocessing, river_feature
+    river = module  # type: ignore[assignment]
+    linear_model = module.linear_model  # type: ignore[assignment]
+    naive_bayes = module.naive_bayes  # type: ignore[assignment]
+    tree = module.tree  # type: ignore[assignment]
+    ensemble = module.ensemble  # type: ignore[assignment]
+    river_metrics = module.metrics  # type: ignore[assignment]
+    river_preprocessing = module.preprocessing  # type: ignore[assignment]
+    river_feature = module.feature_extraction  # type: ignore[assignment]
+
+
+if RIVER_AVAILABLE and _river_module is not None:
+    _use_real_river(_river_module)
+else:
+    _install_river_fallbacks()
 
 # Vowpal Wabbit (optional)
 try:
@@ -301,7 +412,10 @@ class RiverIncrementalModel(IncrementalModel):
         super().__init__(config)
         
         if not RIVER_AVAILABLE:
-            raise ImportError("River not installed. Install with: pip install river")
+            raise ImportError(
+                "river is required for RiverIncrementalModel. "
+                "Install it with 'pip install river'."
+            )
         
         self.model_type = model_type
         self._init_model()
