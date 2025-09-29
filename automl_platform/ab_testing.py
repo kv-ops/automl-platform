@@ -1,5 +1,5 @@
 """
-A/B Testing Service for Model Compariso
+A/B Testing Service for Model Comparison
 =========================================
 Place in: automl_platform/ab_testing.py
 
