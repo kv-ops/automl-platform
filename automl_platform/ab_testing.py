@@ -18,6 +18,11 @@ from dataclasses import dataclass, asdict, field
 from enum import Enum
 import hashlib
 from scipy import stats
+
+try:
+    from statsmodels.stats.power import TTestPower
+except ImportError:  # pragma: no cover - depends on optional dependency
+    TTestPower = None  # type: ignore[assignment]
 from sklearn.metrics import (
     roc_auc_score, roc_curve, precision_recall_curve, auc,
     mean_squared_error, mean_absolute_error, r2_score,
@@ -487,11 +492,16 @@ class StatisticalTester:
     ) -> int:
         """
         Calculate required sample size for given effect size and power.
+
         
         Returns:
             Required sample size per group
         """
-        from statsmodels.stats.power import TTestPower
+        if TTestPower is None:
+            raise ImportError(
+                "statsmodels is required for sample size calculation. "
+                "Install it with 'pip install statsmodels'."
+            )
         
         analysis = TTestPower()
         sample_size = analysis.solve_power(
