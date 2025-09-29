@@ -20,6 +20,23 @@ from contextlib import contextmanager
 import io
 from pathlib import Path
 
+try:
+    import psycopg2  # type: ignore[import]
+    from psycopg2.extras import RealDictCursor  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency
+    psycopg2 = None  # type: ignore[assignment]
+    RealDictCursor = None  # type: ignore[assignment]
+
+
+def _ensure_psycopg2() -> None:
+    """Ensure psycopg2 is available before attempting a connection."""
+
+    if psycopg2 is None or RealDictCursor is None:
+        raise ImportError(
+            "psycopg2 is required for PostgreSQL connectors. "
+            "Install it with 'pip install psycopg2-binary'."
+        )
+
 # Métriques Prometheus
 from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
 
@@ -426,13 +443,9 @@ class PostgreSQLConnector(BaseConnector):
     
     def __init__(self, config: ConnectionConfig):
         super().__init__(config)
-        try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            self.psycopg2 = psycopg2
-            self.RealDictCursor = RealDictCursor
-        except ImportError:
-            raise ImportError("psycopg2 not installed. Install with: pip install psycopg2-binary")
+        _ensure_psycopg2()
+        self.psycopg2 = psycopg2
+        self.RealDictCursor = RealDictCursor
     
     def connect(self):
         """Connect to PostgreSQL."""
