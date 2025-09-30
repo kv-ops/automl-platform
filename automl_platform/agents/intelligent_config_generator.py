@@ -3,6 +3,7 @@ Intelligent Config Generator for AutoML Platform
 ================================================
 Generates optimal configurations without templates.
 Adapts to any ML problem dynamically.
+NOW WITH CLAUDE SDK FOR STRATEGIC DECISIONS
 """
 
 import importlib.util
@@ -65,9 +66,10 @@ class IntelligentConfigGenerator:
     """
     Generates optimal ML configurations dynamically.
     No templates needed - pure intelligence based on data and context.
+    NOW ENHANCED WITH CLAUDE SDK FOR STRATEGIC REASONING
     """
     
-    # Algorithm capabilities matrix
+    # Algorithm capabilities matrix (unchanged)
     ALGORITHM_CAPABILITIES = {
         'XGBoost': {
             'handles_missing': True,
@@ -170,7 +172,7 @@ class IntelligentConfigGenerator:
         }
     }
     
-    # Metric optimization strategies
+    # Metric optimization strategies (unchanged)
     METRIC_STRATEGIES = {
         'accuracy': {'focus': 'overall_correctness', 'threshold_optimization': False},
         'precision': {'focus': 'minimize_false_positives', 'threshold_optimization': True},
@@ -183,10 +185,28 @@ class IntelligentConfigGenerator:
         'map': {'focus': 'ranking_precision', 'threshold_optimization': False}
     }
     
-    def __init__(self):
-        """Initialize the config generator"""
+    def __init__(self, use_claude: bool = True):
+        """
+        Initialize the config generator
+        
+        Args:
+            use_claude: Whether to use Claude SDK for strategic decisions
+        """
         self.generated_configs = []
         self.performance_history = []
+        self.use_claude = use_claude and AsyncAnthropic is not None
+        
+        # Initialize Claude client if available
+        if self.use_claude:
+            self.claude_client = AsyncAnthropic()
+            self.model = "claude-sonnet-4-20250514"
+            logger.info("💎 Claude SDK enabled for strategic config generation")
+        else:
+            self.claude_client = None
+            if use_claude:
+                logger.warning("⚠️ Claude SDK requested but not available, falling back to rule-based")
+            else:
+                logger.info("📋 Using rule-based config generation")
         
     async def generate_config(
         self,
@@ -199,6 +219,7 @@ class IntelligentConfigGenerator:
         Generate optimal configuration based on data and context.
         
         This is the core intelligence - creates perfect configs from scratch!
+        NOW ENHANCED WITH CLAUDE FOR STRATEGIC DECISIONS
         """
         logger.info("🔧 Generating optimal configuration...")
         
@@ -214,7 +235,7 @@ class IntelligentConfigGenerator:
         # Step 1: Determine task type
         task = self._determine_task(context, df)
         
-        # Step 2: Select optimal algorithms
+        # Step 2: Select optimal algorithms (WITH CLAUDE IF AVAILABLE)
         algorithms = await self._select_algorithms(
             task, df, context, constraints, user_preferences
         )
@@ -225,8 +246,10 @@ class IntelligentConfigGenerator:
         # Step 4: Configure preprocessing
         preprocessing = self._configure_preprocessing(df, context, task)
         
-        # Step 5: Design feature engineering
-        feature_engineering = self._design_feature_engineering(df, context, task)
+        # Step 5: Design feature engineering (WITH CLAUDE IF AVAILABLE)
+        feature_engineering = await self._design_feature_engineering_with_claude(
+            df, context, task
+        ) if self.use_claude else self._design_feature_engineering(df, context, task)
         
         # Step 6: Configure HPO
         hpo_config = self._configure_hpo(
@@ -242,8 +265,10 @@ class IntelligentConfigGenerator:
         # Step 9: Setup monitoring
         monitoring = self._setup_monitoring(task, context, constraints)
         
-        # Step 10: Generate reasoning
-        reasoning = self._generate_config_reasoning(
+        # Step 10: Generate reasoning (WITH CLAUDE IF AVAILABLE)
+        reasoning = await self._generate_config_reasoning_with_claude(
+            task, algorithms, primary_metric, constraints, context
+        ) if self.use_claude else self._generate_config_reasoning(
             task, algorithms, primary_metric, constraints
         )
         
@@ -304,6 +329,50 @@ class IntelligentConfigGenerator:
         
         return task
     
+    async def _select_algorithms(
+        self,
+        task: str,
+        df: pd.DataFrame,
+        context: Dict[str, Any],
+        constraints: Dict[str, Any],
+        user_preferences: Optional[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Select optimal algorithms for the task.
+        ENHANCED WITH CLAUDE FOR INTELLIGENT SELECTION
+        """
+        # First, get rule-based scores for all algorithms
+        algo_scores = {}
+        for algorithm in self.ALGORITHM_CAPABILITIES.keys():
+            score = self._score_algorithm(
+                algorithm, df, context, constraints, user_preferences
+            )
+            if score > 0:
+                algo_scores[algorithm] = score
+        
+        # If Claude is available, use it for final strategic selection
+        if self.use_claude and len(algo_scores) > 0:
+            logger.info("💎 Using Claude for strategic algorithm selection...")
+            try:
+                selected = await self._claude_select_algorithms(
+                    task, df, context, constraints, algo_scores
+                )
+                if selected:
+                    logger.info(f"✅ Claude selected: {', '.join(selected)}")
+                    return selected
+            except Exception as e:
+                logger.warning(f"⚠️ Claude selection failed: {e}, falling back to rule-based")
+        
+        # Fallback: rule-based selection
+        sorted_algos = sorted(algo_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Select top 3-7 algorithms
+        n_algos = min(7, max(3, len(sorted_algos) // 2))
+        selected_algorithms = [algo for algo, _ in sorted_algos[:n_algos]]
+        
+        logger.info(f"📋 Rule-based selected: {', '.join(selected_algorithms)}")
+        return selected_algorithms
+    
     async def _claude_select_algorithms(
         self,
         task: str,
@@ -313,34 +382,196 @@ class IntelligentConfigGenerator:
         algo_scores: Dict[str, float]
     ) -> List[str]:
         """Use Claude for intelligent algorithm selection"""
+        
+        # Prepare data characteristics
+        data_chars = {
+            'n_samples': len(df),
+            'n_features': len(df.columns),
+            'missing_ratio': df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+            'has_categorical': len(df.select_dtypes(include=['object']).columns) > 0,
+            'imbalance_detected': context.get('imbalance_detected', False),
+            'temporal_aspect': context.get('temporal_aspect', False)
+        }
+        
+        prompt = f"""Analyze this ML task and select optimal algorithms.
+
+Task: {task}
+Problem Type: {context.get('problem_type', 'unknown')}
+Business Sector: {context.get('business_sector', 'unknown')}
+
+Data Characteristics:
+{json.dumps(data_chars, indent=2)}
+
+Constraints:
+{json.dumps(constraints, indent=2)}
+
+Rule-based Algorithm Scores (0-1 scale):
+{json.dumps(algo_scores, indent=2)}
+
+Algorithm Capabilities Available:
+{json.dumps({k: v for k, v in self.ALGORITHM_CAPABILITIES.items() if k in algo_scores}, indent=2)}
+
+Select 3-7 best algorithms considering:
+1. Data size and characteristics (missing values, categorical features)
+2. Task requirements (classification/regression/etc)
+3. Time and resource constraints
+4. Interpretability needs
+5. Business context and problem type
+6. Rule-based scores as baseline
+
+IMPORTANT: Respond ONLY with valid JSON, no other text:
+{{"algorithms": ["algo1", "algo2", ...], "reasoning": "why these algorithms"}}"""
+        
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                system="You are an expert ML algorithm selector. Respond only with JSON.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = response.content[0].text.strip()
+            
+            # Parse JSON response
+            result = json.loads(response_text)
+            selected_algorithms = result.get('algorithms', [])
+            reasoning = result.get('reasoning', '')
+            
+            # Validate selected algorithms
+            valid_algorithms = [
+                algo for algo in selected_algorithms
+                if algo in self.ALGORITHM_CAPABILITIES
+            ]
+            
+            if valid_algorithms:
+                logger.info(f"💎 Claude reasoning: {reasoning[:200]}...")
+                return valid_algorithms
+            
+            return []
+            
+        except json.JSONDecodeError:
+            logger.warning("⚠️ Claude response was not valid JSON")
+            return []
+        except Exception as e:
+            logger.warning(f"⚠️ Claude algorithm selection failed: {e}")
+            return []
     
-        prompt = f\"\"\"Analyze this ML task and select optimal algorithms.
+    async def _design_feature_engineering_with_claude(
+        self,
+        df: pd.DataFrame,
+        context: Dict[str, Any],
+        task: str
+    ) -> Dict[str, Any]:
+        """Design feature engineering strategy with Claude's help"""
+        
+        # Get baseline from rules
+        baseline_fe = self._design_feature_engineering(df, context, task)
+        
+        # Enhance with Claude
+        prompt = f"""Design optimal feature engineering strategy for this ML problem.
 
-    Task: {task}
-    Data: {len(df)} rows, {len(df.columns)} columns
-    Context: {json.dumps(context, indent=2)}
-    Constraints: {json.dumps(constraints, indent=2)}
+Task: {task}
+Problem Type: {context.get('problem_type', 'unknown')}
+Dataset: {len(df)} rows, {len(df.columns)} columns
 
-    Rule-based scores: {json.dumps(algo_scores, indent=2)}
+Baseline Feature Engineering:
+{json.dumps(baseline_fe, indent=2)}
 
-    Select 3-7 best algorithms considering:
-    - Data size and characteristics
-    - Task requirements
-    - Time/resource constraints
-    - Interpretability needs
+Data Context:
+- Has temporal aspect: {context.get('temporal_aspect', False)}
+- Business sector: {context.get('business_sector', 'unknown')}
+- Imbalance detected: {context.get('imbalance_detected', False)}
 
-    Respond with JSON: {{"algorithms": ["algo1", "algo2",...], "reasoning": "..."}}
-    \"\"\"
+Enhance this strategy by suggesting:
+1. Additional domain-specific features for this problem type
+2. Advanced feature interactions that could help
+3. Feature selection strategies
+4. Any problem-specific transformations
+
+Respond ONLY with valid JSON:
+{{
+  "enhancements": {{
+    "additional_features": ["feature1", "feature2"],
+    "domain_specific": {{"key": "value"}},
+    "advanced_techniques": ["technique1"]
+  }},
+  "reasoning": "why these enhancements"
+}}"""
+        
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.model,
+                max_tokens=1500,
+                system="You are an expert in feature engineering. Respond only with JSON.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = response.content[0].text.strip()
+            result = json.loads(response_text)
+            
+            # Merge Claude's enhancements with baseline
+            enhancements = result.get('enhancements', {})
+            for key, value in enhancements.items():
+                if key in baseline_fe:
+                    if isinstance(baseline_fe[key], dict) and isinstance(value, dict):
+                        baseline_fe[key].update(value)
+                    elif isinstance(baseline_fe[key], list) and isinstance(value, list):
+                        baseline_fe[key].extend(value)
+                else:
+                    baseline_fe[key] = value
+            
+            logger.info(f"💎 Enhanced feature engineering with Claude insights")
+            return baseline_fe
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Claude feature engineering enhancement failed: {e}")
+            return baseline_fe
     
-        response = await self.claude_client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            system="You are an expert ML algorithm selector.",
-            messages=[{"role": "user", "content": prompt}]
-    )
-    
-    # Parse response...
-    return selected_algorithms
+    async def _generate_config_reasoning_with_claude(
+        self,
+        task: str,
+        algorithms: List[str],
+        primary_metric: str,
+        constraints: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> str:
+        """Generate human-readable reasoning with Claude"""
+        
+        prompt = f"""Generate a clear, concise explanation for this ML configuration.
+
+Task: {task}
+Problem: {context.get('problem_type', 'unknown')}
+Algorithms Selected: {', '.join(algorithms)}
+Primary Metric: {primary_metric}
+Time Budget: {constraints['time_budget']/60:.1f} minutes
+
+Key Constraints:
+- Interpretability required: {constraints.get('interpretability_required', False)}
+- Real-time scoring: {constraints.get('real_time_scoring', False)}
+- Memory limit: {constraints.get('memory_limit_gb', 16)} GB
+
+Create a 3-4 paragraph explanation covering:
+1. Why these algorithms were chosen for this specific problem
+2. Key decisions made and trade-offs
+3. Expected performance and considerations
+
+Be specific, technical, and actionable. Focus on the "why" behind decisions."""
+        
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system="You are an expert ML engineer explaining configuration decisions.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            reasoning = response.content[0].text.strip()
+            logger.info("💎 Generated reasoning with Claude")
+            return reasoning
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Claude reasoning generation failed: {e}")
+            return self._generate_config_reasoning(task, algorithms, primary_metric, constraints)
     
     def _score_algorithm(
         self,
@@ -491,14 +722,13 @@ class IntelligentConfigGenerator:
             preprocessing['outliers'] = {
                 'method': 'iqr',
                 'factor': 1.5,
-                'strategy': 'clip'  # clip, remove, or transform
+                'strategy': 'clip'
             }
         else:
             preprocessing['outliers'] = {'method': 'none'}
         
         # Scaling strategy
         if task in ['classification', 'regression']:
-            # Check for outliers
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             has_outliers = False
             for col in numeric_cols:
@@ -628,27 +858,26 @@ class IntelligentConfigGenerator:
         n_algorithms = len(algorithms)
         
         # Determine HPO method based on time and data
-        if time_budget < 300:  # < 5 minutes
+        if time_budget < 300:
             method = 'random'
             n_iter = 10
         elif n_samples < 1000:
             method = 'grid'
             n_iter = 20
-        elif time_budget < 1800:  # < 30 minutes
+        elif time_budget < 1800:
             method = 'optuna'
             n_iter = 30
         else:
             method = 'optuna'
             n_iter = 50
         
-        # Adjust iterations based on number of algorithms
         n_iter_per_algo = n_iter // max(n_algorithms, 1)
         
         hpo_config = {
             'method': method,
             'n_iter': n_iter,
             'n_iter_per_algo': n_iter_per_algo,
-            'timeout': time_budget * 0.7,  # 70% of budget for HPO
+            'timeout': time_budget * 0.7,
             'early_stopping': {
                 'enabled': True,
                 'patience': 10,
@@ -659,7 +888,6 @@ class IntelligentConfigGenerator:
             'n_jobs': -1
         }
         
-        # Algorithm-specific search spaces
         search_spaces = {}
         for algo in algorithms:
             search_spaces[algo] = self._get_search_space(algo, task, n_samples)
@@ -676,7 +904,6 @@ class IntelligentConfigGenerator:
     ) -> Dict[str, Any]:
         """Get algorithm-specific search space"""
         
-        # Adaptive search spaces based on data size
         if algorithm == 'XGBoost':
             return {
                 'n_estimators': [100, 500] if n_samples < 10000 else [100, 1000],
@@ -724,7 +951,6 @@ class IntelligentConfigGenerator:
                 'epochs': [50, 100, 200]
             }
         else:
-            # Default search space
             return {'default_params': True}
     
     def _setup_cv_strategy(
@@ -737,7 +963,6 @@ class IntelligentConfigGenerator:
         
         n_samples = len(df)
         
-        # Determine number of folds based on data size
         if n_samples < 500:
             n_folds = 3
         elif n_samples < 5000:
@@ -751,7 +976,6 @@ class IntelligentConfigGenerator:
             'random_state': 42
         }
         
-        # Time series special handling
         if context.get('temporal_aspect') and context.get('is_time_series'):
             cv_strategy = {
                 'method': 'time_series_split',
@@ -759,10 +983,8 @@ class IntelligentConfigGenerator:
                 'gap': 0,
                 'test_size': None
             }
-        # Stratified for classification
         elif task == 'classification':
             cv_strategy['method'] = 'stratified_kfold'
-        # Group-based if needed
         elif context.get('group_column'):
             cv_strategy['method'] = 'group_kfold'
             cv_strategy['groups'] = context['group_column']
@@ -781,7 +1003,6 @@ class IntelligentConfigGenerator:
         n_algorithms = len(algorithms)
         
         if n_algorithms < 3:
-            # No ensemble for few algorithms
             return {'enabled': False}
         
         ensemble_config = {
@@ -799,7 +1020,6 @@ class IntelligentConfigGenerator:
         elif task == 'ranking':
             ensemble_config['method'] = 'rank_averaging'
         
-        # Stacking for many diverse algorithms
         if n_algorithms > 5:
             ensemble_config['method'] = 'stacking'
             ensemble_config['meta_learner'] = 'LogisticRegression' if task == 'classification' else 'Ridge'
@@ -824,7 +1044,6 @@ class IntelligentConfigGenerator:
         
         problem_type = context.get('problem_type')
         
-        # Real-time monitoring for critical problems
         if problem_type in ['fraud_detection', 'anomaly_detection']:
             monitoring['real_time'] = True
             monitoring['alert_thresholds'] = {
@@ -832,8 +1051,6 @@ class IntelligentConfigGenerator:
                 'drift_score': 0.3,
                 'prediction_latency_ms': 100
             }
-        
-        # Batch monitoring for others
         else:
             monitoring['batch'] = True
             monitoring['frequency'] = 'daily'
@@ -842,7 +1059,6 @@ class IntelligentConfigGenerator:
                 'drift_score': 0.5
             }
         
-        # Add specific metrics to track
         if task == 'classification':
             monitoring['metrics'] = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
         elif task == 'regression':
@@ -867,7 +1083,7 @@ class IntelligentConfigGenerator:
         reasoning += f"**Time Budget:** {constraints['time_budget']/60:.1f} minutes\n\n"
         
         reasoning += f"**Selected Algorithms ({len(algorithms)}):**\n"
-        for algo in algorithms[:5]:  # Show top 5
+        for algo in algorithms[:5]:
             capabilities = self.ALGORITHM_CAPABILITIES.get(algo, {})
             reasoning += f"- {algo}: {capabilities.get('interpretability', 'unknown')} interpretability, "
             reasoning += f"{capabilities.get('training_speed', 'unknown')} training\n"
@@ -894,24 +1110,19 @@ class IntelligentConfigGenerator:
         
         adapted = base_config
         
-        # Adapt to time constraints
         if new_constraints.get('time_budget'):
             ratio = new_constraints['time_budget'] / base_config.time_budget
             adapted.hpo_config['n_iter'] = int(base_config.hpo_config['n_iter'] * ratio)
             adapted.time_budget = new_constraints['time_budget']
         
-        # Adapt to memory constraints
         if new_constraints.get('memory_limit_gb'):
             if new_constraints['memory_limit_gb'] < 8:
-                # Remove memory-intensive algorithms
                 adapted.algorithms = [
                     algo for algo in adapted.algorithms
                     if self.ALGORITHM_CAPABILITIES[algo]['memory_usage'] != 'high'
                 ]
         
-        # Adapt to interpretability requirements
         if new_constraints.get('interpretability_required'):
-            # Prioritize interpretable algorithms
             interpretable = []
             for algo in adapted.algorithms:
                 if self.ALGORITHM_CAPABILITIES[algo]['interpretability'] in ['very_high', 'high']:
@@ -937,7 +1148,5 @@ class IntelligentConfigGenerator:
             'efficiency': performance.get(config.primary_metric, 0) / execution_time
         })
         
-        # Analyze what worked well
-        if performance.get(config.primary_metric, 0) > 0.9:  # Good performance
+        if performance.get(config.primary_metric, 0) > 0.9:
             logger.info(f"✅ Successful config: {config.primary_metric}={performance.get(config.primary_metric):.3f}")
-            # Could store successful patterns for future use
