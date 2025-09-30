@@ -1,5 +1,6 @@
 """
 Controller Agent - Validates cleaning results and generates final reports
+Uses Claude SDK for intelligent quality validation and reporting
 """
 
 import pandas as pd
@@ -15,14 +16,14 @@ from datetime import datetime
 from .agent_config import AgentConfig, AgentType
 from .prompts.controller_prompts import CONTROLLER_SYSTEM_PROMPT, CONTROLLER_USER_PROMPT
 
-_openai_spec = importlib.util.find_spec("openai")
-if _openai_spec is not None:
-    from openai import AsyncOpenAI  # type: ignore
+_anthropic_spec = importlib.util.find_spec("anthropic")
+if _anthropic_spec is not None:
+    from anthropic import AsyncAnthropic  # type: ignore
 else:
-    AsyncOpenAI = None  # type: ignore[assignment]
+    AsyncAnthropic = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:  # pragma: no cover
-    from openai import AsyncOpenAI as _AsyncOpenAIType
+    from anthropic import AsyncAnthropic as _AsyncAnthropicType
 
 logger = logging.getLogger(__name__)
 
@@ -30,84 +31,35 @@ logger = logging.getLogger(__name__)
 class ControllerAgent:
     """
     Agent responsible for final validation and quality control
-    Uses OpenAI Assistant with Code Interpreter
+    Uses Claude SDK for intelligent quality assessment and reporting
     """
     
     def __init__(self, config: AgentConfig):
         """Initialize Controller Agent"""
         self.config = config
-        if AsyncOpenAI is not None and config.openai_api_key:
-            self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        
+        # Initialize Claude client
+        anthropic_api_key = config.openai_api_key  # Reuse same config field for now
+        if AsyncAnthropic is not None and anthropic_api_key:
+            self.client = AsyncAnthropic(api_key=anthropic_api_key)
         else:
             self.client = None
-            if AsyncOpenAI is None:
+            if AsyncAnthropic is None:
                 logger.warning(
-                    "AsyncOpenAI client unavailable because the 'openai' package is not installed. "
+                    "AsyncAnthropic client unavailable because the 'anthropic' package is not installed. "
                     "ControllerAgent will rely on local validation metrics."
                 )
             else:
-                logger.warning("OpenAI API key missing; ControllerAgent will rely on local validation metrics only.")
-        self.assistant = None
-        self.assistant_id = config.get_assistant_id(AgentType.CONTROLLER)
+                logger.warning("Anthropic API key missing; ControllerAgent will rely on local validation metrics only.")
         
         # Quality metrics tracking
         self.quality_metrics = {}
         
-        # Assistant initialization tracking
-        self._initialization_task: Optional[asyncio.Task] = None
-        self._initialization_lock: Optional[asyncio.Lock] = None
-
-        if self.client is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                self._initialization_task = loop.create_task(self._initialize_assistant())
-    
-    async def _initialize_assistant(self):
-        """Create or retrieve OpenAI Assistant"""
-        try:
-            if self.client is None:
-                logger.debug("ControllerAgent _initialize_assistant skipped because client is unavailable.")
-                return
-
-            if self.assistant_id:
-                self.assistant = await self.client.beta.assistants.retrieve(
-                    assistant_id=self.assistant_id
-                )
-                logger.info(f"Retrieved existing Controller assistant: {self.assistant_id}")
-            else:
-                self.assistant = await self.client.beta.assistants.create(
-                    name="Data Controller Agent",
-                    instructions=CONTROLLER_SYSTEM_PROMPT,
-                    model=self.config.model,
-                    tools=self.config.get_agent_tools(AgentType.CONTROLLER)
-                )
-                self.assistant_id = self.assistant.id
-                self.config.save_assistant_id(AgentType.CONTROLLER, self.assistant_id)
-                logger.info(f"Created new Controller assistant: {self.assistant_id}")
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize controller assistant: {e}")
-
-    async def _ensure_assistant_initialized(self):
-        if self.client is None or self.assistant:
-            return
-
-        if self._initialization_lock is None:
-            self._initialization_lock = asyncio.Lock()
-
-        async with self._initialization_lock:
-            if self.assistant:
-                return
-
-            if self._initialization_task is not None:
-                await self._initialization_task
-                self._initialization_task = None
-            else:
-                await self._initialize_assistant()
+        # Claude model configuration
+        self.model = "claude-sonnet-4-20250514"
+        self.max_tokens = 4000
+        
+        logger.info(f"ControllerAgent initialized with Claude SDK (model: {self.model})")
     
     async def validate(
         self,
@@ -128,14 +80,11 @@ class ControllerAgent:
         """
         try:
             if self.client is None:
-                logger.info("ControllerAgent using basic validation because OpenAI client is unavailable.")
+                logger.info("ControllerAgent using basic validation because Claude client is unavailable.")
                 metrics = self._calculate_quality_metrics(cleaned_df, original_df)
                 self.quality_metrics = metrics
                 return self._basic_validation(cleaned_df, original_df, metrics)
 
-            # Ensure assistant is initialized
-            await self._ensure_assistant_initialized()
-            
             # Calculate quality metrics
             metrics = self._calculate_quality_metrics(cleaned_df, original_df)
             
@@ -144,11 +93,8 @@ class ControllerAgent:
                 cleaned_df, original_df, transformations, metrics
             )
             
-            # Create a thread
-            thread = await self.client.beta.threads.create()
-            
-            # Create validation request
-            message_content = CONTROLLER_USER_PROMPT.format(
+            # Create validation prompt for Claude
+            user_prompt = CONTROLLER_USER_PROMPT.format(
                 original_summary=json.dumps(validation_context["original_summary"], indent=2),
                 cleaned_summary=json.dumps(validation_context["cleaned_summary"], indent=2),
                 transformations=json.dumps(transformations, indent=2),
@@ -157,31 +103,36 @@ class ControllerAgent:
                 target_variable=self.config.user_context.get("target_variable", "unknown")
             )
             
-            await self.client.beta.threads.messages.create(
-                thread_id=thread.id,
-                role="user",
-                content=message_content
+            # Call Claude for intelligent validation
+            logger.info("🤖 Requesting validation from Claude...")
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=CONTROLLER_SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    }
+                ]
             )
             
-            # Run the assistant
-            run = await self.client.beta.threads.runs.create(
-                thread_id=thread.id,
-                assistant_id=self.assistant_id
-            )
-            
-            # Wait for completion
-            result = await self._wait_for_run_completion(thread.id, run.id)
+            # Extract response text
+            response_text = response.content[0].text
             
             # Parse and enhance results
-            control_report = self._parse_control_results(result, metrics)
+            control_report = self._parse_control_results({"content": response_text}, metrics)
             
             # Store metrics
             self.quality_metrics = metrics
+            
+            logger.info(f"✅ Validation complete: Quality score {control_report['quality_score']:.1f}/100")
             
             return control_report
             
         except Exception as e:
             logger.error(f"Error in validation: {e}")
+            metrics = self._calculate_quality_metrics(cleaned_df, original_df)
             return self._basic_validation(cleaned_df, original_df, metrics)
     
     def _calculate_quality_metrics(
@@ -204,8 +155,8 @@ class ControllerAgent:
                 "cleaned": 1 - (cleaned_df.isnull().sum().sum() / (cleaned_df.shape[0] * cleaned_df.shape[1]))
             },
             "duplicates": {
-                "original": original_df.duplicated().sum(),
-                "cleaned": cleaned_df.duplicated().sum()
+                "original": int(original_df.duplicated().sum()),
+                "cleaned": int(cleaned_df.duplicated().sum())
             },
             "rows": {
                 "original": len(original_df),
@@ -308,15 +259,15 @@ class ControllerAgent:
                 "shape": original_df.shape,
                 "columns": list(original_df.columns),
                 "dtypes": {col: str(dtype) for col, dtype in original_df.dtypes.items()},
-                "missing_values": original_df.isnull().sum().to_dict(),
-                "duplicates": original_df.duplicated().sum()
+                "missing_values": {k: int(v) for k, v in original_df.isnull().sum().to_dict().items()},
+                "duplicates": int(original_df.duplicated().sum())
             },
             "cleaned_summary": {
                 "shape": cleaned_df.shape,
                 "columns": list(cleaned_df.columns),
                 "dtypes": {col: str(dtype) for col, dtype in cleaned_df.dtypes.items()},
-                "missing_values": cleaned_df.isnull().sum().to_dict(),
-                "duplicates": cleaned_df.duplicated().sum()
+                "missing_values": {k: int(v) for k, v in cleaned_df.isnull().sum().to_dict().items()},
+                "duplicates": int(cleaned_df.duplicated().sum())
             },
             "transformations_count": len(transformations),
             "columns_affected": list(set(t.get("column", "") for t in transformations if "column" in t))
@@ -324,36 +275,8 @@ class ControllerAgent:
         
         return context
     
-    async def _wait_for_run_completion(self, thread_id: str, run_id: str) -> Dict[str, Any]:
-        """Wait for assistant run to complete"""
-        start_time = time.time()
-        
-        while time.time() - start_time < self.config.timeout_seconds:
-            run_status = await self.client.beta.threads.runs.retrieve(
-                thread_id=thread_id,
-                run_id=run_id
-            )
-            
-            if run_status.status == 'completed':
-                # Get messages
-                messages = await self.client.beta.threads.messages.list(
-                    thread_id=thread_id
-                )
-                
-                # Extract assistant's response
-                for message in messages.data:
-                    if message.role == 'assistant':
-                        return {"content": message.content[0].text.value}
-                
-            elif run_status.status == 'failed':
-                raise Exception(f"Run failed: {run_status.last_error}")
-            
-            await asyncio.sleep(2)
-        
-        raise TimeoutError("Assistant run timed out")
-    
     def _parse_control_results(self, result: Dict[str, Any], metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse control results from assistant"""
+        """Parse control results from Claude"""
         control_report = {
             "validation_passed": True,
             "quality_score": metrics["quality_score"],
@@ -400,10 +323,12 @@ class ControllerAgent:
                         control_report["recommendations"].append(line.strip())
             
             # Add automatic warnings based on metrics
-            if metrics["transformation_impact"]["rows_affected"] > len(control_report.get("original_df", [])) * 0.1:
-                control_report["warnings"].append(
-                    f"More than 10% of rows were removed during cleaning"
-                )
+            if metrics["transformation_impact"]["rows_affected"] > 0:
+                removed_ratio = metrics["transformation_impact"]["rows_affected"] / metrics["data_quality"]["rows"]["original"]
+                if removed_ratio > 0.1:
+                    control_report["warnings"].append(
+                        f"More than 10% of rows were removed during cleaning ({removed_ratio:.1%})"
+                    )
             
             if metrics["data_quality"]["completeness"]["cleaned"] < 0.8:
                 control_report["warnings"].append(
@@ -444,7 +369,7 @@ class ControllerAgent:
             report["issues"].append("No columns remaining after cleaning")
         
         # Check data loss
-        row_loss = (len(original_df) - len(cleaned_df)) / len(original_df)
+        row_loss = (len(original_df) - len(cleaned_df)) / len(original_df) if len(original_df) > 0 else 0
         if row_loss > 0.5:
             report["validation_passed"] = False
             report["issues"].append(f"Lost more than 50% of rows ({row_loss:.1%})")
