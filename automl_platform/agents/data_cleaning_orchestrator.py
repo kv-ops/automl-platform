@@ -1,6 +1,7 @@
 """
 Data Cleaning Orchestrator - Main coordination for OpenAI agents
 Integrated with Agent-First intelligent modules
+NOW WITH CLAUDE SDK FOR STRATEGIC CLEANING DECISIONS
 """
 
 import pandas as pd
@@ -14,6 +15,13 @@ from typing import Tuple, Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
 import json
+
+import importlib.util
+_anthropic_spec = importlib.util.find_spec("anthropic")
+if _anthropic_spec is not None:
+    from anthropic import AsyncAnthropic
+else:
+    AsyncAnthropic = None
 
 from .agent_config import AgentConfig, AgentType
 from .profiler_agent import ProfilerAgent
@@ -33,18 +41,21 @@ class DataCleaningOrchestrator:
     """
     Orchestrates the intelligent data cleaning process using OpenAI agents
     Now integrated with Agent-First approach for template-free operation
+    ENHANCED WITH CLAUDE SDK FOR STRATEGIC DECISIONS
     """
     
-    def __init__(self, config: Optional[AgentConfig] = None, automl_config: Optional[Dict] = None):
+    def __init__(self, config: Optional[AgentConfig] = None, automl_config: Optional[Dict] = None, use_claude: bool = True):
         """
         Initialize orchestrator with configuration
         
         Args:
             config: Agent configuration
             automl_config: AutoML platform configuration
+            use_claude: Whether to use Claude SDK for strategic decisions
         """
         self.config = config or AgentConfig()
         self.automl_config = automl_config or {}
+        self.use_claude = use_claude and AsyncAnthropic is not None
         
         # Validate configuration
         self.config.validate()
@@ -57,8 +68,20 @@ class DataCleaningOrchestrator:
         
         # Initialize intelligent modules (Agent-First)
         self.context_detector = IntelligentContextDetector()
-        self.config_generator = IntelligentConfigGenerator()
+        self.config_generator = IntelligentConfigGenerator(use_claude=use_claude)
         self.adaptive_templates = AdaptiveTemplateSystem()
+        
+        # Initialize Claude client if available
+        if self.use_claude:
+            self.claude_client = AsyncAnthropic()
+            self.claude_model = "claude-sonnet-4-20250514"
+            logger.info("💎 Claude SDK enabled for strategic cleaning decisions")
+        else:
+            self.claude_client = None
+            if use_claude:
+                logger.warning("⚠️ Claude SDK requested but not available")
+            else:
+                logger.info("📋 Using rule-based cleaning orchestration")
         
         # Tracking
         self.execution_history = []
@@ -72,14 +95,15 @@ class DataCleaningOrchestrator:
             "total_tokens_used": 0,
             "validation_success_rate": 0.0,
             "retry_count": 0,
-            "intelligence_used": False  # Track if Agent-First was used
+            "intelligence_used": False,
+            "claude_decisions": 0
         }
         
         # Results storage
         self.cleaning_report = {}
         self.validation_sources = []
         self.transformations_applied = []
-        self.ml_context = None  # Store detected ML context
+        self.ml_context = None
         
         # Setup logging with file handler
         self._setup_logging()
@@ -90,40 +114,225 @@ class DataCleaningOrchestrator:
         log_dir = Path(log_file).parent
         log_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create formatter
         formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
         )
         
-        # File handler with rotation
         file_handler = RotatingFileHandler(
             log_file,
-            maxBytes=10 * 1024 * 1024,  # 10MB
+            maxBytes=10 * 1024 * 1024,
             backupCount=5
         )
         file_handler.setFormatter(formatter)
         file_handler.setLevel(getattr(logging, self.config.log_level))
         
-        # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
         console_handler.setLevel(logging.INFO)
         
-        # Configure logger
         logger = logging.getLogger(__name__)
         logger.setLevel(getattr(logging, self.config.log_level))
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
+    
+    async def determine_cleaning_mode_with_claude(
+        self,
+        df: pd.DataFrame,
+        user_context: Dict[str, Any],
+        ml_context: Any
+    ) -> Dict[str, Any]:
+        """
+        Use Claude to intelligently determine the best cleaning mode
+        STRATEGIC DECISION MAKING WITH CLAUDE
+        """
+        if not self.use_claude:
+            # Fallback to rule-based
+            return await self._determine_best_mode_rule_based(df, user_context, ml_context)
+        
+        logger.info("💎 Using Claude to determine optimal cleaning mode...")
+        self.performance_metrics["claude_decisions"] += 1
+        
+        # Prepare context for Claude
+        data_summary = {
+            'shape': df.shape,
+            'missing_ratio': float(df.isnull().sum().sum() / (df.shape[0] * df.shape[1])),
+            'duplicate_ratio': float(df.duplicated().mean()),
+            'numeric_cols': int(len(df.select_dtypes(include=[np.number]).columns)),
+            'categorical_cols': int(len(df.select_dtypes(include=['object']).columns)),
+            'high_cardinality_cols': int(sum(1 for col in df.columns if df[col].nunique() > 20)),
+        }
+        
+        prompt = f"""Analyze this data cleaning scenario and recommend the best approach.
+
+Data Summary:
+{json.dumps(data_summary, indent=2)}
+
+ML Context:
+- Problem Type: {ml_context.problem_type if ml_context else 'unknown'}
+- Business Sector: {ml_context.business_sector if ml_context else 'unknown'}
+- Confidence: {ml_context.confidence if ml_context else 0}
+
+User Context:
+{json.dumps(user_context, indent=2)}
+
+Available Cleaning Modes:
+1. AUTOMATED: Agents make all decisions automatically (fastest, least control)
+2. INTERACTIVE: User approves each transformation (slowest, most control)
+3. HYBRID: Critical decisions need approval, routine ones automated
+
+Consider:
+- Data quality issues (missing: {data_summary['missing_ratio']:.1%}, duplicates: {data_summary['duplicate_ratio']:.1%})
+- Business criticality of the problem
+- Need for compliance/auditability
+- Time/resource constraints
+
+Respond ONLY with valid JSON:
+{{
+  "recommended_mode": "automated|interactive|hybrid",
+  "confidence": 0.0-1.0,
+  "reasoning": "detailed explanation why this mode",
+  "key_considerations": ["point1", "point2", "point3"],
+  "estimated_time_minutes": number,
+  "risk_level": "low|medium|high"
+}}"""
+        
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=1500,
+                system="You are an expert data engineer helping choose optimal data cleaning strategies.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = response.content[0].text.strip()
+            decision = json.loads(response_text)
+            
+            logger.info(f"💎 Claude recommends: {decision['recommended_mode']} mode")
+            logger.info(f"   Confidence: {decision['confidence']:.1%}")
+            logger.info(f"   Reasoning: {decision['reasoning'][:150]}...")
+            
+            return decision
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Claude mode determination failed: {e}, using rule-based fallback")
+            return await self._determine_best_mode_rule_based(df, user_context, ml_context)
+    
+    async def _determine_best_mode_rule_based(
+        self,
+        df: pd.DataFrame,
+        user_context: Dict[str, Any],
+        ml_context: Any
+    ) -> Dict[str, Any]:
+        """Fallback rule-based mode determination"""
+        missing_ratio = df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
+        
+        # Critical sectors require more oversight
+        critical_sectors = ['finance', 'healthcare', 'banking', 'insurance']
+        is_critical = user_context.get('secteur_activite', '').lower() in critical_sectors
+        
+        if is_critical or missing_ratio > 0.3:
+            mode = 'interactive'
+            estimated_time = 25
+            risk = 'high'
+        elif missing_ratio > 0.15 or len(df) > 100000:
+            mode = 'hybrid'
+            estimated_time = 15
+            risk = 'medium'
+        else:
+            mode = 'automated'
+            estimated_time = 8
+            risk = 'low'
+        
+        return {
+            'recommended_mode': mode,
+            'confidence': 0.7,
+            'reasoning': f"Rule-based: {risk} risk sector, {missing_ratio:.1%} missing data",
+            'key_considerations': ['Data quality', 'Sector criticality', 'Dataset size'],
+            'estimated_time_minutes': estimated_time,
+            'risk_level': risk
+        }
+    
+    async def recommend_cleaning_approach_with_claude(
+        self,
+        df: pd.DataFrame,
+        profile_report: Dict[str, Any],
+        ml_context: Any
+    ) -> str:
+        """
+        Generate rich cleaning recommendations with Claude
+        STRATEGIC GUIDANCE FOR USERS
+        """
+        if not self.use_claude:
+            return self._generate_basic_recommendation(df, profile_report, ml_context)
+        
+        logger.info("💎 Generating cleaning recommendations with Claude...")
+        self.performance_metrics["claude_decisions"] += 1
+        
+        prompt = f"""Generate actionable data cleaning recommendations for this ML project.
+
+Data Profile:
+{json.dumps(profile_report, indent=2, default=str)[:2000]}
+
+ML Context:
+- Problem: {ml_context.problem_type if ml_context else 'unknown'}
+- Sector: {ml_context.business_sector if ml_context else 'unknown'}
+- Confidence: {ml_context.confidence if ml_context else 0:.1%}
+
+Provide a structured recommendation covering:
+1. Most critical issues to address first (prioritized)
+2. Recommended cleaning strategy with trade-offs
+3. Potential risks and how to mitigate them
+4. Expected impact on model performance
+
+Be specific, actionable, and concise (3-4 paragraphs max)."""
+        
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=1000,
+                system="You are an expert data engineer providing cleaning guidance.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            recommendation = response.content[0].text.strip()
+            logger.info("💎 Generated rich cleaning recommendations")
+            return recommendation
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Claude recommendation failed: {e}")
+            return self._generate_basic_recommendation(df, profile_report, ml_context)
+    
+    def _generate_basic_recommendation(
+        self,
+        df: pd.DataFrame,
+        profile_report: Dict[str, Any],
+        ml_context: Any
+    ) -> str:
+        """Fallback basic recommendation"""
+        missing_ratio = df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
+        
+        rec = f"Data Cleaning Recommendation:\n\n"
+        rec += f"Dataset: {df.shape[0]} rows, {df.shape[1]} columns\n"
+        rec += f"Missing data: {missing_ratio:.1%}\n"
+        rec += f"Problem type: {ml_context.problem_type if ml_context else 'unknown'}\n\n"
+        
+        if missing_ratio > 0.2:
+            rec += "Priority: Address high missing data ratio with advanced imputation.\n"
+        
+        rec += "Approach: Automated cleaning with agent-driven decisions.\n"
+        
+        return rec
     
     async def clean_dataset(
         self, 
         df: pd.DataFrame, 
         user_context: Dict[str, Any],
         cleaning_config: Optional[Dict] = None,
-        use_intelligence: bool = True  # New parameter for Agent-First
+        use_intelligence: bool = True
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Main pipeline for intelligent data cleaning
+        NOW ENHANCED WITH CLAUDE FOR STRATEGIC DECISIONS
         
         Args:
             df: Input dataframe
@@ -142,6 +351,7 @@ class DataCleaningOrchestrator:
         logger.info(f"Starting intelligent cleaning for dataset with shape {df.shape}")
         logger.info(f"User context: {user_context}")
         logger.info(f"Agent-First mode: {'ENABLED' if use_intelligence else 'DISABLED'}")
+        logger.info(f"Claude enhancement: {'ENABLED' if self.use_claude else 'DISABLED'}")
         
         try:
             # NEW: Agent-First approach - Detect ML context if enabled
@@ -154,6 +364,21 @@ class DataCleaningOrchestrator:
                 )
                 logger.info(f"🎯 Detected ML problem: {self.ml_context.problem_type} "
                            f"(confidence: {self.ml_context.confidence:.1%})")
+                
+                # CLAUDE: Determine best cleaning mode
+                if self.use_claude:
+                    mode_decision = await self.determine_cleaning_mode_with_claude(
+                        df, user_context, self.ml_context
+                    )
+                    logger.info(f"💎 Cleaning mode: {mode_decision['recommended_mode']}")
+                    logger.info(f"   {mode_decision['reasoning']}")
+                    
+                    # Get cleaning recommendations
+                    profile_report = await self.profiler.analyze(df)
+                    recommendations = await self.recommend_cleaning_approach_with_claude(
+                        df, profile_report, self.ml_context
+                    )
+                    logger.info(f"💎 Recommendations:\n{recommendations}")
                 
                 # Generate optimal configuration dynamically
                 if not cleaning_config:
@@ -168,7 +393,6 @@ class DataCleaningOrchestrator:
                         user_preferences=user_context
                     )
                     
-                    # Convert to cleaning config
                     cleaning_config = {
                         'preprocessing': optimal_config.preprocessing,
                         'algorithms': optimal_config.algorithms,
@@ -230,18 +454,16 @@ class DataCleaningOrchestrator:
             
             elapsed_time = time.time() - self.start_time
             logger.info(f"Cleaning completed in {elapsed_time:.2f} seconds")
+            logger.info(f"Claude decisions made: {self.performance_metrics['claude_decisions']}")
             
             return cleaned_df, self.cleaning_report
             
         except Exception as e:
             logger.error(f"Error in cleaning pipeline: {e}")
-            # Fallback to basic cleaning
             return await self._fallback_cleaning(df, user_context)
     
     async def _process_chunk(self, df_chunk: pd.DataFrame, chunk_id: int) -> pd.DataFrame:
-        """
-        Process a single chunk through all agents with retry logic
-        """
+        """Process a single chunk through all agents with retry logic"""
         max_retries = self.config.max_retries
         retry_delay = self.config.retry_delay
         
@@ -328,7 +550,6 @@ class DataCleaningOrchestrator:
                 self.performance_metrics["retry_count"] += 1
                 
                 if attempt < max_retries - 1:
-                    # Exponential backoff
                     if self.config.exponential_backoff:
                         wait_time = retry_delay * (2 ** attempt)
                     else:
@@ -338,28 +559,24 @@ class DataCleaningOrchestrator:
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error(f"All retries exhausted for chunk {chunk_id}")
-                    # Return original chunk if all retries fail
                     return df_chunk
     
     async def _evaluate_cleaning_quality(self, df: pd.DataFrame) -> float:
         """Evaluate the quality of cleaned data"""
         try:
-            # Basic quality metrics
             missing_ratio = df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
             duplicate_ratio = df.duplicated().mean()
             
-            # Calculate quality score
             quality_score = 100.0
-            quality_score -= missing_ratio * 50  # Penalize missing values
-            quality_score -= duplicate_ratio * 30  # Penalize duplicates
+            quality_score -= missing_ratio * 50
+            quality_score -= duplicate_ratio * 30
             
-            # Check for constant columns
             constant_cols = sum(1 for col in df.columns if df[col].nunique() == 1)
             quality_score -= constant_cols * 5
             
             return max(0, min(100, quality_score))
         except:
-            return 50.0  # Default middle score if evaluation fails
+            return 50.0
     
     def _needs_chunking(self, df: pd.DataFrame) -> bool:
         """Check if dataset needs chunking"""
@@ -378,7 +595,6 @@ class DataCleaningOrchestrator:
     
     def _update_cost_estimate(self):
         """Update cost estimate based on API usage"""
-        # Rough estimation based on GPT-4 pricing
         tokens_per_call = 1000
         cost_per_1k_tokens_input = 0.03
         cost_per_1k_tokens_output = 0.06
@@ -386,7 +602,6 @@ class DataCleaningOrchestrator:
         estimated_tokens = self.performance_metrics["total_api_calls"] * tokens_per_call
         self.performance_metrics["total_tokens_used"] = estimated_tokens
         
-        # Estimate cost (input + output)
         estimated_cost = (estimated_tokens / 1000) * (cost_per_1k_tokens_input + cost_per_1k_tokens_output) / 2
         self.total_cost = min(estimated_cost, self.config.max_cost_per_dataset)
         
@@ -395,7 +610,6 @@ class DataCleaningOrchestrator:
     
     def _generate_final_report(self, original_df: pd.DataFrame, cleaned_df: pd.DataFrame) -> Dict[str, Any]:
         """Generate comprehensive cleaning report with performance metrics"""
-        # Calculate validation success rate
         if len(self.execution_history) > 0:
             total_validations = sum(1 for h in self.execution_history if "validation" in h.get("step", ""))
             if total_validations > 0:
@@ -412,7 +626,9 @@ class DataCleaningOrchestrator:
                 "cleaned_shape": cleaned_df.shape,
                 "execution_time": time.time() - self.start_time if self.start_time else 0,
                 "total_cost": self.total_cost,
-                "agent_first_used": self.performance_metrics["intelligence_used"]
+                "agent_first_used": self.performance_metrics["intelligence_used"],
+                "claude_enhanced": self.use_claude,
+                "claude_decisions": self.performance_metrics["claude_decisions"]
             },
             "transformations": self.transformations_applied,
             "validation_sources": list(set(self.validation_sources)),
@@ -427,7 +643,6 @@ class DataCleaningOrchestrator:
             "execution_history": self.execution_history
         }
         
-        # Add ML context if detected
         if self.ml_context:
             report["ml_context"] = {
                 "problem_type": self.ml_context.problem_type,
@@ -436,7 +651,6 @@ class DataCleaningOrchestrator:
                 "reasoning": self.ml_context.reasoning
             }
         
-        # Add column-specific changes
         column_changes = []
         for col in original_df.columns:
             if col in cleaned_df.columns:
@@ -451,7 +665,6 @@ class DataCleaningOrchestrator:
         
         report["column_changes"] = column_changes
         
-        # Save report if configured
         if self.config.save_reports:
             report_path = Path(self.config.output_dir) / f"cleaning_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(report_path, "w") as f:
@@ -466,7 +679,6 @@ class DataCleaningOrchestrator:
         
         handler = YAMLConfigHandler()
         
-        # Add ML context to user context if available
         user_context = self.config.user_context.copy()
         if self.ml_context:
             user_context["detected_problem_type"] = self.ml_context.problem_type
@@ -479,7 +691,8 @@ class DataCleaningOrchestrator:
             metrics={
                 "initial_quality": self.cleaning_report.get("metadata", {}).get("initial_quality", 0),
                 "final_quality": self.cleaning_report.get("metadata", {}).get("final_quality", 0),
-                "agent_first_used": self.performance_metrics["intelligence_used"]
+                "agent_first_used": self.performance_metrics["intelligence_used"],
+                "claude_enhanced": self.use_claude
             }
         )
         
@@ -489,10 +702,8 @@ class DataCleaningOrchestrator:
         """Fallback to traditional cleaning if agents fail"""
         logger.warning("Falling back to traditional data cleaning")
         
-        # Import the existing data prep module
         from automl_platform.data_prep import EnhancedDataPreprocessor
         
-        # Create traditional preprocessor
         prep_config = {
             'handle_outliers': True,
             'outlier_method': 'iqr',
@@ -503,20 +714,15 @@ class DataCleaningOrchestrator:
         
         preprocessor = EnhancedDataPreprocessor(prep_config)
         
-        # Basic cleaning
         cleaned_df = df.copy()
-        
-        # Remove duplicates
         cleaned_df = cleaned_df.drop_duplicates()
         
-        # Handle missing values
         for col in cleaned_df.columns:
             if cleaned_df[col].dtype == 'object':
                 cleaned_df[col].fillna('missing', inplace=True)
             else:
                 cleaned_df[col].fillna(cleaned_df[col].median(), inplace=True)
         
-        # Generate basic report
         report = {
             "metadata": {
                 "fallback": True,
@@ -533,12 +739,9 @@ class DataCleaningOrchestrator:
     
     def estimate_cost(self, df: pd.DataFrame) -> float:
         """Estimate cleaning cost based on dataset size"""
-        # Rough estimation based on tokens
-        estimated_tokens = (df.shape[0] * df.shape[1] * 10) / 1000  # Approximate
-        
-        # GPT-4 pricing (approximate)
-        cost_per_1k_tokens = 0.03  # Input
-        estimated_cost = estimated_tokens * cost_per_1k_tokens * 4  # 4 agents
+        estimated_tokens = (df.shape[0] * df.shape[1] * 10) / 1000
+        cost_per_1k_tokens = 0.03
+        estimated_cost = estimated_tokens * cost_per_1k_tokens * 4
         
         return min(estimated_cost, self.config.max_cost_per_dataset)
     
@@ -546,10 +749,7 @@ class DataCleaningOrchestrator:
         """Run only validation without cleaning"""
         self.config.user_context.update(user_context)
         
-        # Profile first
         profile_report = await self.profiler.analyze(df)
-        
-        # Then validate
         validation_report = await self.validator.validate(df, profile_report)
         
         return validation_report
@@ -558,10 +758,7 @@ class DataCleaningOrchestrator:
         """Get cleaning suggestions without applying them"""
         self.config.user_context.update(user_context)
         
-        # Profile the data
         profile_report = await self.profiler.analyze(df)
-        
-        # Get suggestions from cleaner
         suggestions = await self.cleaner.suggest_transformations(df, profile_report)
         
         return suggestions
