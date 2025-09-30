@@ -5,6 +5,14 @@ Generates optimal configurations without templates.
 Adapts to any ML problem dynamically.
 """
 
+import importlib.util
+
+_anthropic_spec = importlib.util.find_spec("anthropic")
+if _anthropic_spec is not None:
+    from anthropic import AsyncAnthropic
+else:
+    AsyncAnthropic = None
+
 import json
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -296,51 +304,43 @@ class IntelligentConfigGenerator:
         
         return task
     
-    async def _select_algorithms(
+    async def _claude_select_algorithms(
         self,
         task: str,
         df: pd.DataFrame,
         context: Dict[str, Any],
         constraints: Dict[str, Any],
-        user_preferences: Optional[Dict[str, Any]]
+        algo_scores: Dict[str, float]
     ) -> List[str]:
-        """Select optimal algorithms based on multiple factors"""
-        
-        suitable_algorithms = []
-        
-        # Filter by task compatibility
-        for algo, capabilities in self.ALGORITHM_CAPABILITIES.items():
-            if task in capabilities['good_for']:
-                suitable_algorithms.append(algo)
-        
-        # Score algorithms based on data characteristics
-        algo_scores = {}
-        for algo in suitable_algorithms:
-            score = self._score_algorithm(
-                algo, df, context, constraints, user_preferences
-            )
-            algo_scores[algo] = score
-        
-        # Sort by score and select top algorithms
-        sorted_algos = sorted(algo_scores.items(), key=lambda x: x[1], reverse=True)
-        
-        # Select top N algorithms based on time budget
-        if constraints['time_budget'] < 600:  # < 10 minutes
-            n_algorithms = 3
-        elif constraints['time_budget'] < 3600:  # < 1 hour
-            n_algorithms = 5
-        else:
-            n_algorithms = 7
-        
-        selected = [algo for algo, _ in sorted_algos[:n_algorithms]]
-        
-        # Always include a baseline
-        if task == 'classification' and 'LogisticRegression' not in selected:
-            selected.append('LogisticRegression')
-        elif task == 'regression' and 'Ridge' not in selected:
-            selected.append('Ridge')
-        
-        return selected
+        """Use Claude for intelligent algorithm selection"""
+    
+        prompt = f\"\"\"Analyze this ML task and select optimal algorithms.
+
+    Task: {task}
+    Data: {len(df)} rows, {len(df.columns)} columns
+    Context: {json.dumps(context, indent=2)}
+    Constraints: {json.dumps(constraints, indent=2)}
+
+    Rule-based scores: {json.dumps(algo_scores, indent=2)}
+
+    Select 3-7 best algorithms considering:
+    - Data size and characteristics
+    - Task requirements
+    - Time/resource constraints
+    - Interpretability needs
+
+    Respond with JSON: {{"algorithms": ["algo1", "algo2",...], "reasoning": "..."}}
+    \"\"\"
+    
+        response = await self.claude_client.messages.create(
+            model=self.model,
+            max_tokens=2000,
+            system="You are an expert ML algorithm selector.",
+            messages=[{"role": "user", "content": prompt}]
+    )
+    
+    # Parse response...
+    return selected_algorithms
     
     def _score_algorithm(
         self,
