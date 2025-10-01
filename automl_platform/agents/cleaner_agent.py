@@ -86,21 +86,16 @@ class CleanerAgent:
             logger.error(f"Failed to initialize cleaner assistant: {e}")
 
     async def _ensure_assistant_initialized(self):
-        if self.client is None or self.assistant:
+        """Thread-safe initialization with double-check locking"""
+        if self.client is None or self._initialized:
             return
 
-        if self._initialization_lock is None:
-            self._initialization_lock = asyncio.Lock()
-
-        async with self._initialization_lock:
-            if self.assistant:
+        async with self._init_lock:
+            if self._initialized:  # Double-check
                 return
-
-            if self._initialization_task is not None:
-                await self._initialization_task
-                self._initialization_task = None
-            else:
-                await self._initialize_assistant()
+            
+            await self._initialize_assistant()
+            self._initialized = True
     
     async def clean(
         self, 
