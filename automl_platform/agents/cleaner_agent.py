@@ -51,6 +51,10 @@ class CleanerAgent:
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.CLEANER)
         
+        # FIXED: Lazy initialization - no automatic init
+        self._init_lock = asyncio.Lock()
+        self._initialized = False
+        
         # Track transformations
         self.transformations_history = []
 
@@ -58,14 +62,6 @@ class CleanerAgent:
         self._initialization_task: Optional[asyncio.Task] = None
         self._initialization_lock: Optional[asyncio.Lock] = None
 
-        if self.client is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                self._initialization_task = loop.create_task(self._initialize_assistant())
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
