@@ -367,10 +367,10 @@ Be specific, actionable, and concise (3-4 paragraphs max)."""
                 
                 # PARALLEL: Get mode decision + profile in parallel
                 if self.use_claude:
+                    profile_task = asyncio.create_task(self.profiler.analyze(df))
                     mode_task = asyncio.create_task(
                         self.determine_cleaning_mode_with_claude(df, user_context, self.ml_context)
                     )
-                    profile_task = asyncio.create_task(self.profiler.analyze(df))
                     
                     mode_decision, profile_report = await asyncio.gather(
                         mode_task, profile_task, return_exceptions=True
