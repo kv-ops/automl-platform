@@ -3,6 +3,11 @@ Adaptive Template System for AutoML Platform
 ============================================
 Templates become optional hints that the agent can override.
 The system learns from successful executions.
+
+ARCHITECTURE:
+- Rule-based core (proven, fast, predictable)
+- Optional Claude enhancement for semantic adaptation
+- Graceful degradation if Claude unavailable
 """
 
 import logging
@@ -14,6 +19,14 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import importlib.util
+
+# Optional Claude SDK import
+_anthropic_spec = importlib.util.find_spec("anthropic")
+if _anthropic_spec is not None:
+    from anthropic import AsyncAnthropic
+else:
+    AsyncAnthropic = None
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +55,23 @@ class AdaptiveTemplateSystem:
     """
     Templates are no longer rigid configurations but suggestions.
     The agent can override them based on data and context.
+    
+    NEW: Optional Claude enhancement for semantic pattern matching
     """
     
-    def __init__(self, template_dir: Optional[Path] = None):
+    def __init__(
+        self, 
+        template_dir: Optional[Path] = None,
+        use_claude: bool = False,
+        anthropic_api_key: Optional[str] = None
+    ):
         """
         Initialize the adaptive template system
         
         Args:
             template_dir: Directory containing template files
+            use_claude: Whether to use Claude for semantic enhancement
+            anthropic_api_key: Optional Anthropic API key
         """
         self.template_dir = template_dir or Path("./templates/adaptive")
         self.template_dir.mkdir(parents=True, exist_ok=True)
@@ -61,6 +83,27 @@ class AdaptiveTemplateSystem:
         # Learning metrics
         self.adaptation_history = []
         self.performance_by_template = {}
+        
+        # Claude enhancement (optional)
+        self.use_claude = use_claude and AsyncAnthropic is not None
+        if self.use_claude:
+            self.claude_client = AsyncAnthropic(api_key=anthropic_api_key)
+            self.claude_model = "claude-sonnet-4-20250514"
+            logger.info("💎 Claude enhancement enabled for semantic adaptation")
+        else:
+            self.claude_client = None
+            if use_claude:
+                logger.warning("⚠️ Claude requested but unavailable, using rule-based only")
+            else:
+                logger.info("📋 Using pure rule-based adaptation (optimal)")
+        
+        # Metrics tracking
+        self.metrics = {
+            "total_adaptations": 0,
+            "rule_based_adaptations": 0,
+            "claude_enhanced_adaptations": 0,
+            "claude_fallbacks": 0
+        }
         
         # Load existing templates
         self._load_templates()
@@ -78,17 +121,32 @@ class AdaptiveTemplateSystem:
         Get configuration with intelligent adaptation.
         
         The template is just a starting point - the agent adapts it.
+        Claude enhancement is optional and transparent.
         """
+        self.metrics["total_adaptations"] += 1
         problem_type = context.get('problem_type', 'unknown')
         
         logger.info(f"🎯 Getting adaptive configuration for {problem_type}")
         
-        # Step 1: Check learned patterns first
+        base_config = None
+        
+        # Step 1: Check learned patterns first (with optional Claude enhancement)
         if problem_type in self.learned_patterns:
             logger.info(f"📚 Found {len(self.learned_patterns[problem_type])} learned patterns")
-            base_config = self._select_best_learned_pattern(problem_type, context)
-            if base_config:
-                logger.info("✅ Using learned pattern as base")
+            
+            if self.use_claude:
+                # Try semantic matching with Claude
+                base_config = await self._claude_select_best_pattern(problem_type, context)
+                if base_config:
+                    logger.info("💎 Using Claude-selected pattern")
+                    self.metrics["claude_enhanced_adaptations"] += 1
+            
+            # Fallback to rule-based if Claude didn't work
+            if not base_config:
+                base_config = self._select_best_learned_pattern(problem_type, context)
+                if base_config:
+                    logger.info("✅ Using rule-based pattern selection")
+                    self.metrics["rule_based_adaptations"] += 1
         
         # Step 2: Fall back to template if exists
         if not base_config and problem_type in self.templates:
@@ -97,11 +155,13 @@ class AdaptiveTemplateSystem:
             base_config = template.base_config.copy()
             template.usage_count += 1
             template.last_used = datetime.now()
+            self.metrics["rule_based_adaptations"] += 1
         
         # Step 3: Generate from scratch if no template
         if not base_config:
             logger.info("🆕 No template found - generating from scratch")
             base_config = await self._generate_adaptive_config(df, context)
+            self.metrics["rule_based_adaptations"] += 1
         
         # Step 4: ALWAYS adapt to current data and context
         adapted_config = await self._adapt_to_current_data(base_config, df, context)
@@ -116,12 +176,109 @@ class AdaptiveTemplateSystem:
         
         return adapted_config
     
+    async def _claude_select_best_pattern(
+        self,
+        problem_type: str,
+        context: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Use Claude for semantic pattern matching (OPTIONAL ENHANCEMENT)
+        
+        This provides better understanding of contextual similarity
+        beyond simple numerical comparisons.
+        """
+        if not self.use_claude:
+            return None
+        
+        patterns = self.learned_patterns.get(problem_type, [])
+        if not patterns:
+            return None
+        
+        try:
+            # Prepare patterns for Claude
+            patterns_summary = []
+            for i, pattern in enumerate(patterns[:5]):  # Top 5 to save tokens
+                patterns_summary.append({
+                    'id': i,
+                    'context': pattern.get('context', {}),
+                    'performance': pattern.get('success_score', 0),
+                    'config_summary': self._summarize_config(pattern.get('config', {}))
+                })
+            
+            prompt = f"""Analyze which learned pattern best matches the current ML context.
+
+Current Context:
+{json.dumps(context, indent=2)}
+
+Available Patterns:
+{json.dumps(patterns_summary, indent=2)}
+
+Task: Determine semantic similarity considering:
+1. Problem complexity and scale
+2. Business domain alignment
+3. Data characteristics similarity
+4. Historical performance
+
+Respond ONLY with JSON:
+{{
+  "best_pattern_id": 0-4 or null,
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation",
+  "semantic_similarity": 0.0-1.0
+}}"""
+            
+            response = await self.claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=800,
+                temperature=0.3,
+                system="You are an expert at matching ML problem patterns based on semantic similarity.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = response.content[0].text.strip()
+            result = json.loads(response_text)
+            
+            best_id = result.get('best_pattern_id')
+            confidence = result.get('confidence', 0)
+            similarity = result.get('semantic_similarity', 0)
+            
+            # Use Claude's selection if confident
+            if best_id is not None and confidence > 0.7 and similarity > 0.7:
+                logger.info(f"💎 Claude selected pattern {best_id} "
+                          f"(confidence: {confidence:.2f}, similarity: {similarity:.2f})")
+                logger.info(f"   Reasoning: {result.get('reasoning', 'N/A')[:100]}")
+                return patterns[best_id]['config']
+            else:
+                logger.info(f"💎 Claude confidence too low ({confidence:.2f}), "
+                          f"falling back to rule-based")
+                self.metrics["claude_fallbacks"] += 1
+                return None
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Claude pattern selection failed: {e}, using rule-based")
+            self.metrics["claude_fallbacks"] += 1
+            return None
+    
+    def _summarize_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Create concise summary of config for Claude"""
+        return {
+            'task': config.get('task', 'unknown'),
+            'algorithms': config.get('algorithms', [])[:3],  # First 3
+            'has_preprocessing': bool(config.get('preprocessing')),
+            'has_feature_engineering': bool(config.get('feature_engineering')),
+            'primary_metric': config.get('primary_metric', 'unknown')
+        }
+    
     def _select_best_learned_pattern(
         self,
         problem_type: str,
         context: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Select the best learned pattern for the context"""
+        """
+        Select the best learned pattern for the context (RULE-BASED)
+        
+        This is the proven, reliable method that always works.
+        """
         patterns = self.learned_patterns.get(problem_type, [])
         
         if not patterns:
@@ -148,7 +305,11 @@ class AdaptiveTemplateSystem:
         pattern: Dict[str, Any],
         context: Dict[str, Any]
     ) -> float:
-        """Calculate similarity between a learned pattern and current context"""
+        """
+        Calculate similarity between a learned pattern and current context (RULE-BASED)
+        
+        This is fast, predictable, and well-tested.
+        """
         score = 0.0
         weights = {
             'data_size': 0.2,
@@ -194,7 +355,7 @@ class AdaptiveTemplateSystem:
         df: pd.DataFrame,
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate configuration from scratch adaptively"""
+        """Generate configuration from scratch adaptively (RULE-BASED)"""
         
         config = {
             'task': 'auto',
@@ -249,8 +410,10 @@ class AdaptiveTemplateSystem:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Adapt configuration to current data characteristics.
+        Adapt configuration to current data characteristics (RULE-BASED)
         This is where the intelligence happens - override template decisions.
+        
+        Rule-based is optimal here: fast, predictable, and well-tested.
         """
         adapted = base_config.copy()
         
@@ -340,7 +503,8 @@ class AdaptiveTemplateSystem:
             'base_config': base_config,
             'adapted_config': adapted_config,
             'context': context,
-            'changes': self._compute_config_diff(base_config, adapted_config)
+            'changes': self._compute_config_diff(base_config, adapted_config),
+            'used_claude': self.metrics["claude_enhanced_adaptations"] > 0
         }
         
         self.adaptation_history.append(adaptation)
@@ -454,7 +618,8 @@ class AdaptiveTemplateSystem:
             'total_templates': len(self.templates),
             'total_learned_patterns': sum(len(p) for p in self.learned_patterns.values()),
             'total_adaptations': len(self.adaptation_history),
-            'template_performance': {}
+            'template_performance': {},
+            'claude_metrics': self.metrics.copy() if self.use_claude else None
         }
         
         for name, template in self.templates.items():
@@ -462,6 +627,13 @@ class AdaptiveTemplateSystem:
                 'usage_count': template.usage_count,
                 'success_rate': template.success_rate,
                 'last_used': template.last_used.isoformat() if template.last_used else None
+            }
+        
+        # Add Claude effectiveness metrics if enabled
+        if self.use_claude and self.metrics["total_adaptations"] > 0:
+            stats['claude_effectiveness'] = {
+                'enhancement_rate': self.metrics["claude_enhanced_adaptations"] / self.metrics["total_adaptations"],
+                'fallback_rate': self.metrics["claude_fallbacks"] / max(1, self.metrics["claude_enhanced_adaptations"] + self.metrics["claude_fallbacks"])
             }
         
         return stats
