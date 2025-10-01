@@ -1,8 +1,6 @@
 """
 Intelligent Context Detector for AutoML Platform
-=================================================
-Automatically detects ML problem type and business context from data.
-Enhanced with Claude SDK for sophisticated reasoning.
+PRODUCTION-READY: Circuit breakers, retry logic, async safety
 """
 
 import pandas as pd
@@ -22,6 +20,14 @@ if _anthropic_spec is not None:
 else:
     AsyncAnthropic = None
 
+from .utils import (
+    async_retry,
+    parse_llm_json,
+    validate_llm_json_schema,
+    track_llm_cost,
+    AsyncInitMixin
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,13 +45,18 @@ class MLContext:
     alternative_interpretations: List[Dict[str, Any]] = field(default_factory=list)
 
 
-class IntelligentContextDetector:
+class IntelligentContextDetector(AsyncInitMixin):
     """
     The brain of the Agent-First approach.
-    Enhanced with Claude for sophisticated ML problem understanding.
+    
+    PRODUCTION-READY with:
+    - Circuit breaker protection
+    - Retry logic with exponential backoff
+    - Thread-safe async initialization
+    - Graceful degradation
     """
     
-    # Pattern signatures for different ML problems
+    # Pattern signatures for different ML problems (unchanged)
     PROBLEM_PATTERNS = {
         'churn_prediction': {
             'keywords': ['customer', 'subscriber', 'user', 'account', 'retention', 'cancel', 
@@ -112,24 +123,32 @@ class IntelligentContextDetector:
         }
     }
     
-    def __init__(self, anthropic_api_key: Optional[str] = None):
+    def __init__(self, anthropic_api_key: Optional[str] = None, config: Optional[Any] = None):
         """Initialize the context detector"""
+        super().__init__()
+        
+        self.config = config
         self.detected_contexts = []
         self.column_analysis = {}
         
         # Initialize Claude client for enhanced reasoning
-        if AsyncAnthropic is not None and anthropic_api_key:
-            self.claude_client = AsyncAnthropic(api_key=anthropic_api_key)
-            self.use_claude = True
-            logger.info("IntelligentContextDetector initialized with Claude SDK")
+        self.use_claude = AsyncAnthropic is not None and anthropic_api_key is not None
+        
+        if self.use_claude:
+            self._anthropic_api_key = anthropic_api_key
+            self.model = "claude-sonnet-4-20250514"
+            logger.info("IntelligentContextDetector with Claude SDK enabled")
         else:
             self.claude_client = None
-            self.use_claude = False
             logger.info("IntelligentContextDetector using rule-based detection only")
-        
-        self.model = "claude-sonnet-4-20250514"
-        self.max_tokens = 3000
-        
+    
+    async def _async_init(self):
+        """Thread-safe async initialization"""
+        if self.use_claude:
+            self.claude_client = AsyncAnthropic(api_key=self._anthropic_api_key)
+        else:
+            self.claude_client = None
+    
     async def detect_ml_context(
         self, 
         df: pd.DataFrame, 
@@ -138,21 +157,18 @@ class IntelligentContextDetector:
     ) -> MLContext:
         """
         Intelligently detect the ML problem type and context.
-        Enhanced with Claude for sophisticated reasoning.
+        PRODUCTION-READY with retry and circuit breaker.
         """
+        await self.ensure_initialized()
+        
         logger.info("🧠 Starting intelligent context detection...")
         
-        # Step 1: Analyze column names and data patterns
+        # Step 1-4: Rule-based analysis (always available)
         column_analysis = self._analyze_columns(df)
         self.column_analysis = column_analysis
         
-        # Step 2: Analyze target variable if provided
         target_analysis = self._analyze_target(df, target_col) if target_col else {}
-        
-        # Step 3: Detect temporal aspects
         temporal_info = self._detect_temporal_aspects(df)
-        
-        # Step 4: Detect data characteristics
         data_characteristics = self._analyze_data_characteristics(df, target_col)
         
         # Step 5: Search for business context clues
@@ -168,23 +184,20 @@ class IntelligentContextDetector:
             problem_scores[problem_type] = score
         
         # Step 7: Use Claude for enhanced reasoning if available
-        if self.use_claude and self.claude_client:
-            best_problem, confidence, reasoning, alternatives = await self._claude_enhanced_detection(
-                df, column_analysis, target_analysis, temporal_info, 
-                data_characteristics, context_clues, problem_scores
-            )
+        if self.use_claude and self.claude_client and self._should_use_claude():
+            try:
+                best_problem, confidence, reasoning, alternatives = await self._claude_enhanced_detection(
+                    df, column_analysis, target_analysis, temporal_info, 
+                    data_characteristics, context_clues, problem_scores
+                )
+            except Exception as e:
+                logger.warning(f"Claude detection failed, using rule-based: {e}")
+                best_problem, confidence, reasoning, alternatives = self._rule_based_result(
+                    problem_scores, column_analysis, target_analysis, context_clues
+                )
         else:
-            # Fallback to rule-based
-            best_problem = max(problem_scores, key=problem_scores.get)
-            confidence = problem_scores[best_problem]
-            alternatives = [
-                {'type': prob, 'confidence': score}
-                for prob, score in sorted(problem_scores.items(), key=lambda x: x[1], reverse=True)[1:3]
-                if score > 0.3
-            ]
-            reasoning = self._generate_reasoning(
-                best_problem, confidence, column_analysis, 
-                target_analysis, context_clues
+            best_problem, confidence, reasoning, alternatives = self._rule_based_result(
+                problem_scores, column_analysis, target_analysis, context_clues
             )
         
         # Step 8: Generate optimal configuration
@@ -206,6 +219,19 @@ class IntelligentContextDetector:
             alternative_interpretations=alternatives
         )
     
+    def _should_use_claude(self) -> bool:
+        """Check if Claude should be used (circuit breaker check)"""
+        if self.config and hasattr(self.config, 'can_call_llm'):
+            return self.config.can_call_llm('claude')
+        return True
+    
+    @async_retry(
+        max_attempts=3,
+        base_delay=1.0,
+        max_delay=10.0,
+        exceptions=(Exception,)
+    )
+    @track_llm_cost('claude', 'context_detector')
     async def _claude_enhanced_detection(
         self,
         df: pd.DataFrame,
@@ -216,18 +242,23 @@ class IntelligentContextDetector:
         context_clues: Dict[str, Any],
         rule_based_scores: Dict[str, float]
     ) -> Tuple[str, float, str, List[Dict[str, Any]]]:
-        """Use Claude for sophisticated ML problem detection"""
-        
+        """
+        Use Claude for sophisticated ML problem detection.
+        WITH: Retry logic, cost tracking, circuit breaker
+        """
         # Prepare context for Claude
         detection_context = {
-            "columns": column_analysis['columns'][:20],  # Limit for token efficiency
+            "columns": column_analysis['columns'][:20],
             "detected_patterns": list(column_analysis.get('detected_patterns', [])),
             "target_info": target_analysis,
             "temporal_aspect": temporal_info.get('has_temporal', False),
             "data_size": {"rows": len(df), "columns": len(df.columns)},
             "data_characteristics": data_characteristics,
             "business_context": context_clues,
-            "rule_based_scores": {k: round(v, 2) for k, v in sorted(rule_based_scores.items(), key=lambda x: x[1], reverse=True)[:5]}
+            "rule_based_scores": {
+                k: round(v, 2) 
+                for k, v in sorted(rule_based_scores.items(), key=lambda x: x[1], reverse=True)[:5]
+            }
         }
         
         prompt = f"""You are an expert ML problem analyst. Analyze this dataset and determine the ML problem type.
@@ -253,7 +284,7 @@ Your task:
 4. Explain your reasoning
 5. Suggest 2 alternative interpretations
 
-Respond in this JSON format:
+Respond in JSON format ONLY:
 {{
   "problem_type": "...",
   "confidence": 0.85,
@@ -263,70 +294,97 @@ Respond in this JSON format:
     {{"type": "...", "confidence": 0.45, "reason": "..."}}
   ]
 }}"""
-
+        
         try:
             response = await self.claude_client.messages.create(
                 model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=0.3,  # Lower temperature for more consistent reasoning
-                system="You are an expert ML problem type detector. Analyze datasets and identify the optimal ML approach.",
+                max_tokens=3000,
+                temperature=0.3,
+                system="You are an expert ML problem type detector. Analyze datasets and identify the optimal ML approach. Respond ONLY with JSON.",
                 messages=[{"role": "user", "content": prompt}]
             )
             
             response_text = response.content[0].text
             
-            # Parse Claude's response
-            result = self._parse_claude_detection_response(response_text, rule_based_scores)
+            # Record success for circuit breaker
+            if self.config and hasattr(self.config, 'record_llm_success'):
+                self.config.record_llm_success('claude')
+            
+            # Parse Claude's response with robust parsing
+            result = parse_llm_json(
+                response_text,
+                fallback={
+                    'problem_type': max(rule_based_scores, key=rule_based_scores.get),
+                    'confidence': rule_based_scores[max(rule_based_scores, key=rule_based_scores.get)],
+                    'reasoning': 'Parsed from Claude response failed, using rule-based',
+                    'alternatives': []
+                }
+            )
+            
+            # Validate result
+            if not validate_llm_json_schema(
+                result,
+                required_fields=['problem_type', 'confidence', 'reasoning'],
+                field_types={'problem_type': str, 'confidence': (int, float), 'reasoning': str}
+            ):
+                logger.warning("Claude response validation failed, using fallback")
+                return self._rule_based_result(
+                    rule_based_scores, column_analysis, target_analysis, context_clues
+                )
+            
+            # Validate problem type
+            if result['problem_type'] not in self.PROBLEM_PATTERNS:
+                logger.warning(f"Invalid problem type from Claude: {result['problem_type']}")
+                result['problem_type'] = max(rule_based_scores, key=rule_based_scores.get)
+            
+            # Ensure confidence is reasonable
+            result['confidence'] = min(1.0, max(0.0, float(result['confidence'])))
+            
+            logger.info(f"💎 Claude detection: {result['problem_type']} ({result['confidence']:.1%})")
             
             return (
                 result['problem_type'],
                 result['confidence'],
                 result['reasoning'],
-                result['alternatives']
+                result.get('alternatives', [])
             )
             
         except Exception as e:
-            logger.warning(f"Claude detection failed, falling back to rule-based: {e}")
-            best_problem = max(rule_based_scores, key=rule_based_scores.get)
-            return (
-                best_problem,
-                rule_based_scores[best_problem],
-                f"Rule-based detection (Claude unavailable): {best_problem}",
-                []
-            )
+            logger.error(f"Claude detection error: {e}")
+            
+            # Record failure for circuit breaker
+            if self.config and hasattr(self.config, 'record_llm_failure'):
+                self.config.record_llm_failure('claude')
+            
+            raise  # Will be caught by retry decorator
     
-    def _parse_claude_detection_response(
-        self, 
-        response_text: str,
-        rule_based_scores: Dict[str, float]
-    ) -> Dict[str, Any]:
-        """Parse Claude's detection response"""
-        try:
-            # Try to extract JSON
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                result = json.loads(json_match.group())
-                
-                # Validate problem type
-                if result['problem_type'] not in self.PROBLEM_PATTERNS:
-                    logger.warning(f"Invalid problem type from Claude: {result['problem_type']}")
-                    result['problem_type'] = max(rule_based_scores, key=rule_based_scores.get)
-                
-                # Ensure confidence is reasonable
-                result['confidence'] = min(1.0, max(0.0, result['confidence']))
-                
-                return result
-        except Exception as e:
-            logger.warning(f"Failed to parse Claude response: {e}")
+    def _rule_based_result(
+        self,
+        problem_scores: Dict[str, float],
+        column_analysis: Dict[str, Any],
+        target_analysis: Dict[str, Any],
+        context_clues: Dict[str, Any]
+    ) -> Tuple[str, float, str, List[Dict[str, Any]]]:
+        """Generate rule-based result"""
+        best_problem = max(problem_scores, key=problem_scores.get)
+        confidence = problem_scores[best_problem]
         
-        # Fallback
-        best_problem = max(rule_based_scores, key=rule_based_scores.get)
-        return {
-            'problem_type': best_problem,
-            'confidence': rule_based_scores[best_problem],
-            'reasoning': 'Fallback to rule-based detection',
-            'alternatives': []
-        }
+        alternatives = [
+            {'type': prob, 'confidence': score, 'reason': 'Rule-based score'}
+            for prob, score in sorted(problem_scores.items(), key=lambda x: x[1], reverse=True)[1:3]
+            if score > 0.3
+        ]
+        
+        reasoning = self._generate_reasoning(
+            best_problem, confidence, column_analysis, 
+            target_analysis, context_clues
+        )
+        
+        return best_problem, confidence, reasoning, alternatives
+    
+    # ============================================================================
+    # RULE-BASED ANALYSIS METHODS (unchanged but kept for reference)
+    # ============================================================================
     
     def _analyze_columns(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Analyze column names and types for patterns"""
@@ -405,7 +463,7 @@ Respond in this JSON format:
             if df[target_col].nunique() == 2:
                 target_analysis['type'] = 'binary_classification'
                 value_counts = df[target_col].value_counts()
-                imbalance_ratio = value_counts.iloc[0] / value_counts.iloc[-1]
+                imbalance_ratio = value_counts.iloc[0] / value_counts.iloc[-1] if len(value_counts) > 1 else 1
                 target_analysis['imbalance_ratio'] = imbalance_ratio
                 target_analysis['is_imbalanced'] = imbalance_ratio > 3
             elif df[target_col].nunique() < 10:
@@ -530,7 +588,7 @@ Respond in this JSON format:
                 for col in column_analysis['columns']):
             context['sector'] = 'industrial'
         
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.01)  # Yield control
         
         return context
     
