@@ -99,18 +99,9 @@ class ValidatorAgent:
             "total_validations": 0
         }
 
-        # Assistant initialization tracking
-        self._initialization_task: Optional[asyncio.Task] = None
-        self._initialization_lock: Optional[asyncio.Lock] = None
-
-        if self.openai_client is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                self._initialization_task = loop.create_task(self._initialize_assistant())
+    # FIXED: Lazy initialization - no automatic init
+      self._init_lock = asyncio.Lock()
+      self._initialized = False
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant for web search"""
