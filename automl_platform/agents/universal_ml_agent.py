@@ -22,6 +22,7 @@ import json
 import gc
 import psutil
 import sys
+from .utils import BoundedList
 from typing import Dict, Any, List, Optional, Tuple, Generator
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -362,7 +363,7 @@ class ProductionUniversalMLAgent:
             logger.info("📋 Using rule-based orchestration")
         
         # Performance tracking
-        self.execution_history = []
+        self.execution_history = BoundedList(maxlen=100)
         self.agent_metrics = {
             "profiler_calls": 0,
             "validator_calls": 0,
