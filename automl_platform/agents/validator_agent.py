@@ -99,9 +99,9 @@ class ValidatorAgent:
             "total_validations": 0
         }
 
-    # FIXED: Lazy initialization - no automatic init
-      self._init_lock = asyncio.Lock()
-      self._initialized = False
+        # FIXED: Lazy initialization - no automatic init
+        self._init_lock = asyncio.Lock()
+        self._initialized = False
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant for web search"""
@@ -119,7 +119,7 @@ class ValidatorAgent:
                 self.assistant = await self.openai_client.beta.assistants.create(
                     name="Data Validator Agent - Web Search",
                     instructions=VALIDATOR_SYSTEM_PROMPT,
-                    model=self.config.model,
+                    model=self.config.openai_model,
                     tools=self.config.get_agent_tools(AgentType.VALIDATOR)
                 )
                 self.assistant_id = self.assistant.id
@@ -528,7 +528,7 @@ Respond ONLY with valid JSON:
         """Handle assistant run with function calling for web search"""
         start_time = time.time()
         
-        while time.time() - start_time < self.config.timeout_seconds:
+        while time.time() - start_time < self.config.openai_timeout_seconds:
             run_status = await self.openai_client.beta.threads.runs.retrieve(
                 thread_id=thread_id,
                 run_id=run_id
