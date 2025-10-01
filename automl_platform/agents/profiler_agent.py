@@ -53,10 +53,6 @@ class ProfilerAgent:
         self._init_lock = asyncio.Lock()
         self._initialized = False
 
-        # Assistant initialization tracking
-        self._initialization_task: Optional[asyncio.Task] = None
-        self._initialization_lock: Optional[asyncio.Lock] = None
-
     
     async def _initialize_assistant(self):
         """Create or retrieve OpenAI Assistant"""
