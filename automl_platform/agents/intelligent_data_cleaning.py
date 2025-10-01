@@ -495,3 +495,290 @@ Respond with JSON:
                     prompts.append(f"Fill missing values in {col}")
         
         for warning in assessment.warnings[:3]:
+            if "outlier" in warning["message"].lower():
+                col = self._extract_column_name(warning["message"])
+                if col:
+                    prompts.append(f"Remove outliers from {col}")
+        
+        return prompts
+    
+    def _extract_column_name(self, message: str) -> Optional[str]:
+        """Extract column name from message"""
+        import re
+        pattern = r"[Cc]olumn ['\"]?(\w+)['\"]?"
+        match = re.search(pattern, message)
+        return match.group(1) if match else None
+    
+    async def _generate_comprehensive_report(
+        self,
+        initial_assessment: DataQualityAssessment,
+        final_assessment: DataQualityAssessment,
+        cleaning_report: Dict,
+        mode: str,
+        strategy: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate comprehensive report with Claude insights"""
+        quality_improvement = final_assessment.quality_score - initial_assessment.quality_score
+        
+        report = {
+            "summary": {
+                "mode": mode,
+                "initial_quality": initial_assessment.quality_score,
+                "final_quality": final_assessment.quality_score,
+                "improvement": quality_improvement,
+                "success": quality_improvement > 0,
+                "used_claude": self.use_claude
+            },
+            "initial_issues": {
+                "alerts": len(initial_assessment.alerts),
+                "warnings": len(initial_assessment.warnings)
+            },
+            "final_issues": {
+                "alerts": len(final_assessment.alerts),
+                "warnings": len(final_assessment.warnings)
+            },
+            "resolved_issues": {
+                "alerts": len(initial_assessment.alerts) - len(final_assessment.alerts),
+                "warnings": len(initial_assessment.warnings) - len(final_assessment.warnings)
+            },
+            "cleaning_details": cleaning_report,
+            "recommendations": final_assessment.recommendations[:3],
+            "risks": {
+                "drift_risk": final_assessment.drift_risk,
+                "leakage_risk": final_assessment.target_leakage_risk
+            },
+            "strategy": strategy.get("summary", "Rule-based") if strategy else "Rule-based"
+        }
+        
+        if mode == "agents" and "execution_history" in cleaning_report:
+            report["performance"] = {
+                "steps_executed": len(cleaning_report.get("execution_history", [])),
+                "transformations_applied": len(cleaning_report.get("transformations", []))
+            }
+        
+        if self.use_claude and strategy:
+            report["strategic_insights"] = {
+                "priorities_addressed": len(strategy.get("priorities", [])),
+                "risks_identified": len(strategy.get("risks", [])),
+                "expected_vs_actual": {
+                    "expected": strategy.get("expected_improvement", {}).get("quality_score_gain", 0),
+                    "actual": quality_improvement
+                }
+            }
+        
+        if self.use_claude:
+            try:
+                final_insights = await self._claude_generate_final_insights(
+                    report, initial_assessment, final_assessment
+                )
+                report["claude_insights"] = final_insights
+                self.metrics["claude_recommendations"] += 1
+            except Exception as e:
+                logger.warning(f"⚠️ Claude insights failed: {e}")
+                self.metrics["rule_based_fallbacks"] += 1
+        
+        return report
+    
+    async def _claude_generate_final_insights(
+        self,
+        report: Dict[str, Any],
+        initial_assessment: DataQualityAssessment,
+        final_assessment: DataQualityAssessment
+    ) -> str:
+        """Generate final insights with Claude"""
+        prompt = f"""Analyze this data cleaning execution.
+
+Initial Quality: {initial_assessment.quality_score:.1f}/100
+Final Quality: {final_assessment.quality_score:.1f}/100
+Improvement: {report['summary']['improvement']:.1f} points
+
+Issues Resolved:
+- Alerts: {report['resolved_issues']['alerts']}
+- Warnings: {report['resolved_issues']['warnings']}
+
+Provide 3-4 paragraph analysis covering:
+1. Overall success assessment
+2. Key achievements
+3. Remaining concerns
+4. Next steps for ML readiness"""
+        
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=1000,
+                temperature=0.3,
+                system="You are an expert data quality analyst.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text.strip()
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Claude insights failed: {e}")
+            return "Cleaning completed. Review metrics for details."
+    
+    def get_cleaning_summary(self) -> Dict[str, Any]:
+        """Get summary of all cleaning operations"""
+        if not self.cleaning_history:
+            return {"message": "No operations yet"}
+        
+        total = len(self.cleaning_history)
+        avg_improvement = sum(h["quality_improvement"] for h in self.cleaning_history) / total
+        
+        modes_used = {}
+        for h in self.cleaning_history:
+            mode = h["mode"]
+            modes_used[mode] = modes_used.get(mode, 0) + 1
+        
+        claude_usage = sum(1 for h in self.cleaning_history if h.get("used_claude", False))
+        
+        return {
+            "total_operations": total,
+            "average_quality_improvement": avg_improvement,
+            "modes_used": modes_used,
+            "last_operation": self.cleaning_history[-1]["timestamp"],
+            "best_improvement": max(h["quality_improvement"] for h in self.cleaning_history),
+            "claude_usage": {
+                "operations_with_claude": claude_usage,
+                "percentage": (claude_usage / total) * 100 if total > 0 else 0
+            },
+            "metrics": self.metrics
+        }
+    
+    async def recommend_cleaning_approach(
+        self,
+        df: pd.DataFrame,
+        user_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Recommend the best cleaning approach"""
+        assessment = self.quality_agent.assess(df, user_context.get("target_variable"))
+        
+        if self.use_claude:
+            recommended_mode = await self._claude_determine_best_mode(
+                df, assessment, user_context
+            )
+            reasoning = "Claude strategic analysis"
+        else:
+            recommended_mode = self._determine_best_mode(assessment, user_context)
+            reasoning = self._get_mode_reasoning(recommended_mode, assessment)
+        
+        recommendation = {
+            "recommended_mode": recommended_mode,
+            "current_quality": assessment.quality_score,
+            "reasoning": reasoning,
+            "estimated_time": self._estimate_cleaning_time(df, recommended_mode),
+            "key_issues": [alert["message"] for alert in assessment.alerts[:3]] + 
+                         [warning["message"] for warning in assessment.warnings[:2]],
+            "used_claude": self.use_claude
+        }
+        
+        if self.use_claude:
+            try:
+                strategy_preview = await self._claude_generate_cleaning_strategy(
+                    df, assessment, user_context, recommended_mode
+                )
+                recommendation["strategic_preview"] = strategy_preview.get("summary", "")
+            except Exception as e:
+                logger.warning(f"⚠️ Preview failed: {e}")
+        
+        return recommendation
+    
+    def _get_mode_reasoning(self, mode: str, assessment: DataQualityAssessment) -> str:
+        """Get reasoning for mode selection"""
+        reasonings = {
+            "agents": f"Agents recommended for systematic issues (quality: {assessment.quality_score:.1f}/100)",
+            "conversational": f"Conversational for fine-tuning (quality: {assessment.quality_score:.1f}/100)",
+            "hybrid": f"Hybrid for complex issues (quality: {assessment.quality_score:.1f}/100)"
+        }
+        return reasonings.get(mode, "Selected based on data characteristics")
+    
+    def _estimate_cleaning_time(self, df: pd.DataFrame, mode: str) -> str:
+        """Estimate cleaning time"""
+        rows, cols = len(df), len(df.columns)
+        
+        if mode == "agents":
+            time_estimate = 30 + (rows / 1000) * 5 + cols * 2
+        elif mode == "conversational":
+            time_estimate = 20 + (rows / 1000) * 3 + cols * 1
+        else:
+            time_estimate = 50 + (rows / 1000) * 8 + cols * 3
+        
+        if time_estimate < 60:
+            return f"~{int(time_estimate)} seconds"
+        elif time_estimate < 3600:
+            return f"~{int(time_estimate / 60)} minutes"
+        else:
+            return f"~{time_estimate / 3600:.1f} hours"
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get usage metrics"""
+        return self.metrics.copy()
+
+
+# Convenience function
+async def smart_clean_data(
+    df: pd.DataFrame,
+    user_context: Dict[str, Any],
+    config: Optional[AgentConfig] = None,
+    mode: str = "auto",
+    use_claude: bool = True
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Convenience function for smart data cleaning
+    
+    Args:
+        df: DataFrame to clean
+        user_context: Context (sector, target, etc.)
+        config: Optional configuration
+        mode: Cleaning mode
+        use_claude: Use Claude SDK for insights
+    
+    Returns:
+        Tuple of (cleaned_df, report)
+    """
+    cleaner = IntelligentDataCleaner(config, use_claude=use_claude)
+    return await cleaner.smart_clean(df, user_context, mode)
+
+
+# Example usage
+if __name__ == "__main__":
+    import asyncio
+    
+    # Create sample data
+    np.random.seed(42)
+    sample_df = pd.DataFrame({
+        'numeric': np.random.randn(100),
+        'categorical': np.random.choice(['A', 'B', 'C'], 100),
+        'target': np.random.choice([0, 1], 100)
+    })
+    
+    # Add some quality issues
+    sample_df.loc[:10, 'numeric'] = np.nan
+    
+    # Define context
+    context = {
+        "secteur_activite": "finance",
+        "target_variable": "target",
+        "contexte_metier": "Risk prediction"
+    }
+    
+    async def demo():
+        # Create intelligent cleaner with Claude
+        cleaner = IntelligentDataCleaner(use_claude=True)
+        
+        # Get recommendation
+        recommendation = await cleaner.recommend_cleaning_approach(sample_df, context)
+        print(f"💡 Recommended: {recommendation['recommended_mode']}")
+        print(f"📊 Reasoning: {recommendation['reasoning']}")
+        
+        # Clean data
+        cleaned_df, report = await cleaner.smart_clean(sample_df, context, mode="auto")
+        
+        print(f"\n✅ Improvement: {report['summary']['improvement']:.1f} points")
+        print(f"📈 Final quality: {report['summary']['final_quality']:.1f}/100")
+        
+        if report.get('claude_insights'):
+            print(f"\n💎 Claude Insights:\n{report['claude_insights']}")
+        
+    # Run demo
+    asyncio.run(demo())
