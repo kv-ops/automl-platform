@@ -80,10 +80,11 @@ class AdaptiveTemplateSystem:
         The template is just a starting point - the agent adapts it.
         """
         problem_type = context.get('problem_type', 'unknown')
-        
+
         logger.info(f"🎯 Getting adaptive configuration for {problem_type}")
-        
+
         # Step 1: Check learned patterns first
+        base_config: Optional[Dict[str, Any]] = None
         if problem_type in self.learned_patterns:
             logger.info(f"📚 Found {len(self.learned_patterns[problem_type])} learned patterns")
             base_config = self._select_best_learned_pattern(problem_type, context)
@@ -136,11 +137,15 @@ class AdaptiveTemplateSystem:
         # Sort by score and get best
         scored_patterns.sort(key=lambda x: x[0], reverse=True)
         
-        if scored_patterns and scored_patterns[0][0] > 0.7:  # Similarity threshold
-            best_pattern = scored_patterns[0][1]
-            logger.info(f"Found similar pattern with score {scored_patterns[0][0]:.2f}")
-            return best_pattern['config']
-        
+        if scored_patterns:
+            best_score, best_pattern = scored_patterns[0]
+            if best_score >= 0.5:
+                logger.info(f"Found similar pattern with score {best_score:.2f}")
+                return best_pattern['config']
+            if best_score > 0:
+                logger.info(f"Using closest pattern despite low similarity ({best_score:.2f})")
+                return best_pattern['config']
+
         return None
     
     def _calculate_pattern_similarity(
@@ -321,6 +326,13 @@ class AdaptiveTemplateSystem:
         # Agent decisions have highest priority
         for key, value in agent_config.items():
             if value is not None:  # Only override if explicitly set
+                if key == 'generated_at' and isinstance(value, str):
+                    try:
+                        value = datetime.fromisoformat(value)
+                    except ValueError:
+                        logger.debug(f"Skipping invalid generated_at override: {value}")
+                        continue
+
                 logger.info(f"🤖 Agent override: {key} = {value}")
                 config[key] = value
         
@@ -391,7 +403,7 @@ class AdaptiveTemplateSystem:
         logger.info(f"📈 Learning from execution: {problem_type} -> score: {success_score:.3f}")
         
         # Store if successful
-        if success_score > 0.8:  # Success threshold
+        if success_score >= 0.8:  # Success threshold
             pattern = {
                 'timestamp': datetime.now().isoformat(),
                 'context': context,
@@ -399,18 +411,24 @@ class AdaptiveTemplateSystem:
                 'performance': performance,
                 'success_score': success_score
             }
-            
+
             if problem_type not in self.learned_patterns:
                 self.learned_patterns[problem_type] = []
-            
-            self.learned_patterns[problem_type].append(pattern)
-            
+
+            existing_patterns = self.learned_patterns[problem_type]
+            for existing in existing_patterns:
+                if existing.get('config') == config and existing.get('context') == context:
+                    existing.update(pattern)
+                    break
+            else:
+                existing_patterns.append(pattern)
+
             # Keep only best patterns (top 10)
-            self.learned_patterns[problem_type].sort(
+            existing_patterns.sort(
                 key=lambda x: x['success_score'],
                 reverse=True
             )
-            self.learned_patterns[problem_type] = self.learned_patterns[problem_type][:10]
+            self.learned_patterns[problem_type] = existing_patterns[:10]
             
             logger.info(f"✅ Stored successful pattern for {problem_type}")
             

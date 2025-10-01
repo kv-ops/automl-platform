@@ -445,7 +445,7 @@ class UniversalMLAgent:
             self._learn_from_execution(config, performance_metrics, context)
             
             # Update adaptive templates with results
-            await self.adaptive_templates.learn_from_execution(
+            self.adaptive_templates.learn_from_execution(
                 context={
                     'problem_type': context.problem_type,
                     'n_samples': len(df),
@@ -651,9 +651,20 @@ class UniversalMLAgent:
     
     def _compute_data_hash(self, df: pd.DataFrame) -> str:
         """Compute hash of dataframe for caching"""
-        # Use shape, column names, and dtypes for hash
-        hash_input = f"{df.shape}_{list(df.columns)}_{df.dtypes.tolist()}"
-        return hashlib.md5(hash_input.encode()).hexdigest()
+        metadata = {
+            'shape': df.shape,
+            'columns': list(df.columns),
+            'dtypes': df.dtypes.apply(lambda x: str(x)).tolist(),
+        }
+
+        try:
+            data_hash = pd.util.hash_pandas_object(df, index=True).values.tobytes()
+        except Exception:
+            # Fallback to JSON serialization if hashing fails (e.g., unsupported dtypes)
+            data_hash = df.astype(str).to_json().encode()
+
+        payload = json.dumps(metadata, sort_keys=True).encode() + data_hash
+        return hashlib.md5(payload).hexdigest()
     
     def _learn_from_execution(
         self,
@@ -679,11 +690,21 @@ class UniversalMLAgent:
         if not self.execution_history:
             return {"message": "No executions performed yet"}
         
+        total_executions = len(self.execution_history)
+        success_rate = sum(1 for e in self.execution_history if e['success']) / total_executions
+        average_time = sum(e['execution_time'] for e in self.execution_history) / total_executions
+
+        total_agent_calls = 0
+        for entry in self.execution_history:
+            metrics = entry.get('agent_metrics', {})
+            if isinstance(metrics, dict):
+                total_agent_calls += sum(v for v in metrics.values() if isinstance(v, (int, float)))
+
         return {
-            "total_executions": len(self.execution_history),
-            "success_rate": sum(1 for e in self.execution_history if e['success']) / len(self.execution_history),
-            "average_execution_time": sum(e['execution_time'] for e in self.execution_history) / len(self.execution_history),
-            "total_agent_calls": sum(e['agent_metrics'].values() for e in self.execution_history),
+            "total_executions": total_executions,
+            "success_rate": success_rate,
+            "average_execution_time": average_time,
+            "total_agent_calls": total_agent_calls,
             "problem_types_handled": list(set(e['problem_type'] for e in self.execution_history)),
             "last_execution": self.execution_history[-1]['timestamp']
         }

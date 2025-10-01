@@ -482,9 +482,21 @@ class IntelligentContextDetector:
             score += weights['business_metrics'] * min(1.0, metric_matches / 2)
         
         # Boost score based on context clues
-        if context_clues.get('sector'):
-            if problem_type in context_clues['sector']:
+        sector = context_clues.get('sector')
+        if sector:
+            sector_problem_map = {
+                'finance': {'fraud_detection', 'credit_scoring', 'churn_prediction'},
+                'financial_fraud': {'fraud_detection', 'credit_scoring'},
+                'retail': {'sales_forecasting', 'recommendation_system', 'churn_prediction'},
+                'customer_analytics': {'churn_prediction', 'customer_segmentation'},
+                'industrial': {'predictive_maintenance', 'anomaly_detection'},
+                'telecom': {'churn_prediction'},
+            }
+            related_problems = sector_problem_map.get(sector, set())
+            if problem_type in related_problems:
                 score *= 1.5
+            elif related_problems:
+                score *= 1.2  # partial boost when sector context is somewhat relevant
         
         return min(1.0, score)
     
@@ -497,6 +509,10 @@ class IntelligentContextDetector:
     ) -> Dict[str, Any]:
         """Generate optimal configuration for the detected problem type"""
         
+        safe_characteristics = dict(data_characteristics or {})
+        safe_characteristics.setdefault('n_samples', len(df))
+        safe_characteristics.setdefault('n_features', df.shape[1])
+
         config = {
             'problem_type': problem_type,
             'task': 'auto',  # Will be determined
@@ -508,13 +524,15 @@ class IntelligentContextDetector:
         }
         
         # Determine task type
+        imbalance_config = None
+
         if problem_type in ['churn_prediction', 'fraud_detection', 'credit_scoring']:
             config['task'] = 'classification'
             config['primary_metric'] = 'roc_auc'
-            
+
             # Handle imbalance if detected
-            if data_characteristics.get('imbalance_detected'):
-                config['preprocessing']['handle_imbalance'] = {
+            if safe_characteristics.get('imbalance_detected'):
+                imbalance_config = {
                     'method': 'SMOTE',
                     'sampling_strategy': 'auto'
                 }
@@ -540,17 +558,19 @@ class IntelligentContextDetector:
         
         # Select optimal algorithms based on problem type and data
         config['algorithms'] = self._select_optimal_algorithms(
-            problem_type, data_characteristics
+            problem_type, safe_characteristics
         )
-        
+
         # Configure preprocessing
         config['preprocessing'] = self._configure_preprocessing(
-            problem_type, data_characteristics
+            problem_type, safe_characteristics
         )
-        
+        if imbalance_config:
+            config['preprocessing']['handle_imbalance'] = imbalance_config
+
         # Configure HPO
         config['hpo'] = self._configure_hpo(
-            problem_type, data_characteristics
+            problem_type, safe_characteristics
         )
         
         # Add monitoring based on problem type

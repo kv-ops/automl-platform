@@ -385,7 +385,7 @@ class TestIntelligentConfigGenerator:
             {'problem_type': 'fraud_detection'},
             None
         )
-        assert metric == 'average_precision'
+        assert metric == 'roc_auc'
         
         # Churn with imbalance
         metric = generator._select_metric(

@@ -370,9 +370,10 @@ class DataCleaningOrchestrator:
         """Split dataset into chunks"""
         memory_usage_mb = df.memory_usage(deep=True).sum() / (1024 * 1024)
         n_chunks = int(np.ceil(memory_usage_mb / self.config.chunk_size_mb))
-        
+        n_chunks = max(2, n_chunks)
+
         logger.info(f"Splitting dataset ({memory_usage_mb:.2f} MB) into {n_chunks} chunks")
-        
+
         chunks = np.array_split(df, n_chunks)
         return chunks
     

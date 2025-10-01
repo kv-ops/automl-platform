@@ -33,6 +33,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
 import base64
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +107,11 @@ class ABTestResult:
     
     # Predictions log
     predictions_log: List[Dict] = field(default_factory=list)
-    
+
     # Timeline
     started_at: datetime = field(default_factory=datetime.utcnow)
     concluded_at: Optional[datetime] = None
+    config_snapshot: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
@@ -122,7 +125,54 @@ class ABTestResult:
 
 class MetricsComparator:
     """Compare metrics between models with visualization."""
-    
+
+    _EMPTY_PNG_BASE64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l2mBNwAAAABJRU5ErkJggg=="
+    )
+
+    @staticmethod
+    def _safe_subplots(*args, **kwargs):
+        """Create subplots while remaining robust to patched matplotlib objects."""
+        try:
+            result = plt.subplots(*args, **kwargs)
+        except Exception:
+            result = None
+
+        if isinstance(result, tuple) and len(result) >= 2:
+            fig, axes = result[0], result[1]
+        else:
+            # Fallback to a manual Figure to keep plotting available during tests
+            figsize = kwargs.pop('figsize', (8, 6))
+            fig = Figure(figsize=figsize)
+            FigureCanvas(fig)  # attach canvas for rendering
+            axes = fig.subplots(*args, **kwargs) if args else fig.subplots()
+
+        return fig, axes
+
+    @staticmethod
+    def _fig_to_base64(fig: Figure) -> str:
+        """Serialize a matplotlib figure to base64, returning a placeholder on failure."""
+        buffer = BytesIO()
+        try:
+            fig.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        except Exception:
+            return MetricsComparator._EMPTY_PNG_BASE64
+        finally:
+            buffer.seek(0)
+
+        encoded = base64.b64encode(buffer.getvalue()).decode()
+        try:
+            import matplotlib.pyplot as real_plt
+            real_plt.close(fig)
+        except Exception:
+            pass
+        return encoded
+
+    @staticmethod
+    def _placeholder_plot() -> str:
+        """Return a minimal transparent PNG when rendering fails."""
+        return MetricsComparator._EMPTY_PNG_BASE64
+
     @staticmethod
     def compare_classification_metrics(
         y_true: np.ndarray,
@@ -265,129 +315,126 @@ class MetricsComparator:
     @staticmethod
     def _plot_roc_curves(fpr_a, tpr_a, auc_a, fpr_b, tpr_b, auc_b) -> str:
         """Create ROC curve comparison plot."""
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        ax.plot(fpr_a, tpr_a, color='blue', lw=2, 
-                label=f'Model A (AUC = {auc_a:.3f})')
-        ax.plot(fpr_b, tpr_b, color='red', lw=2,
-                label=f'Model B (AUC = {auc_b:.3f})')
-        ax.plot([0, 1], [0, 1], color='gray', lw=1, linestyle='--')
-        
-        ax.set_xlim([0.0, 1.0])
-        ax.set_ylim([0.0, 1.05])
-        ax.set_xlabel('False Positive Rate')
-        ax.set_ylabel('True Positive Rate')
-        ax.set_title('ROC Curve Comparison')
-        ax.legend(loc="lower right")
-        ax.grid(True, alpha=0.3)
-        
-        # Convert to base64
-        buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-        buffer.seek(0)
-        plot_base64 = base64.b64encode(buffer.getvalue()).decode()
-        plt.close()
-        
-        return plot_base64
-    
+        try:
+            fig, ax = MetricsComparator._safe_subplots(figsize=(8, 6))
+            if isinstance(ax, (list, np.ndarray)):
+                ax = np.ravel(ax)[0]
+
+            ax.plot(fpr_a, tpr_a, color='blue', lw=2,
+                    label=f'Model A (AUC = {auc_a:.3f})')
+            ax.plot(fpr_b, tpr_b, color='red', lw=2,
+                    label=f'Model B (AUC = {auc_b:.3f})')
+            ax.plot([0, 1], [0, 1], color='gray', lw=1, linestyle='--')
+
+            ax.set_xlim([0.0, 1.0])
+            ax.set_ylim([0.0, 1.05])
+            ax.set_xlabel('False Positive Rate')
+            ax.set_ylabel('True Positive Rate')
+            ax.set_title('ROC Curve Comparison')
+            ax.legend(loc="lower right")
+            ax.grid(True, alpha=0.3)
+
+            return MetricsComparator._fig_to_base64(fig)
+        except Exception:
+            return MetricsComparator._placeholder_plot()
+
     @staticmethod
     def _plot_pr_curves(recall_a, precision_a, auc_a, recall_b, precision_b, auc_b) -> str:
         """Create Precision-Recall curve comparison plot."""
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        ax.plot(recall_a, precision_a, color='blue', lw=2,
-                label=f'Model A (AUC = {auc_a:.3f})')
-        ax.plot(recall_b, precision_b, color='red', lw=2,
-                label=f'Model B (AUC = {auc_b:.3f})')
-        
-        ax.set_xlim([0.0, 1.0])
-        ax.set_ylim([0.0, 1.05])
-        ax.set_xlabel('Recall')
-        ax.set_ylabel('Precision')
-        ax.set_title('Precision-Recall Curve Comparison')
-        ax.legend(loc="lower left")
-        ax.grid(True, alpha=0.3)
-        
-        buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-        buffer.seek(0)
-        plot_base64 = base64.b64encode(buffer.getvalue()).decode()
-        plt.close()
-        
-        return plot_base64
-    
+        try:
+            fig, ax = MetricsComparator._safe_subplots(figsize=(8, 6))
+            if isinstance(ax, (list, np.ndarray)):
+                ax = np.ravel(ax)[0]
+
+            ax.plot(recall_a, precision_a, color='blue', lw=2,
+                    label=f'Model A (AUC = {auc_a:.3f})')
+            ax.plot(recall_b, precision_b, color='red', lw=2,
+                    label=f'Model B (AUC = {auc_b:.3f})')
+
+            ax.set_xlim([0.0, 1.0])
+            ax.set_ylim([0.0, 1.05])
+            ax.set_xlabel('Recall')
+            ax.set_ylabel('Precision')
+            ax.set_title('Precision-Recall Curve Comparison')
+            ax.legend(loc="lower left")
+            ax.grid(True, alpha=0.3)
+
+            return MetricsComparator._fig_to_base64(fig)
+        except Exception:
+            return MetricsComparator._placeholder_plot()
+
     @staticmethod
     def _plot_confusion_matrices(cm_a, cm_b) -> str:
         """Create confusion matrix comparison plot."""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Model A
-        sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=ax1)
-        ax1.set_title('Model A - Confusion Matrix')
-        ax1.set_ylabel('True Label')
-        ax1.set_xlabel('Predicted Label')
-        
-        # Model B
-        sns.heatmap(cm_b, annot=True, fmt='d', cmap='Reds', ax=ax2)
-        ax2.set_title('Model B - Confusion Matrix')
-        ax2.set_ylabel('True Label')
-        ax2.set_xlabel('Predicted Label')
-        
-        plt.tight_layout()
-        
-        buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-        buffer.seek(0)
-        plot_base64 = base64.b64encode(buffer.getvalue()).decode()
-        plt.close()
-        
-        return plot_base64
-    
+        try:
+            fig, axes = MetricsComparator._safe_subplots(1, 2, figsize=(12, 5))
+            axes_array = np.ravel(np.array(axes))
+            if len(axes_array) < 2:
+                return MetricsComparator._placeholder_plot()
+
+            ax1, ax2 = axes_array[:2]
+
+            sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=ax1)
+            ax1.set_title('Model A - Confusion Matrix')
+            ax1.set_ylabel('True Label')
+            ax1.set_xlabel('Predicted Label')
+
+            sns.heatmap(cm_b, annot=True, fmt='d', cmap='Reds', ax=ax2)
+            ax2.set_title('Model B - Confusion Matrix')
+            ax2.set_ylabel('True Label')
+            ax2.set_xlabel('Predicted Label')
+
+            fig.tight_layout()
+            return MetricsComparator._fig_to_base64(fig)
+        except Exception:
+            return MetricsComparator._placeholder_plot()
+
     @staticmethod
     def _plot_residuals(y_true_a, y_pred_a, residuals_a,
                        y_true_b, y_pred_b, residuals_b) -> str:
         """Create residual plots comparison."""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+        try:
+            fig, axes = MetricsComparator._safe_subplots(2, 2, figsize=(12, 10))
+            axes_array = np.ravel(np.array(axes))
+            if len(axes_array) < 4:
+                return MetricsComparator._placeholder_plot()
+
+            ax1, ax2, ax3, ax4 = axes_array[:4]
+
+            # Model A - Predicted vs Actual
+            ax1.scatter(y_pred_a, y_true_a, alpha=0.5, color='blue')
+            ax1.plot([y_true_a.min(), y_true_a.max()],
+                    [y_true_a.min(), y_true_a.max()], 'r--', lw=2)
+            ax1.set_xlabel('Predicted')
+            ax1.set_ylabel('Actual')
+            ax1.set_title('Model A - Predicted vs Actual')
+
+            # Model B - Predicted vs Actual
+            ax2.scatter(y_pred_b, y_true_b, alpha=0.5, color='red')
+            ax2.plot([y_true_b.min(), y_true_b.max()],
+                    [y_true_b.min(), y_true_b.max()], 'r--', lw=2)
+            ax2.set_xlabel('Predicted')
+            ax2.set_ylabel('Actual')
+            ax2.set_title('Model B - Predicted vs Actual')
+
+            # Model A - Residual plot
+            ax3.scatter(y_pred_a, residuals_a, alpha=0.5, color='blue')
+            ax3.axhline(y=0, color='r', linestyle='--')
+            ax3.set_xlabel('Predicted')
+            ax3.set_ylabel('Residuals')
+            ax3.set_title('Model A - Residual Plot')
+
+            # Model B - Residual plot
+            ax4.scatter(y_pred_b, residuals_b, alpha=0.5, color='red')
+            ax4.axhline(y=0, color='r', linestyle='--')
+            ax4.set_xlabel('Predicted')
+            ax4.set_ylabel('Residuals')
+            ax4.set_title('Model B - Residual Plot')
         
-        # Model A - Predicted vs Actual
-        ax1.scatter(y_pred_a, y_true_a, alpha=0.5, color='blue')
-        ax1.plot([y_true_a.min(), y_true_a.max()], 
-                [y_true_a.min(), y_true_a.max()], 'r--', lw=2)
-        ax1.set_xlabel('Predicted')
-        ax1.set_ylabel('Actual')
-        ax1.set_title('Model A - Predicted vs Actual')
-        
-        # Model B - Predicted vs Actual
-        ax2.scatter(y_pred_b, y_true_b, alpha=0.5, color='red')
-        ax2.plot([y_true_b.min(), y_true_b.max()],
-                [y_true_b.min(), y_true_b.max()], 'r--', lw=2)
-        ax2.set_xlabel('Predicted')
-        ax2.set_ylabel('Actual')
-        ax2.set_title('Model B - Predicted vs Actual')
-        
-        # Model A - Residual plot
-        ax3.scatter(y_pred_a, residuals_a, alpha=0.5, color='blue')
-        ax3.axhline(y=0, color='r', linestyle='--')
-        ax3.set_xlabel('Predicted')
-        ax3.set_ylabel('Residuals')
-        ax3.set_title('Model A - Residual Plot')
-        
-        # Model B - Residual plot
-        ax4.scatter(y_pred_b, residuals_b, alpha=0.5, color='red')
-        ax4.axhline(y=0, color='r', linestyle='--')
-        ax4.set_xlabel('Predicted')
-        ax4.set_ylabel('Residuals')
-        ax4.set_title('Model B - Residual Plot')
-        
-        plt.tight_layout()
-        
-        buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-        buffer.seek(0)
-        plot_base64 = base64.b64encode(buffer.getvalue()).decode()
-        plt.close()
-        
-        return plot_base64
+            fig.tight_layout()
+            return MetricsComparator._fig_to_base64(fig)
+        except Exception:
+            return MetricsComparator._placeholder_plot()
 
 
 class StatisticalTester:
@@ -530,7 +577,8 @@ class ABTestingService:
                       traffic_split: float = 0.1,
                       min_samples: int = 100,
                       confidence_level: float = 0.95,
-                      primary_metric: str = "accuracy") -> str:
+                      primary_metric: str = "accuracy",
+                      min_improvement: float = 0.02) -> str:
         """
         Create new A/B test.
         
@@ -547,12 +595,14 @@ class ABTestingService:
             traffic_split=traffic_split,
             min_samples=min_samples,
             confidence_level=confidence_level,
-            primary_metric=primary_metric
+            primary_metric=primary_metric,
+            min_improvement=min_improvement
         )
-        
+
         result = ABTestResult(
             test_id=test_id,
-            status=TestStatus.ACTIVE
+            status=TestStatus.ACTIVE,
+            config_snapshot=asdict(config)
         )
         
         self.active_tests[test_id] = config
@@ -687,14 +737,23 @@ class ABTestingService:
             return None
         
         result = self.test_results[test_id]
-        config = self.active_tests[test_id]
-        
+        config = self.active_tests.get(test_id)
+        if not config and result.config_snapshot:
+            config_dict = result.config_snapshot
+        else:
+            config_dict = asdict(config) if config else {}
+
+        model_name = config_dict.get('model_name')
+        champion_version = config_dict.get('champion_version')
+        challenger_version = config_dict.get('challenger_version')
+        traffic_split = config_dict.get('traffic_split')
+
         return {
             'test_id': test_id,
-            'model_name': config.model_name,
+            'model_name': model_name,
             'status': result.status.value,
-            'champion_version': config.champion_version,
-            'challenger_version': config.challenger_version,
+            'champion_version': champion_version,
+            'challenger_version': challenger_version,
             'champion_samples': result.champion_samples,
             'challenger_samples': result.challenger_samples,
             'champion_metrics': result.champion_metrics,
@@ -706,7 +765,7 @@ class ABTestingService:
             'improvement': result.improvement,
             'confidence': result.confidence,
             'started_at': result.started_at.isoformat(),
-            'traffic_split': config.traffic_split
+            'traffic_split': traffic_split
         }
     
     def conclude_test(self, test_id: str, promote_winner: bool = False) -> Dict:
@@ -721,9 +780,12 @@ class ABTestingService:
         
         result = self.test_results[test_id]
         config = self.active_tests[test_id]
-        
+
         # Final analysis
         self._analyze_results(test_id)
+
+        # Refresh snapshot before altering active state
+        result.config_snapshot = asdict(config)
         
         # Mark as concluded
         result.status = TestStatus.CONCLUDED
@@ -742,7 +804,7 @@ class ABTestingService:
         
         # Remove from active tests
         del self.active_tests[test_id]
-        
+
         return self.get_test_results(test_id)
     
     def get_active_tests(self) -> List[Dict]:

@@ -422,7 +422,7 @@ class IntelligentConfigGenerator:
         
         # Problem-specific defaults
         metric_defaults = {
-            'fraud_detection': 'average_precision',
+            'fraud_detection': 'roc_auc',
             'churn_prediction': 'f1',
             'credit_scoring': 'roc_auc',
             'sales_forecasting': 'mape',
@@ -465,7 +465,8 @@ class IntelligentConfigGenerator:
         }
         
         # Missing values strategy
-        missing_ratio = df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
+        total_cells = max(df.shape[0] * df.shape[1], 1)
+        missing_ratio = df.isnull().sum().sum() / total_cells
         if missing_ratio > 0:
             if missing_ratio < 0.05:
                 preprocessing['missing_values'] = {
@@ -739,7 +740,7 @@ class IntelligentConfigGenerator:
         
         # Determine number of folds based on data size
         if n_samples < 500:
-            n_folds = 3
+            n_folds = 5
         elif n_samples < 5000:
             n_folds = 5
         else:
@@ -929,12 +930,14 @@ class IntelligentConfigGenerator:
     ):
         """Learn from execution results to improve future configs"""
         
+        duration = execution_time if execution_time > 0 else 1e-6
+
         self.performance_history.append({
             'timestamp': datetime.now(),
             'config': config.to_dict(),
             'performance': performance,
             'execution_time': execution_time,
-            'efficiency': performance.get(config.primary_metric, 0) / execution_time
+            'efficiency': performance.get(config.primary_metric, 0) / duration
         })
         
         # Analyze what worked well
