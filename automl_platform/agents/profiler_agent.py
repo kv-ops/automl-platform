@@ -72,7 +72,7 @@ class ProfilerAgent:
                 self.assistant = await self.client.beta.assistants.create(
                     name="Data Profiler Agent",
                     instructions=PROFILER_SYSTEM_PROMPT,
-                    model=self.config.model,
+                    model=self.config.openai_model,
                     tools=self.config.get_agent_tools(AgentType.PROFILER)
                 )
                 self.assistant_id = self.assistant.id
