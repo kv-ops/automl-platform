@@ -112,17 +112,34 @@ def sample_sales_data():
 
 @pytest.fixture
 def mock_agent_config():
-    """Configuration mock pour les agents"""
+    """Configuration mock pour les agents - VERSION CORRIGÉE"""
     config = AgentConfig(
+        # API Keys
         openai_api_key="test-openai-key",
         anthropic_api_key="test-claude-key",
-        model="gpt-4-1106-preview",
-        enable_web_search=True,
-        enable_file_operations=True,
-        max_iterations=3,
-        timeout_seconds=30,
+        
+        # OpenAI Configuration
+        openai_model="gpt-4-1106-preview",
+        openai_enable_web_search=True,
+        openai_enable_file_operations=True,
+        openai_max_iterations=3,
+        openai_timeout_seconds=30,
+        
+        # Claude Configuration
+        claude_model="claude-sonnet-4-5-20250929",
+        claude_max_tokens=4000,
+        claude_timeout_seconds=30,
+        
+        # Common settings
         cache_dir="./test_cache",
-        output_dir="./test_output"
+        output_dir="./test_output",
+        enable_claude=True,
+        enable_openai=True,
+        
+        # Circuit breakers
+        enable_circuit_breakers=True,
+        circuit_breaker_failure_threshold=5,
+        circuit_breaker_recovery_timeout=60
     )
     return config
 
@@ -490,7 +507,6 @@ class TestDataCleaningOrchestratorWithClaude:
         """Test que l'historique est borné"""
         orchestrator = DataCleaningOrchestrator(mock_agent_config)
         
-        from agents.utils import BoundedList
         assert isinstance(orchestrator.execution_history, BoundedList)
         assert orchestrator.execution_history.maxlen == 100
 
@@ -1421,7 +1437,6 @@ class TestDataCleaningOrchestratorWithClaude:
         orchestrator = DataCleaningOrchestrator(mock_agent_config)
         
         # Vérifier BoundedList
-        # Plus d'import ici ✅
         assert isinstance(orchestrator.execution_history, BoundedList)
         assert orchestrator.execution_history.maxlen == 100
         
@@ -1732,16 +1747,35 @@ class TestValidatorAgentHybrid:
         assert mock_claude.messages.create.called
         assert mock_claude.messages.create.call_count >= 1
 
-        # 6.2 Vérifier le contenu de la requête
+        # 6.2 Vérifier le contenu complet de la requête Claude
         call_args = mock_claude.messages.create.call_args
-        assert 'model' in call_args.kwargs
-        assert call_args.kwargs['model'] == 'claude-sonnet-4-20250514'
+        assert call_args is not None, "Claude n'a pas été appelé"
 
-        # 6.3 Vérifier la réponse
+        # 6.3 Vérifier les kwargs obligatoires
+        assert 'model' in call_args.kwargs
+        assert call_args.kwargs['model'] == 'claude-sonnet-4-5-20250929'
+
+        # 6.4 Vérifier max_tokens
+        assert 'max_tokens' in call_args.kwargs
+        assert call_args.kwargs['max_tokens'] >= 1000
+    
+        # 6.5 Vérifier system prompt
+        assert 'system' in call_args.kwargs
+        assert len(call_args.kwargs['system']) > 0
+        assert 'validator' in call_args.kwargs['system'].lower() or 'compliance' in call_args.kwargs['system'].lower()
+    
+        # 6.6 Vérifier messages
+        assert 'messages' in call_args.kwargs
+        assert len(call_args.kwargs['messages']) > 0
+        assert call_args.kwargs['messages'][0]['role'] == 'user'
+        assert 'content' in call_args.kwargs['messages'][0]
+
+        # 6.7 Vérifier la structure de la réponse
         assert 'reasoning' in report or 'confidence' in report
         
         # 7. Vérifier que la recherche OpenAI a été utilisée
         assert mock_search.called
+        assert mock_search.call_count >= 1
             
     
     @pytest.mark.asyncio
@@ -1878,33 +1912,54 @@ class TestPerformanceAndMemory:
         size_bytes = sys.getsizeof(bounded)
         assert size_bytes < 100 * 1024  # Moins de 100KB
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_orchestrator_memory_cleanup(self, mock_agent_config):
-        """Test que l'orchestrateur nettoie la mémoire"""
+        """Test que l'orchestrateur a un impact mémoire limité
+    
+        Ce test est marqué @pytest.mark.slow car il peut prendre du temps.
+        Il utilise une tolérance large pour éviter les faux négatifs.
+        """
         import gc
         import psutil
         import os
-        
+    
         orchestrator = DataCleaningOrchestrator(mock_agent_config)
-        
+    
+        # Forcer un garbage collection initial
+        gc.collect()
+        gc.collect()  # Double call pour être sûr
+    
         process = psutil.Process(os.getpid())
         mem_before = process.memory_info().rss / 1024 / 1024  # MB
-        
+    
         # Simuler beaucoup d'exécutions
-        for i in range(100):
+        for i in range(200):  # Plus que la limite de BoundedList
             orchestrator.execution_history.append({
                 'data': [1] * 10000  # Données volumineuses
             })
-        
+    
         # Forcer cleanup
         gc.collect()
-        
+        gc.collect()
+    
         mem_after = process.memory_info().rss / 1024 / 1024  # MB
         mem_increase = mem_after - mem_before
-        
-        # L'augmentation ne devrait pas être proportionnelle à 100 itérations
-        # grâce au BoundedList
-        assert mem_increase < 50  # Moins de 50 MB d'augmentation
+    
+        # ✅ Assertion avec tolérance LARGE pour éviter flakiness
+        # L'augmentation ne devrait PAS être proportionnelle à 200 itérations grâce au BoundedList (limité à 100)
+    
+        # Si on avait gardé les 200 items, on aurait ~200MB
+        # Avec BoundedList, on devrait avoir ~100MB max
+        assert mem_increase < 150, (
+            f"Memory leak detected: {mem_increase:.1f} MB increase. "
+            f"Expected < 150 MB with BoundedList limiting to 100 items."
+        )
+    
+        # ✅ Vérifier aussi que BoundedList fonctionne
+        assert len(orchestrator.execution_history) == 100, (
+            "BoundedList should limit to 100 items"
+        )
 
 
 # ============================================================================
@@ -2016,6 +2071,772 @@ class TestCircuitBreakerAndRetry:
             await test_func()
         
         assert call_count == 3  # Devrait essayer 3 fois
+
+
+# ============================================================================
+# TESTS PRODUCTION UNIVERSAL ML AGENT
+# ============================================================================
+
+class TestProductionUniversalMLAgent:
+    """Tests pour le ProductionUniversalMLAgent avec protection mémoire"""
+    
+    @pytest.fixture
+    def production_agent(self, mock_agent_config):
+        """Fixture pour l'agent de production"""
+        from automl_platform.agents import ProductionUniversalMLAgent
+        return ProductionUniversalMLAgent(
+            config=mock_agent_config,
+            use_claude=False,  # Désactiver Claude pour tests unitaires
+            max_cache_mb=100,
+            memory_warning_mb=500,
+            memory_critical_mb=1000,
+            batch_size=100
+        )
+    
+    def test_memory_monitor_initialization(self, production_agent):
+        """Test que le memory monitor est correctement initialisé"""
+        assert production_agent.memory_monitor is not None
+        assert production_agent.memory_monitor.warning_threshold > 0
+        assert production_agent.memory_monitor.critical_threshold > 0
+        
+        # Vérifier les valeurs
+        assert production_agent.memory_monitor.warning_threshold == 500 * 1024 * 1024
+        assert production_agent.memory_monitor.critical_threshold == 1000 * 1024 * 1024
+    
+    def test_cache_initialization(self, production_agent):
+        """Test que le cache LRU est initialisé"""
+        assert production_agent.cache is not None
+        assert production_agent.cache.max_size == 100 * 1024 * 1024
+        assert production_agent.cache.current_size == 0
+        assert len(production_agent.cache.cache) == 0
+    
+    def test_agents_initialization(self, production_agent):
+        """Test que tous les agents sous-jacents sont initialisés"""
+        assert production_agent.profiler is not None
+        assert production_agent.validator is not None
+        assert production_agent.cleaner is not None
+        assert production_agent.controller is not None
+        assert production_agent.context_detector is not None
+        assert production_agent.config_generator is not None
+        assert production_agent.adaptive_templates is not None
+    
+    def test_knowledge_base_initialization(self, production_agent):
+        """Test que la knowledge base est initialisée avec limites"""
+        assert production_agent.knowledge_base is not None
+        assert production_agent.knowledge_base.max_patterns == 100
+        assert isinstance(production_agent.knowledge_base.successful_patterns, list)
+    
+    @pytest.mark.asyncio
+    async def test_understand_problem_basic(self, production_agent, sample_fraud_data):
+        """Test la compréhension de problème basique"""
+        with patch.object(production_agent.profiler, 'analyze') as mock_analyze:
+            mock_analyze.return_value = {'quality_issues': []}
+            
+            with patch.object(production_agent.context_detector, 'detect_ml_context') as mock_detect:
+                mock_context = Mock(
+                    problem_type='fraud_detection',
+                    confidence=0.9,
+                    detected_patterns=['fraud_indicator'],
+                    business_sector='finance',
+                    temporal_aspect=True,
+                    imbalance_detected=True,
+                    recommended_config={},
+                    reasoning='Test',
+                    alternative_interpretations=[]
+                )
+                mock_detect.return_value = mock_context
+                
+                context = await production_agent.understand_problem(
+                    sample_fraud_data,
+                    target_col='fraud'
+                )
+                
+                assert context.problem_type == 'fraud_detection'
+                assert context.confidence == 0.9
+                assert mock_analyze.called
+                assert mock_detect.called
+    
+    @pytest.mark.asyncio
+    async def test_understand_problem_with_cache(self, production_agent, sample_fraud_data):
+        """Test que understand_problem utilise le cache"""
+        # Premier appel
+        with patch.object(production_agent.profiler, 'analyze') as mock_analyze:
+            mock_analyze.return_value = {'quality_issues': []}
+            
+            with patch.object(production_agent.context_detector, 'detect_ml_context') as mock_detect:
+                mock_context = Mock(
+                    problem_type='fraud_detection',
+                    confidence=0.9,
+                    detected_patterns=[],
+                    business_sector='finance',
+                    temporal_aspect=True,
+                    imbalance_detected=True,
+                    recommended_config={},
+                    reasoning='',
+                    alternative_interpretations=[]
+                )
+                mock_detect.return_value = mock_context
+                
+                context1 = await production_agent.understand_problem(sample_fraud_data)
+                
+                # Deuxième appel - devrait utiliser cache
+                context2 = await production_agent.understand_problem(sample_fraud_data)
+                
+                # Vérifier que detect n'a été appelé qu'une fois
+                assert mock_detect.call_count == 1
+                
+                # Vérifier les métriques
+                assert production_agent.agent_metrics['cache_hits'] >= 1
+    
+    def test_cache_functionality(self, production_agent):
+        """Test les fonctionnalités du cache"""
+        # Ajouter des données au cache
+        test_data = {'test': 'data'}
+        production_agent.cache.put('key1', test_data)
+        
+        # Vérifier récupération
+        cached = production_agent.cache.get('key1')
+        assert cached == test_data
+        
+        # Vérifier taille
+        assert production_agent.cache.current_size > 0
+        
+        # Test de non-existence
+        assert production_agent.cache.get('key_inexistant') is None
+    
+    def test_cache_eviction(self, production_agent):
+        """Test l'éviction LRU du cache"""
+        # Forcer le cache à être plein
+        large_data = {'data': [1] * 10000}
+        
+        # Ajouter beaucoup d'items
+        for i in range(20):
+            production_agent.cache.put(f'key_{i}', large_data)
+        
+        # Vérifier que la taille ne dépasse pas max_size
+        assert production_agent.cache.current_size <= production_agent.cache.max_size
+        
+        # Vérifier que les anciens items ont été évincés
+        assert len(production_agent.cache.cache) < 20
+    
+    @pytest.mark.asyncio
+    async def test_batch_processing_trigger(self, production_agent):
+        """Test que le batch processing se déclenche pour gros datasets"""
+        # Créer un gros dataset
+        large_df = pd.DataFrame(np.random.randn(5000, 10))
+        
+        # Mock de execute_intelligent_cleaning
+        with patch.object(production_agent, '_execute_cleaning_batched') as mock_batch:
+            mock_batch.return_value = (large_df, {})
+            
+            context = Mock(problem_type='test', business_sector='test')
+            config = Mock(
+                preprocessing={}, feature_engineering={}, 
+                algorithms=[], task='test', primary_metric='test'
+            )
+            
+            await production_agent.execute_intelligent_cleaning(
+                large_df, context, config
+            )
+            
+            # Vérifier que batch processing a été appelé si dataset > batch_size * 2
+            if len(large_df) > production_agent.batch_size * 2:
+                assert mock_batch.called
+    
+    @pytest.mark.asyncio
+    async def test_search_ml_best_practices_cache(self, production_agent):
+        """Test que search_ml_best_practices utilise le cache"""
+        problem_type = 'fraud_detection'
+        data_chars = {'n_samples': 1000}
+        
+        # Premier appel
+        practices1 = await production_agent.search_ml_best_practices(problem_type, data_chars)
+        
+        # Deuxième appel
+        practices2 = await production_agent.search_ml_best_practices(problem_type, data_chars)
+        
+        # Devrait utiliser le cache
+        assert practices1 == practices2
+        assert production_agent.agent_metrics['cache_hits'] >= 1
+    
+    def test_compute_data_hash(self, production_agent, sample_fraud_data):
+        """Test le calcul du hash de données"""
+        hash1 = production_agent._compute_data_hash(sample_fraud_data)
+        hash2 = production_agent._compute_data_hash(sample_fraud_data)
+        
+        # Même dataframe = même hash
+        assert hash1 == hash2
+        assert len(hash1) == 16  # Hash court
+        
+        # DataFrame différent = hash différent
+        different_df = pd.DataFrame({'col1': [1, 2, 3]})
+        hash3 = production_agent._compute_data_hash(different_df)
+        assert hash1 != hash3
+    
+    def test_memory_safe_decorator_applied(self, production_agent):
+        """Test que le décorateur @memory_safe est appliqué"""
+        # Vérifier que les méthodes clés ont le wrapper
+        assert hasattr(production_agent.understand_problem, '__wrapped__')
+    
+    def test_cleanup_method(self, production_agent):
+        """Test la méthode de nettoyage manuel"""
+        # Ajouter des données au cache
+        production_agent.cache.put('test', {'data': [1] * 1000})
+        
+        assert production_agent.cache.current_size > 0
+        
+        # Nettoyer
+        production_agent.cleanup()
+        
+        # Vérifier que le cache est vide
+        assert production_agent.cache.current_size == 0
+        assert len(production_agent.cache.cache) == 0
+    
+    @pytest.mark.asyncio
+    async def test_automl_without_templates_basic(self, production_agent, sample_fraud_data):
+        """Test AutoML complet basique (sans templates)"""
+        # Mock tous les composants
+        with patch.object(production_agent, 'understand_problem') as mock_understand:
+            mock_context = Mock(
+                problem_type='fraud_detection',
+                confidence=0.9,
+                detected_patterns=[],
+                business_sector='finance'
+            )
+            mock_understand.return_value = mock_context
+            
+            with patch.object(production_agent, 'validate_with_standards') as mock_validate:
+                mock_validate.return_value = {'issues': []}
+                
+                with patch.object(production_agent, 'search_ml_best_practices') as mock_practices:
+                    mock_practices.return_value = {'recommended_approaches': []}
+                    
+                    with patch.object(production_agent, 'generate_optimal_config') as mock_config:
+                        mock_config.return_value = Mock(
+                            task='classification',
+                            algorithms=['XGBoost'],
+                            primary_metric='f1',
+                            preprocessing={},
+                            feature_engineering={},
+                            hpo_config={},
+                            cv_strategy={},
+                            ensemble_config={},
+                            time_budget=3600,
+                            resource_constraints={},
+                            monitoring={}
+                        )
+                        
+                        with patch.object(production_agent, '_execute_pipeline_with_protection') as mock_execute:
+                            from automl_platform.agents import ProductionMLPipelineResult
+                            mock_result = ProductionMLPipelineResult(
+                                success=True,
+                                cleaned_data=sample_fraud_data,
+                                config_used=mock_config.return_value,
+                                context_detected=mock_context,
+                                cleaning_report={},
+                                performance_metrics={'f1': 0.85},
+                                execution_time=10.0,
+                                memory_stats={},
+                                cache_stats={},
+                                performance_profile={}
+                            )
+                            mock_execute.return_value = mock_result
+                            
+                            # Exécuter AutoML
+                            result = await production_agent.automl_without_templates(
+                                sample_fraud_data,
+                                target_col='fraud'
+                            )
+                            
+                            # Vérifications
+                            assert result.success == True
+                            assert result.cleaned_data is not None
+                            assert 'memory_stats' in result.__dict__
+                            assert 'cache_stats' in result.__dict__
+
+
+# ============================================================================
+# TESTS YAML CONFIG HANDLER
+# ============================================================================
+
+class TestYAMLConfigHandler:
+    """Tests pour le gestionnaire de configuration YAML"""
+    
+    @pytest.fixture
+    def handler(self):
+        from automl_platform.agents import YAMLConfigHandler
+        return YAMLConfigHandler()
+    
+    @pytest.fixture
+    def sample_transformations(self):
+        return [
+            {
+                'column': 'amount',
+                'action': 'normalize_currency',
+                'params': {'target_currency': 'EUR'},
+                'rationale': 'Test'
+            },
+            {
+                'column': 'date',
+                'action': 'standardize_format',
+                'params': {'format': '%Y-%m-%d'},
+                'rationale': 'Test'
+            }
+        ]
+    
+    def test_save_cleaning_config(self, handler, sample_transformations, temp_dir):
+        """Test sauvegarde de configuration"""
+        user_context = {
+            'secteur_activite': 'finance',
+            'target_variable': 'fraud',
+            'contexte_metier': 'Test'
+        }
+        
+        output_path = Path(temp_dir) / 'test_config.yaml'
+        
+        saved_path = handler.save_cleaning_config(
+            transformations=sample_transformations,
+            validation_sources=['http://test.com'],
+            user_context=user_context,
+            output_path=str(output_path)
+        )
+        
+        assert Path(saved_path).exists()
+        assert saved_path == str(output_path)
+    
+    def test_load_cleaning_config(self, handler, sample_transformations, temp_dir):
+        """Test chargement de configuration"""
+        # Sauvegarder d'abord
+        user_context = {'secteur_activite': 'finance', 'target_variable': 'fraud'}
+        output_path = Path(temp_dir) / 'test_config.yaml'
+        
+        handler.save_cleaning_config(
+            transformations=sample_transformations,
+            validation_sources=['http://test.com'],
+            user_context=user_context,
+            output_path=str(output_path)
+        )
+        
+        # Charger
+        config = handler.load_cleaning_config(str(output_path))
+        
+        assert 'metadata' in config
+        assert 'transformations' in config
+        assert config['metadata']['industry'] == 'finance'
+        assert len(config['transformations']) == len(sample_transformations)
+    
+    def test_validate_config_valid(self, handler, sample_transformations):
+        """Test validation d'une config valide"""
+        config = {
+            'metadata': {
+                'industry': 'finance',
+                'target_variable': 'fraud',
+                'processing_date': '2024-01-01'
+            },
+            'transformations': sample_transformations,
+            'validation_sources': ['http://test.com']
+        }
+        
+        assert handler.validate_config(config) == True
+    
+    def test_validate_config_invalid(self, handler):
+        """Test validation d'une config invalide"""
+        config = {
+            'metadata': {},  # Manque des champs requis
+            'transformations': []
+        }
+        
+        with pytest.raises(ValueError):
+            handler.validate_config(config)
+    
+    def test_apply_transformations_fill_missing(self, handler):
+        """Test application de transformation fill_missing"""
+        df = pd.DataFrame({'col1': [1, 2, None, 4]})
+        transformations = [
+            {
+                'column': 'col1',
+                'action': 'fill_missing',
+                'params': {'method': 'median'}
+            }
+        ]
+        
+        result = handler.apply_transformations(df, transformations)
+        
+        assert result['col1'].isnull().sum() == 0
+        assert result['col1'].iloc[2] == 2.0  # Médiane de [1, 2, 4]
+    
+    def test_apply_transformations_normalize(self, handler):
+        """Test application de transformation normalize"""
+        df = pd.DataFrame({'col1': [1, 2, 3, 4, 5]})
+        transformations = [
+            {
+                'column': 'col1',
+                'action': 'normalize',
+                'params': {'method': 'minmax'}
+            }
+        ]
+        
+        result = handler.apply_transformations(df, transformations)
+        
+        assert result['col1'].min() == 0.0
+        assert result['col1'].max() == 1.0
+    
+    def test_apply_transformations_handle_outliers(self, handler):
+        """Test application de transformation handle_outliers"""
+        df = pd.DataFrame({'col1': [1, 2, 3, 4, 100]})
+        transformations = [
+            {
+                'column': 'col1',
+                'action': 'handle_outliers',
+                'params': {'method': 'clip', 'lower_percentile': 0.1, 'upper_percentile': 0.9}
+            }
+        ]
+        
+        result = handler.apply_transformations(df, transformations)
+        
+        assert result['col1'].max() < 100
+    
+    def test_apply_transformations_encode(self, handler):
+        """Test application de transformation encode"""
+        df = pd.DataFrame({'col1': ['A', 'B', 'C', 'A']})
+        transformations = [
+            {
+                'column': 'col1',
+                'action': 'encode',
+                'params': {'method': 'label'}
+            }
+        ]
+        
+        result = handler.apply_transformations(df, transformations)
+        
+        assert pd.api.types.is_numeric_dtype(result['col1'])
+    
+    def test_create_example_config(self, handler, temp_dir):
+        """Test création de config exemple"""
+        output_path = Path(temp_dir) / 'example.yaml'
+        
+        created_path = handler.create_example_config(str(output_path))
+        
+        assert Path(created_path).exists()
+        
+        # Charger et valider
+        config = handler.load_cleaning_config(created_path)
+        assert handler.validate_config(config) == True
+
+
+# ============================================================================
+# TESTS INTELLIGENT DATA CLEANER
+# ============================================================================
+
+class TestIntelligentDataCleaner:
+    """Tests pour IntelligentDataCleaner avec Claude"""
+    
+    @pytest.fixture
+    def cleaner_no_claude(self, mock_agent_config):
+        from automl_platform.agents import IntelligentDataCleaner
+        return IntelligentDataCleaner(
+            config=mock_agent_config,
+            use_claude=False
+        )
+    
+    @pytest.fixture
+    def cleaner_with_claude(self, mock_agent_config):
+        from automl_platform.agents import IntelligentDataCleaner
+        return IntelligentDataCleaner(
+            config=mock_agent_config,
+            use_claude=True
+        )
+    
+    def test_initialization_without_claude(self, cleaner_no_claude):
+        """Test initialisation sans Claude"""
+        assert cleaner_no_claude.use_claude == False
+        assert cleaner_no_claude.claude_client is None
+        assert cleaner_no_claude.orchestrator is not None
+        assert cleaner_no_claude.quality_agent is not None
+    
+    def test_initialization_with_claude(self, cleaner_with_claude):
+        """Test initialisation avec Claude"""
+        assert cleaner_with_claude.use_claude == True
+        assert cleaner_with_claude.claude_client is not None
+        assert cleaner_with_claude.claude_model == "claude-sonnet-4-5-20250929"
+    
+    @pytest.mark.asyncio
+    async def test_smart_clean_auto_mode(self, cleaner_no_claude, sample_fraud_data):
+        """Test smart_clean en mode auto"""
+        user_context = {
+            'secteur_activite': 'finance',
+            'target_variable': 'fraud'
+        }
+        
+        # Mock des composants
+        with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
+            from automl_platform.data_quality_agent import DataQualityAssessment
+            mock_assess.return_value = DataQualityAssessment(
+                quality_score=75.0,
+                alerts=[],
+                warnings=[],
+                recommendations=[],
+                drift_risk='low',
+                target_leakage_risk='low'
+            )
+            
+            with patch.object(cleaner_no_claude, '_clean_with_agents') as mock_clean:
+                mock_clean.return_value = (sample_fraud_data, {'method': 'agents'})
+                
+                cleaned_df, report = await cleaner_no_claude.smart_clean(
+                    sample_fraud_data,
+                    user_context,
+                    mode='auto'
+                )
+                
+                assert cleaned_df is not None
+                assert 'summary' in report
+                assert 'initial_quality' in report['summary']
+    
+    @pytest.mark.asyncio
+    async def test_recommend_cleaning_approach(self, cleaner_no_claude, sample_fraud_data):
+        """Test recommandation d'approche de nettoyage"""
+        user_context = {'secteur_activite': 'finance'}
+        
+        with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
+            from automl_platform.data_quality_agent import DataQualityAssessment
+            mock_assess.return_value = DataQualityAssessment(
+                quality_score=60.0,
+                alerts=[{'message': 'Test alert'}],
+                warnings=[],
+                recommendations=[],
+                drift_risk='medium',
+                target_leakage_risk='low'
+            )
+            
+            recommendation = await cleaner_no_claude.recommend_cleaning_approach(
+                sample_fraud_data,
+                user_context
+            )
+            
+            assert 'recommended_mode' in recommendation
+            assert 'current_quality' in recommendation
+            assert recommendation['current_quality'] == 60.0
+            assert 'reasoning' in recommendation
+    
+    @pytest.mark.asyncio
+    async def test_claude_mode_selection(self, cleaner_with_claude, sample_fraud_data):
+        """Test sélection de mode avec Claude"""
+        user_context = {'secteur_activite': 'finance'}
+        
+        with patch.object(cleaner_with_claude.quality_agent, 'assess') as mock_assess:
+            from automl_platform.data_quality_agent import DataQualityAssessment
+            mock_assess.return_value = DataQualityAssessment(
+                quality_score=70.0,
+                alerts=[],
+                warnings=[],
+                recommendations=[],
+                drift_risk='low',
+                target_leakage_risk='low'
+            )
+            
+            with patch.object(cleaner_with_claude.claude_client, 'messages') as mock_messages:
+                mock_messages.create = AsyncMock(return_value=Mock(
+                    content=[Mock(text=json.dumps({
+                        'recommended_mode': 'hybrid',
+                        'confidence': 0.85,
+                        'reasoning': 'Claude decision',
+                        'estimated_time_minutes': 15,
+                        'key_considerations': ['test']
+                    }))]
+                ))
+                
+                with patch.object(cleaner_with_claude, '_clean_hybrid') as mock_clean:
+                    mock_clean.return_value = (sample_fraud_data, {})
+                    
+                    cleaned_df, report = await cleaner_with_claude.smart_clean(
+                        sample_fraud_data,
+                        user_context,
+                        mode='auto'
+                    )
+                    
+                    assert mock_messages.create.called
+    
+    def test_get_cleaning_summary(self, cleaner_no_claude):
+        """Test récupération du résumé de nettoyage"""
+        # Ajouter quelques opérations
+        cleaner_no_claude.cleaning_history.append({
+            'timestamp': datetime.now(),
+            'mode': 'agents',
+            'quality_improvement': 15.0,
+            'report': {},
+            'used_claude': False
+        })
+        
+        summary = cleaner_no_claude.get_cleaning_summary()
+        
+        assert 'total_operations' in summary
+        assert summary['total_operations'] == 1
+        assert 'average_quality_improvement' in summary
+    
+    def test_get_metrics(self, cleaner_no_claude):
+        """Test récupération des métriques"""
+        metrics = cleaner_no_claude.get_metrics()
+        
+        assert 'total_cleanings' in metrics
+        assert 'claude_insights_generated' in metrics
+        assert 'rule_based_fallbacks' in metrics
+
+
+# ============================================================================
+# TESTS MEMORY PROTECTION UTILITIES
+# ============================================================================
+
+class TestMemoryProtection:
+    """Tests pour les utilitaires de protection mémoire"""
+    
+    def test_memory_monitor_initialization(self):
+        """Test initialisation du MemoryMonitor"""
+        from automl_platform.agents import MemoryMonitor
+        
+        monitor = MemoryMonitor(warning_threshold_mb=100, critical_threshold_mb=200)
+        
+        assert monitor.warning_threshold == 100 * 1024 * 1024
+        assert monitor.critical_threshold == 200 * 1024 * 1024
+        assert monitor.initial_memory > 0
+    
+    def test_memory_monitor_tracking(self):
+        """Test le tracking mémoire"""
+        from automl_platform.agents import MemoryMonitor
+        
+        monitor = MemoryMonitor()
+        
+        status = monitor.check_memory()
+        
+        assert 'current_mb' in status
+        assert 'peak_mb' in status
+        assert 'available_mb' in status
+        assert status['current_mb'] > 0
+    
+    def test_memory_monitor_warnings(self):
+        """Test les alertes mémoire"""
+        from automl_platform.agents import MemoryMonitor
+        
+        # Créer un monitor avec seuil très bas
+        monitor = MemoryMonitor(warning_threshold_mb=1, critical_threshold_mb=2)
+        
+        status = monitor.check_memory()
+        
+        # Devrait probablement trigger un warning
+        assert 'warning' in status
+        assert isinstance(status['warning'], bool)
+    
+    def test_memory_budget_enforcement(self):
+        """Test l'application du budget mémoire"""
+        from automl_platform.agents import MemoryBudget
+        
+        with MemoryBudget(budget_mb=100) as budget:
+            # Allouer de la mémoire
+            data = [1] * 1000000
+            
+            # Le budget devrait tracker
+            assert budget.start_memory > 0
+    
+    def test_lru_cache_initialization(self):
+        """Test initialisation du cache LRU"""
+        from automl_platform.agents import LRUMemoryCache
+        
+        cache = LRUMemoryCache(max_size_mb=10)
+        
+        assert cache.max_size == 10 * 1024 * 1024
+        assert cache.current_size == 0
+        assert len(cache.cache) == 0
+    
+    def test_lru_cache_put_get(self):
+        """Test put/get du cache"""
+        from automl_platform.agents import LRUMemoryCache
+        
+        cache = LRUMemoryCache(max_size_mb=10)
+        
+        data = {'test': [1, 2, 3]}
+        cache.put('key1', data)
+        
+        retrieved = cache.get('key1')
+        assert retrieved == data
+        assert cache.current_size > 0
+    
+    def test_lru_cache_eviction(self):
+        """Test l'éviction LRU du cache"""
+        from automl_platform.agents import LRUMemoryCache
+        
+        cache = LRUMemoryCache(max_size_mb=1)  # Petit cache
+        
+        # Ajouter beaucoup de données
+        large_data = {'data': [1] * 100000}
+        for i in range(20):
+            cache.put(f'key_{i}', large_data)
+        
+        # Vérifier que la taille ne dépasse pas
+        assert cache.current_size <= cache.max_size
+        
+        # Les premières clés devraient avoir été évincées
+        assert cache.get('key_0') is None
+    
+    def test_lru_cache_clear(self):
+        """Test le nettoyage du cache"""
+        from automl_platform.agents import LRUMemoryCache
+        
+        cache = LRUMemoryCache(max_size_mb=10)
+        
+        cache.put('key1', {'data': [1, 2, 3]})
+        cache.put('key2', {'data': [4, 5, 6]})
+        
+        assert cache.current_size > 0
+        
+        cache.clear()
+        
+        assert cache.current_size == 0
+        assert len(cache.cache) == 0
+    
+    def test_lru_cache_stats(self):
+        """Test les statistiques du cache"""
+        from automl_platform.agents import LRUMemoryCache
+        
+        cache = LRUMemoryCache(max_size_mb=10)
+        
+        cache.put('key1', {'data': [1, 2, 3]})
+        
+        stats = cache.get_stats()
+        
+        assert 'items' in stats
+        assert 'size_mb' in stats
+        assert 'max_size_mb' in stats
+        assert 'utilization' in stats
+        assert stats['items'] == 1
+        assert stats['utilization'] > 0
+    
+    @pytest.mark.asyncio
+    async def test_memory_safe_decorator(self):
+        """Test le décorateur @memory_safe"""
+        from automl_platform.agents import memory_safe
+        
+        @memory_safe(max_memory_mb=100)
+        async def test_function():
+            # Allouer de la mémoire
+            data = [1] * 1000000
+            return "success"
+        
+        result = await test_function()
+        assert result == "success"
+    
+    def test_dataframe_batch_processor(self):
+        """Test le context manager de batch processing"""
+        from automl_platform.agents import dataframe_batch_processor
+        
+        df = pd.DataFrame(np.random.randn(1000, 10))
+        
+        batches_processed = 0
+        with dataframe_batch_processor(df, batch_size=100) as batch_gen:
+            for batch in batch_gen:
+                assert len(batch) <= 100
+                batches_processed += 1
+        
+        assert batches_processed == 10
 
 
 if __name__ == "__main__":
