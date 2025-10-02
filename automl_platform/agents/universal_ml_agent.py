@@ -356,7 +356,7 @@ class ProductionUniversalMLAgent:
         # Initialize Claude if available
         if self.use_claude:
             self.claude_client = AsyncAnthropic()
-            self.claude_model = "claude-sonnet-4-20250514"
+            self.claude_model = "claude-sonnet-4-5-20250929"
             logger.info("💎 Claude SDK enabled as Master Orchestrator")
         else:
             self.claude_client = None
