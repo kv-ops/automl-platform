@@ -31,8 +31,22 @@ from automl_platform.agents.intelligent_config_generator import IntelligentConfi
 from automl_platform.agents.adaptive_template_system import AdaptiveTemplateSystem, AdaptiveTemplate
 from automl_platform.agents.data_cleaning_orchestrator import DataCleaningOrchestrator
 from automl_platform.agents.agent_config import AgentConfig, AgentType
-from automl_platform.agents.utils import BoundedList, async_retry, CircuitBreaker, parse_llm_json, validate_llm_json_schema, track_llm_cost
-
+from automl_platform.data_quality_agent import (
+    DataQualityAssessment,
+    IntelligentDataQualityAgent,
+    DataRobotStyleQualityMonitor
+)
+from automl_platform.agents.utils import (
+    BoundedList, async_retry, CircuitBreaker, 
+    parse_llm_json, validate_llm_json_schema, track_llm_cost,
+    sanitize_for_logging,
+    safe_log_config,
+    run_parallel,
+    AsyncInitMixin,
+    PerformanceMetrics,
+    PerformanceMonitor,
+    HealthChecker
+)
 
 # ============================================================================
 # FIXTURES COMMUNES
@@ -185,17 +199,17 @@ class TestProfilerAgentUpdated:
     """Tests complets pour ProfilerAgent avec lazy initialization"""
     
     @pytest.mark.asyncio
-    async def test_lazy_initialization(self, mock_agent_config):
+    async def test_lazy_initialization(self, test_agent_config):
         """Vérifie que l'agent ne s'initialise pas au constructeur"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         
         assert agent._initialized == False
         assert agent.assistant is None
     
     @pytest.mark.asyncio
-    async def test_ensure_initialized_called_before_use(self, mock_agent_config, mock_openai_client):
+    async def test_ensure_initialized_called_before_use(self, test_agent_config, mock_openai_client):
         """Vérifie que ensure_initialized est appelé avant utilisation"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         agent.client = mock_openai_client
         
         mock_openai_client.beta.threads.runs.retrieve.return_value = Mock(status='completed')
@@ -210,9 +224,9 @@ class TestProfilerAgentUpdated:
         assert agent._initialized == True
     
     @pytest.mark.asyncio
-    async def test_analyze_with_lazy_init(self, mock_agent_config, mock_openai_client):
+    async def test_analyze_with_lazy_init(self, test_agent_config, mock_openai_client):
         """Test que l'analyse s'initialise à la première utilisation"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         agent.client = mock_openai_client
         
         assert agent._initialized == False
@@ -230,9 +244,9 @@ class TestProfilerAgentUpdated:
         assert isinstance(result, dict)
     
     @pytest.mark.asyncio
-    async def test_analyze_without_openai(self, mock_agent_config):
+    async def test_analyze_without_openai(self, test_agent_config):
         """Vérifie le fallback vers basic_profiling sans OpenAI"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         agent.client = None
         
         df = pd.DataFrame({
@@ -246,9 +260,9 @@ class TestProfilerAgentUpdated:
         assert 'summary' in result
         assert result['summary']['total_rows'] == 4
     
-    def test_fallback_when_openai_unavailable(self, mock_agent_config):
+    def test_fallback_when_openai_unavailable(self, test_agent_config):
         """Test le fallback complet quand OpenAI n'est pas disponible"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         agent.client = None
         
         df = pd.DataFrame({'col1': [1, 2, 3]})
@@ -258,12 +272,12 @@ class TestProfilerAgentUpdated:
         assert 'columns' in result
     
     @pytest.mark.asyncio
-    async def test_circuit_breaker_integration(self, mock_agent_config):
+    async def test_circuit_breaker_integration(self, test_agent_config):
         """Test intégration avec circuit breaker"""
         # Ce test vérifie que les circuit breakers sont respectés
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         # Le circuit breaker devrait être dans la config
-        assert hasattr(mock_agent_config, 'can_call_llm') or True
+        assert hasattr(test_agent_config, 'can_call_llm') or True
 
 
 # ============================================================================
@@ -274,17 +288,17 @@ class TestCleanerAgentUpdated:
     """Tests complets pour CleanerAgent avec lazy initialization"""
     
     @pytest.mark.asyncio
-    async def test_lazy_initialization(self, mock_agent_config):
+    async def test_lazy_initialization(self, test_agent_config):
         """Vérifie que l'agent ne s'initialise pas au constructeur"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         
         assert agent._initialized == False
         assert agent.assistant is None
     
     @pytest.mark.asyncio
-    async def test_clean_without_openai(self, mock_agent_config):
+    async def test_clean_without_openai(self, test_agent_config):
         """Vérifie le fallback vers basic_cleaning sans OpenAI"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         agent.client = None
         
         df = pd.DataFrame({
@@ -299,9 +313,9 @@ class TestCleanerAgentUpdated:
         assert cleaned_df['col1'].isnull().sum() == 0
         assert len(transformations) > 0
     
-    def test_basic_cleaning_removes_duplicates(self, mock_agent_config):
+    def test_basic_cleaning_removes_duplicates(self, test_agent_config):
         """Test que basic_cleaning retire les duplicates"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         
         df = pd.DataFrame({
             'col1': [1, 2, 2, 3],
@@ -314,9 +328,9 @@ class TestCleanerAgentUpdated:
         assert len(cleaned_df) == 3
         assert any('remove_duplicates' in t.get('action', '') for t in transformations)
     
-    def test_fallback_when_openai_unavailable(self, mock_agent_config):
+    def test_fallback_when_openai_unavailable(self, test_agent_config):
         """Test fallback complet sans OpenAI"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         agent.client = None
         
         df = pd.DataFrame({'col1': [1, None, 3]})
@@ -334,9 +348,9 @@ class TestControllerAgentUpdated:
     """Tests pour ControllerAgent avec Claude SDK"""
     
     @pytest.mark.asyncio
-    async def test_validate_without_claude(self, mock_agent_config):
+    async def test_validate_without_claude(self, test_agent_config):
         """Test validation sans Claude (fallback)"""
-        agent = ControllerAgent(mock_agent_config)
+        agent = ControllerAgent(test_agent_config)
         agent.client = None
         
         original_df = pd.DataFrame({'col1': [1, 2, 3, 4, 5]})
@@ -989,7 +1003,7 @@ class TestAdaptiveTemplateSystemWithClaude:
 
 
 @pytest.mark.asyncio
-async def test_claude_select_best_pattern_detailed(self, temp_dir):
+async def test_claude_select_best_pattern_detailed(temp_dir):
     """Test complet de sélection de pattern avec Claude"""
     system = AdaptiveTemplateSystem(
         template_dir=Path(temp_dir),
@@ -1035,7 +1049,7 @@ async def test_claude_select_best_pattern_detailed(self, temp_dir):
         prompt = call_args.kwargs['messages'][0]['content']
         assert 'semantic similarity' in prompt.lower()
 
-def test_summarize_config(self, temp_dir):
+def test_summarize_config(temp_dir):
     """Test summarize_config pour Claude"""
     system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
     
@@ -1065,9 +1079,9 @@ class TestDataCleaningOrchestratorWithClaude:
     """Tests pour DataCleaningOrchestrator avec support Claude"""
     
     @pytest.mark.asyncio
-    async def test_determine_cleaning_mode_with_claude(self, mock_agent_config, sample_fraud_data):
+    async def test_determine_cleaning_mode_with_claude(self, test_agent_config, sample_fraud_data):
         """Test détermination du mode de nettoyage avec Claude"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=True)
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=True)
         
         with patch.object(orchestrator, 'claude_client') as mock_claude:
             mock_response = Mock()
@@ -1087,9 +1101,9 @@ class TestDataCleaningOrchestratorWithClaude:
             assert decision['confidence'] == 0.85
     
     @pytest.mark.asyncio
-    async def test_recommend_approach_with_claude(self, mock_agent_config, sample_fraud_data):
+    async def test_recommend_approach_with_claude(self, test_agent_config, sample_fraud_data):
         """Test recommandations de nettoyage avec Claude"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=True)
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=True)
         
         with patch.object(orchestrator, 'claude_client') as mock_claude:
             mock_response = Mock()
@@ -1109,9 +1123,9 @@ class TestDataCleaningOrchestratorWithClaude:
             assert 'Claude' in recommendations or 'priorities' in recommendations.lower()
     
     @pytest.mark.asyncio
-    async def test_claude_fallback_on_failure(self, mock_agent_config, sample_fraud_data):
+    async def test_claude_fallback_on_failure(self, test_agent_config, sample_fraud_data):
         """Test fallback quand Claude échoue"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=True)
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=True)
         
         with patch.object(orchestrator, 'claude_client') as mock_claude:
             # Simuler erreur Claude
@@ -1131,9 +1145,9 @@ class TestDataCleaningOrchestratorWithClaude:
             assert decision['confidence'] > 0
     
     @pytest.mark.asyncio
-    async def test_parallel_execution(self, mock_agent_config):
+    async def test_parallel_execution(self, test_agent_config):
         """Test exécution parallèle des tâches"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=True)
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=True)
         
         df = pd.DataFrame({'col1': [1, 2, 3]})
         user_context = {'secteur_activite': 'test'}
@@ -1153,9 +1167,9 @@ class TestDataCleaningOrchestratorWithClaude:
                     # En réalité, clean_dataset appelle gather pour paralléliser
                     pass
     
-    def test_bounded_history(self, mock_agent_config):
+    def test_bounded_history(self, test_agent_config):
         """Test que l'historique est limité (évite memory leak)"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         # Vérifier BoundedList
         assert isinstance(orchestrator.execution_history, BoundedList)
@@ -1170,9 +1184,9 @@ class TestDataCleaningOrchestratorWithClaude:
         assert orchestrator.execution_history[0]['item'] == 50  # Premier = 50 (150-100)
     
     @pytest.mark.asyncio
-    async def test_claude_decisions_metrics(self, mock_agent_config):
+    async def test_claude_decisions_metrics(self, test_agent_config):
         """Test tracking des décisions Claude"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=True)
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=True)
         
         initial_decisions = orchestrator.performance_metrics['claude_decisions']
         
@@ -1199,7 +1213,6 @@ class TestOpenAIAgents:
     """Tests pour les agents OpenAI individuels"""
     
     @pytest.fixture
-    def mock_openai_client(self):
         """Mock du client OpenAI"""
         client = AsyncMock()
         client.beta.assistants.create = AsyncMock()
@@ -1212,9 +1225,9 @@ class TestOpenAIAgents:
         return client
     
     @pytest.mark.asyncio
-    async def test_profiler_agent(self, mock_agent_config, mock_openai_client):
+    async def test_profiler_agent(self, test_agent_config, mock_openai_client):
         """Test ProfilerAgent"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         agent.client = mock_openai_client
         
         mock_openai_client.beta.assistants.create.return_value = Mock(id='asst_123')
@@ -1232,15 +1245,15 @@ class TestOpenAIAgents:
         
         assert isinstance(report, dict)
     
-    def test_agent_instantiation_without_event_loop(self, mock_agent_config):
+    def test_agent_instantiation_without_event_loop(self, test_agent_config):
         """Ensure agents defer initialization when no loop is running"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         assert agent._initialized == False
         assert agent.assistant is None
     
-    def test_cleaner_agent_basic_cleaning(self, mock_agent_config):
+    def test_cleaner_agent_basic_cleaning(self, test_agent_config):
         """Test CleanerAgent basic cleaning"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         
         df = pd.DataFrame({
             'col1': [1, 2, None, 4],
@@ -1253,9 +1266,9 @@ class TestOpenAIAgents:
         assert cleaned_df['col1'].isnull().sum() == 0
         assert len(transformations) > 0
     
-    def test_controller_agent_quality_metrics(self, mock_agent_config):
+    def test_controller_agent_quality_metrics(self, test_agent_config):
         """Test ControllerAgent quality metrics"""
-        agent = ControllerAgent(mock_agent_config)
+        agent = ControllerAgent(test_agent_config)
         
         original_df = pd.DataFrame({
             'col1': [1, 2, 3, 4, 5],
@@ -1283,9 +1296,9 @@ class TestLazyInitialization:
     """Tests pour l'initialisation lazy des agents OpenAI"""
     
     @pytest.mark.asyncio
-    async def test_profiler_lazy_init(self, mock_agent_config):
+    async def test_profiler_lazy_init(self, test_agent_config):
         """Test que ProfilerAgent s'initialise à la première utilisation"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         
         # Vérifier qu'il n'est pas initialisé au départ
         assert agent._initialized == False
@@ -1302,9 +1315,9 @@ class TestLazyInitialization:
             assert agent._initialized == True
     
     @pytest.mark.asyncio
-    async def test_cleaner_lazy_init(self, mock_agent_config):
+    async def test_cleaner_lazy_init(self, test_agent_config):
         """Test que CleanerAgent s'initialise à la première utilisation"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         
         assert agent._initialized == False
         assert agent.assistant is None
@@ -1315,9 +1328,9 @@ class TestLazyInitialization:
             assert agent._initialized == True
     
     @pytest.mark.asyncio
-    async def test_validator_lazy_init(self, mock_agent_config):
+    async def test_validator_lazy_init(self, test_agent_config):
         """Test que ValidatorAgent s'initialise à la première utilisation"""
-        agent = ValidatorAgent(mock_agent_config)
+        agent = ValidatorAgent(test_agent_config)
         
         assert agent._initialized == False
         assert agent.assistant is None
@@ -1328,9 +1341,9 @@ class TestLazyInitialization:
             assert agent._initialized == True
     
     @pytest.mark.asyncio
-    async def test_profiler_analyze_triggers_init(self, mock_agent_config):
+    async def test_profiler_analyze_triggers_init(self, test_agent_config):
         """Test que analyze() déclenche l'initialisation automatiquement"""
-        agent = ProfilerAgent(mock_agent_config)
+        agent = ProfilerAgent(test_agent_config)
         
         with patch.object(agent, '_ensure_assistant_initialized') as mock_init:
             with patch.object(agent, '_basic_profiling') as mock_basic:
@@ -1343,9 +1356,9 @@ class TestLazyInitialization:
                 mock_init.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_cleaner_clean_triggers_init(self, mock_agent_config):
+    async def test_cleaner_clean_triggers_init(self, test_agent_config):
         """Test que clean() déclenche l'initialisation automatiquement"""
-        agent = CleanerAgent(mock_agent_config)
+        agent = CleanerAgent(test_agent_config)
         
         with patch.object(agent, '_ensure_assistant_initialized') as mock_init:
             with patch.object(agent, '_basic_cleaning') as mock_basic:
@@ -1469,9 +1482,9 @@ class TestUtilsSecurity:
         assert sanitize_for_logging([]) == []
         assert sanitize_for_logging({'key': None}) == {'key': None}
     
-    def test_safe_log_config(self, mock_agent_config):
+    def test_safe_log_config(self, test_agent_config):
         """Test safe_log_config avec AgentConfig"""
-        log_str = safe_log_config(mock_agent_config)
+        log_str = safe_log_config(test_agent_config)
         
         assert 'openai_api_key' not in log_str or '***' in log_str
         assert 'anthropic_api_key' not in log_str or '***' in log_str
@@ -1652,14 +1665,14 @@ class TestUtilsSecurity:
         assert checker.check_circuit_breakers(breakers) == False
         assert len(checker.issues) > 0
     
-    def test_health_checker_cost_limits(self, mock_agent_config):
+    def test_health_checker_cost_limits(self, test_agent_config):
         """Test vérification limites de coût"""
         checker = HealthChecker()
         
         # Dépasser la limite
-        mock_agent_config.cost_tracking['total'] = mock_agent_config.max_cost_total + 1
+        test_agent_config.cost_tracking['total'] = test_agent_config.max_cost_total + 1
         
-        result = checker.check_cost_limits(mock_agent_config)
+        result = checker.check_cost_limits(test_agent_config)
         
         assert result == False
         assert len(checker.issues) > 0
@@ -1726,10 +1739,10 @@ class TestValidatorAgentHybrid:
     """Tests pour l'architecture hybride du ValidatorAgent"""
     
     @pytest.mark.asyncio
-    async def test_validator_with_claude_and_openai(self, mock_agent_config):
+    async def test_validator_with_claude_and_openai(self, test_agent_config):
         """Test ValidatorAgent avec Claude ET OpenAI disponibles"""
         # 1. Créer l'agent normalement
-        agent = ValidatorAgent(mock_agent_config, use_claude=True)
+        agent = ValidatorAgent(test_agent_config, use_claude=True)
     
         # 2. Configurer le mock pour retourner ce que vous voulez
         mock_claude = AsyncMock()
@@ -1788,7 +1801,13 @@ class TestValidatorAgentHybrid:
         assert 'content' in call_args.kwargs['messages'][0]
 
         # 5.7 Vérifier la structure de la réponse
-        assert 'reasoning' in report or 'confidence' in report
+        assert 'valid' in report
+        assert 'overall_score' in report
+        assert 'issues' in report
+        assert 'warnings' in report
+        assert 'reasoning' in report
+        assert isinstance(report['issues'], list)
+        assert isinstance(report['warnings'], list)
         
         # 6. Vérifier que la recherche OpenAI a été utilisée
         assert mock_search.called
@@ -1796,9 +1815,9 @@ class TestValidatorAgentHybrid:
             
     
     @pytest.mark.asyncio
-    async def test_validator_claude_for_reasoning(self, mock_agent_config):
+    async def test_validator_claude_for_reasoning(self, test_agent_config):
         """Test que Claude est utilisé pour le raisonnement de validation"""
-        agent = ValidatorAgent(mock_agent_config, use_claude=True)
+        agent = ValidatorAgent(test_agent_config, use_claude=True)
         
         with patch.object(agent, 'claude_client') as mock_claude:
             mock_response = Mock()
@@ -1816,9 +1835,9 @@ class TestValidatorAgentHybrid:
             assert report['overall_score'] == 90
    
     @pytest.mark.asyncio
-    async def test_validator_openai_for_search(self, mock_agent_config):
+    async def test_validator_openai_for_search(self, test_agent_config):
         """Test que OpenAI est utilisé pour la recherche web"""
-        agent = ValidatorAgent(mock_agent_config, use_claude=False)
+        agent = ValidatorAgent(test_agent_config, use_claude=False)
         
         # Mock OpenAI client
         with patch.object(agent, 'openai_client') as mock_openai:
@@ -1838,9 +1857,9 @@ class TestValidatorAgentHybrid:
                 assert len(references['sources']) > 0
     
     @pytest.mark.asyncio
-    async def test_validator_fallback_without_claude(self, mock_agent_config):
+    async def test_validator_fallback_without_claude(self, test_agent_config):
         """Test fallback quand Claude n'est pas disponible"""
-        agent = ValidatorAgent(mock_agent_config, use_claude=False)
+        agent = ValidatorAgent(test_agent_config, use_claude=False)
         
         assert agent.claude_client is None
         
@@ -1859,9 +1878,9 @@ class TestValidatorAgentHybrid:
                 assert mock_basic.called
     
     @pytest.mark.asyncio
-    async def test_validator_metrics_tracking(self, mock_agent_config):
+    async def test_validator_metrics_tracking(self, test_agent_config):
         """Test le tracking des métriques d'utilisation"""
-        agent = ValidatorAgent(mock_agent_config, use_claude=True)
+        agent = ValidatorAgent(test_agent_config, use_claude=True)
         
         initial_validations = agent.validation_metrics['total_validations']
         
@@ -1941,10 +1960,10 @@ class TestEndToEnd:
     
     @pytest.mark.asyncio
     async def test_complete_workflow_fraud_detection(
-        self, mock_agent_config, sample_fraud_data, temp_dir
+        self, test_agent_config, sample_fraud_data, temp_dir
     ):
         """Test workflow complet : Profiler → Validator → Cleaner → Controller → YAML"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=False)
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=False)
         
         # Mock des agents pour éviter appels API
         with patch.object(orchestrator.profiler, 'analyze') as mock_profile:
@@ -1998,12 +2017,12 @@ class TestEndToEnd:
     
     @pytest.mark.asyncio
     async def test_workflow_with_yaml_export_and_reload(
-        self, mock_agent_config, sample_fraud_data, temp_dir
+        self, test_agent_config, sample_fraud_data, temp_dir
     ):
         """Test workflow avec export YAML puis reload et apply"""
         from automl_platform.agents import YAMLConfigHandler
         
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         handler = YAMLConfigHandler()
         
         transformations = [
@@ -2047,9 +2066,9 @@ class TestEndToEnd:
         assert cleaned_df['amount'].isnull().sum() == 0
     
     @pytest.mark.asyncio
-    async def test_error_handling_and_fallback(self, mock_agent_config):
+    async def test_error_handling_and_fallback(self, test_agent_config):
         """Test la gestion d'erreur et fallback"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         with patch.object(orchestrator, '_process_chunk') as mock_process:
             mock_process.side_effect = Exception("Test error")
@@ -2065,13 +2084,13 @@ class TestEndToEnd:
     
     @pytest.mark.asyncio
     async def test_production_agent_full_pipeline(
-        self, mock_agent_config, sample_fraud_data
+        self, test_agent_config, sample_fraud_data
     ):
         """Test pipeline complet ProductionUniversalMLAgent"""
         from automl_platform.agents import ProductionUniversalMLAgent
         
         agent = ProductionUniversalMLAgent(
-            config=mock_agent_config,
+            config=test_agent_config,
             use_claude=False,
             max_cache_mb=10
         )
@@ -2167,7 +2186,7 @@ class TestPerformanceAndMemory:
     
     @pytest.mark.slow
     @pytest.mark.asyncio
-    async def test_orchestrator_memory_cleanup(self, mock_agent_config):
+    async def test_orchestrator_memory_cleanup(self, test_agent_config):
         """Test que l'orchestrateur a un impact mémoire limité
     
         Ce test est marqué @pytest.mark.slow car il peut prendre du temps.
@@ -2177,7 +2196,7 @@ class TestPerformanceAndMemory:
         import psutil
         import os
     
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
     
         # Forcer un garbage collection initial
         gc.collect()
@@ -2225,9 +2244,11 @@ class TestCircuitBreakerAndRetry:
     def test_circuit_breaker_lifecycle(self):
         """Test du cycle complet: CLOSED -> OPEN -> HALF_OPEN -> CLOSED"""
         config = AgentConfig(
+            openai_api_key="test-key",
+            anthropic_api_key="test-key",
             enable_circuit_breakers=True,
             circuit_breaker_failure_threshold=3,
-            circuit_breaker_recovery_timeout=1  # 1 sec pour test rapide
+            circuit_breaker_recovery_timeout=1
         )
     
         # État initial: CLOSED
@@ -2269,12 +2290,6 @@ class TestCircuitBreakerAndRetry:
         # Note: Dépend de l'implémentation réelle du circuit breaker
         pass
     
-    @pytest.mark.asyncio
-    async def test_retry_decorator_success(self):
-        """Test que le décorateur retry fonctionne sur succès"""
-        # Plus d'import ici ✅
-        
-        call_count = 0
         
         @async_retry(max_attempts=3)
         async def test_func():
@@ -2290,7 +2305,6 @@ class TestCircuitBreakerAndRetry:
     @pytest.mark.asyncio
     async def test_retry_decorator_eventual_success(self):
         """Test retry avec succès après échecs"""
-        # Plus d'import ici ✅
         
         call_count = 0
         
@@ -2334,11 +2348,11 @@ class TestProductionUniversalMLAgent:
     """Tests pour le ProductionUniversalMLAgent avec protection mémoire"""
     
     @pytest.fixture
-    def production_agent(self, mock_agent_config):
+    def production_agent(self, test_agent_config):
         """Fixture pour l'agent de production"""
         from automl_platform.agents import ProductionUniversalMLAgent
         return ProductionUniversalMLAgent(
-            config=mock_agent_config,
+            config=test_agent_config,
             use_claude=False,  # Désactiver Claude pour tests unitaires
             max_cache_mb=100,
             memory_warning_mb=500,
@@ -3001,18 +3015,18 @@ class TestIntelligentDataCleaner:
     """Tests pour IntelligentDataCleaner avec Claude"""
     
     @pytest.fixture
-    def cleaner_no_claude(self, mock_agent_config):
+    def cleaner_no_claude(self, test_agent_config):
         from automl_platform.agents import IntelligentDataCleaner
         return IntelligentDataCleaner(
-            config=mock_agent_config,
+            config=test_agent_config,
             use_claude=False
         )
     
     @pytest.fixture
-    def cleaner_with_claude(self, mock_agent_config):
+    def cleaner_with_claude(self, test_agent_config):
         from automl_platform.agents import IntelligentDataCleaner
         return IntelligentDataCleaner(
-            config=mock_agent_config,
+            config=test_agent_config,
             use_claude=True
         )
     
@@ -3039,7 +3053,6 @@ class TestIntelligentDataCleaner:
         
         # Mock des composants
         with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
-            from automl_platform.data_quality_agent import DataQualityAssessment
             mock_assess.return_value = DataQualityAssessment(
                 quality_score=75.0,
                 alerts=[],
@@ -3068,7 +3081,6 @@ class TestIntelligentDataCleaner:
         user_context = {'secteur_activite': 'finance'}
         
         with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
-            from automl_platform.data_quality_agent import DataQualityAssessment
             mock_assess.return_value = DataQualityAssessment(
                 quality_score=60.0,
                 alerts=[{'message': 'Test alert'}],
@@ -3094,7 +3106,6 @@ class TestIntelligentDataCleaner:
         user_context = {'secteur_activite': 'finance'}
         
         with patch.object(cleaner_with_claude.quality_agent, 'assess') as mock_assess:
-            from automl_platform.data_quality_agent import DataQualityAssessment
             mock_assess.return_value = DataQualityAssessment(
                 quality_score=70.0,
                 alerts=[],
@@ -3104,8 +3115,10 @@ class TestIntelligentDataCleaner:
                 target_leakage_risk='low'
             )
             
-            with patch.object(cleaner_with_claude.claude_client, 'messages') as mock_messages:
-                mock_messages.create = AsyncMock(return_value=Mock(
+                with patch.object(agent, 'claude_client') as mock_claude:
+                    mock_response = Mock()
+                    mock_response.content = [Mock(text='{"key": "value"}')]
+                    mock_claude.messages.create = AsyncMock(return_value=mock_response)
                     content=[Mock(text=json.dumps({
                         'recommended_mode': 'hybrid',
                         'confidence': 0.85,
@@ -3368,9 +3381,9 @@ class TestDataFrameEdgeCases:
     """Tests avec DataFrames dans des cas limites"""
     
     @pytest.mark.asyncio
-    async def test_empty_dataframe(self, mock_agent_config):
+    async def test_empty_dataframe(self, test_agent_config):
         """Test avec DataFrame vide"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         empty_df = pd.DataFrame()
         user_context = {'secteur_activite': 'test'}
@@ -3383,9 +3396,9 @@ class TestDataFrameEdgeCases:
             )
     
     @pytest.mark.asyncio
-    async def test_single_row_dataframe(self, mock_agent_config):
+    async def test_single_row_dataframe(self, test_agent_config):
         """Test avec DataFrame d'une seule ligne"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         single_row_df = pd.DataFrame({'col1': [1], 'col2': ['a']})
         user_context = {'secteur_activite': 'test'}
@@ -3401,9 +3414,9 @@ class TestDataFrameEdgeCases:
             assert len(cleaned_df) >= 0  # Au moins pas d'erreur
     
     @pytest.mark.asyncio
-    async def test_all_nan_dataframe(self, mock_agent_config):
+    async def test_all_nan_dataframe(self, test_agent_config):
         """Test avec DataFrame 100% NaN"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         all_nan_df = pd.DataFrame({
             'col1': [np.nan, np.nan, np.nan],
@@ -3425,9 +3438,9 @@ class TestDataFrameEdgeCases:
             assert not cleaned_df.isnull().all().any()
     
     @pytest.mark.asyncio
-    async def test_very_wide_dataframe(self, mock_agent_config):
+    async def test_very_wide_dataframe(self, test_agent_config):
         """Test avec DataFrame très large (1000 colonnes)"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         wide_df = pd.DataFrame(np.random.randn(100, 1000))
         user_context = {'secteur_activite': 'test'}
@@ -3444,9 +3457,9 @@ class TestDataFrameEdgeCases:
             assert cleaned_df.shape[1] <= 1000
     
     @pytest.mark.asyncio
-    async def test_duplicate_columns(self, mock_agent_config):
+    async def test_duplicate_columns(self, test_agent_config):
         """Test avec colonnes en double"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         # Créer DF avec colonnes dupliquées
         df = pd.DataFrame([[1, 2, 3], [4, 5, 6]])
@@ -3468,9 +3481,9 @@ class TestDataFrameEdgeCases:
             assert len(cleaned_df.columns) == len(set(cleaned_df.columns))
     
     @pytest.mark.asyncio
-    async def test_mixed_types_in_column(self, mock_agent_config):
+    async def test_mixed_types_in_column(self, test_agent_config):
         """Test avec types mélangés dans une colonne"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        orchestrator = DataCleaningOrchestrator(test_agent_config)
         
         mixed_df = pd.DataFrame({
             'col1': [1, '2', 3.0, None, 'text']
