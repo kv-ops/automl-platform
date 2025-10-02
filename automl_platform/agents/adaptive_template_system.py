@@ -88,7 +88,7 @@ class AdaptiveTemplateSystem:
         self.use_claude = use_claude and AsyncAnthropic is not None
         if self.use_claude:
             self.claude_client = AsyncAnthropic(api_key=anthropic_api_key)
-            self.claude_model = "claude-sonnet-4-20250514"
+            self.claude_model = "claude-sonnet-4-5-20250929"
             logger.info("💎 Claude enhancement enabled for semantic adaptation")
         else:
             self.claude_client = None
