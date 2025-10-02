@@ -1091,7 +1091,7 @@ class TestAdaptiveTemplateSystemWithClaude:
 
     @pytest.mark.asyncio
     async def test_claude_select_best_pattern_detailed(temp_dir):
-         """Test complet de sélection de pattern avec Claude"""
+        """Test complet de sélection de pattern avec Claude"""
         system = AdaptiveTemplateSystem(
             template_dir=Path(temp_dir),
             use_claude=True,
