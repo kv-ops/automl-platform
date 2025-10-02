@@ -56,7 +56,7 @@ class ControllerAgent:
         self.quality_metrics = {}
         
         # Claude model configuration
-        self.model = "claude-sonnet-4-20250514"
+        self.model = "claude-sonnet-4-5-20250929"
         self.max_tokens = 4000
         
         logger.info(f"ControllerAgent initialized with Claude SDK (model: {self.model})")
