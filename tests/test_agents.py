@@ -48,6 +48,31 @@ from automl_platform.agents.utils import (
     HealthChecker
 )
 
+# Mock des prompts si les fichiers n'existent pas
+try:
+    from automl_platform.agents.prompts.profiler_prompts import (
+        PROFILER_SYSTEM_PROMPT, PROFILER_USER_PROMPT
+    )
+    from automl_platform.agents.prompts.validator_prompts import (
+        VALIDATOR_SYSTEM_PROMPT, VALIDATOR_USER_PROMPT
+    )
+    from automl_platform.agents.prompts.cleaner_prompts import (
+        CLEANER_SYSTEM_PROMPT, CLEANER_USER_PROMPT
+    )
+    from automl_platform.agents.prompts.controller_prompts import (
+        CONTROLLER_SYSTEM_PROMPT, CONTROLLER_USER_PROMPT
+    )
+except ImportError:
+    # Fallback si les prompts n'existent pas
+    PROFILER_SYSTEM_PROMPT = "You are a data profiler"
+    PROFILER_USER_PROMPT = "Analyze: {data_summary}"
+    VALIDATOR_SYSTEM_PROMPT = "You are a validator"
+    VALIDATOR_USER_PROMPT = "Validate: {columns}"
+    CLEANER_SYSTEM_PROMPT = "You are a cleaner"
+    CLEANER_USER_PROMPT = "Clean: {data_summary}"
+    CONTROLLER_SYSTEM_PROMPT = "You are a controller"
+    CONTROLLER_USER_PROMPT = "Control: {metrics}"
+
 # ============================================================================
 # FIXTURES COMMUNES
 # ============================================================================
@@ -122,6 +147,19 @@ def sample_sales_data():
     })
     
     return df
+
+
+@pytest.fixture
+def sample_quality_assessment():
+    """Fixture pour DataQualityAssessment"""
+    return DataQualityAssessment(
+        quality_score=75.0,
+        alerts=[],
+        warnings=[],
+        recommendations=[],
+        drift_risk='low',
+        target_leakage_risk='low'
+    )
 
 
 @pytest.fixture
@@ -1096,6 +1134,18 @@ def test_summarize_config(temp_dir):
     assert summary['has_feature_engineering'] == True
     assert summary['primary_metric'] == 'f1'
 
+def test_summarize_config_handles_empty(self, temp_dir):
+    """Test summarize_config avec config vide"""
+    system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
+    
+    empty_config = {}
+    summary = system._summarize_config(empty_config)
+    
+    assert summary['task'] == 'unknown'
+    assert summary['algorithms'] == []
+    assert summary['has_preprocessing'] == False
+    assert summary['has_feature_engineering'] == False
+
 
 # ============================================================================
 # TESTS DATA CLEANING ORCHESTRATOR - AVEC CLAUDE ))))))))))))))))))))))))))))))))))))))))))
@@ -1832,7 +1882,12 @@ class TestValidatorAgentHybrid:
         assert call_args.kwargs['messages'][0]['role'] == 'user'
         assert 'content' in call_args.kwargs['messages'][0]
 
-        # 5.7 Vérifier la structure de la réponse
+        # 5.7 Vérifier le contenu du prompt
+        prompt_content = call_args.kwargs['messages'][0]['content']
+        assert 'finance' in prompt_content.lower() or 'sector' in prompt_content.lower()
+        assert 'amount' in prompt_content  # Vérifier que les colonnes sont incluses
+
+        # 5.8 Vérifier la structure de la réponse
         assert 'valid' in report
         assert 'overall_score' in report
         assert 'issues' in report
@@ -2254,18 +2309,16 @@ class TestPerformanceAndMemory:
     
         mem_after = process.memory_info().rss / 1024 / 1024  # MB
         mem_increase = mem_after - mem_before
-    
-        # ✅ Assertion avec tolérance LARGE pour éviter flakiness
-        # L'augmentation ne devrait PAS être proportionnelle à 200 itérations grâce au BoundedList (limité à 100)
-    
-        # Si on avait gardé les 200 items, on aurait ~200MB
-        # Avec BoundedList, on devrait avoir ~100MB max
-        assert mem_increase < 150, (
+
+        # Assertion plus robuste avec calcul relatif
+        expected_max_mb = 100 * 10000 * 8 / 1024 / 1024 * 1.5  # 1.5x marge
+        assert mem_increase < expected_max_mb, (
             f"Memory leak detected: {mem_increase:.1f} MB increase. "
-            f"Expected < 150 MB with BoundedList limiting to 100 items."
+            f"Expected < {expected_max_mb:.1f} MB with BoundedList limiting to 100 items. "
+            f"Check that BoundedList is correctly limiting history size."
         )
-    
-        # ✅ Vérifier aussi que BoundedList fonctionne
+
+        # Vérifier aussi la taille de l'historique
         assert len(orchestrator.execution_history) == 100, (
             "BoundedList should limit to 100 items"
         )
@@ -2317,15 +2370,20 @@ class TestCircuitBreakerAndRetry:
     
     def test_circuit_breaker_opens_on_failures(self):
         """Test que le circuit breaker s'ouvre après échecs"""
-        config = AgentConfig()
-        
-        # Enregistrer beaucoup d'échecs
-        for _ in range(10):
+        config = AgentConfig(
+            enable_circuit_breakers=True,
+            circuit_breaker_failure_threshold=3
+        )
+    
+        breaker = config.get_circuit_breaker('claude')
+    
+        # Enregistrer des échecs
+        for _ in range(5):
             config.record_llm_failure('claude')
-        
-        # Le circuit devrait s'ouvrir (selon implémentation)
-        # Note: Dépend de l'implémentation réelle du circuit breaker
-        pass
+    
+        # Le circuit devrait être ouvert
+        assert breaker.state == 'OPEN'
+        assert config.can_call_llm('claude') == False
     
         
         @async_retry(max_attempts=3)
@@ -2685,6 +2743,38 @@ class TestProductionUniversalMLAgent:
                             assert result.cleaned_data is not None
                             assert 'memory_stats' in result.__dict__
                             assert 'cache_stats' in result.__dict__
+
+    @pytest.mark.asyncio
+    async def test_generate_summary_fallback_on_claude_error(self, production_agent, sample_fraud_data):
+        """Test fallback du summary quand Claude échoue"""
+        from automl_platform.agents import ProductionMLPipelineResult
+    
+        mock_context = Mock(problem_type='fraud_detection', confidence=0.9)
+        mock_result = ProductionMLPipelineResult(
+            success=True,
+            cleaned_data=sample_fraud_data,
+            config_used=Mock(),
+            context_detected=mock_context,
+            cleaning_report={},
+            performance_metrics={'f1': 0.85},
+            execution_time=10.0,
+            memory_stats={'peak_mb': 100},
+            cache_stats={},
+            performance_profile={}
+        )
+    
+        with patch.object(production_agent, 'claude_client') as mock_claude:
+            # Simuler erreur Claude
+            mock_claude.messages.create = AsyncMock(side_effect=Exception("Claude API error"))
+        
+            summary = await production_agent.generate_execution_summary_with_claude(
+                mock_result, mock_context
+            )
+        
+            # Devrait utiliser le fallback basique
+            assert 'ML Pipeline' in summary
+            assert 'fraud_detection' in summary
+            assert len(summary) > 50  # Devrait quand même générer un summary
 
 
 class TestUniversalMLAgentBatchProcessing:
@@ -3118,7 +3208,7 @@ class TestIntelligentDataCleaner:
         
         # Mock des composants
         with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
-            mock_assess.return_value = DataQualityAssessment(
+            mock_assess.return_value = sample_quality_assessment
                 quality_score=75.0,
                 alerts=[],
                 warnings=[],
@@ -3146,7 +3236,7 @@ class TestIntelligentDataCleaner:
         user_context = {'secteur_activite': 'finance'}
         
         with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
-            mock_assess.return_value = DataQualityAssessment(
+            mock_assess.return_value = sample_quality_assessment
                 quality_score=60.0,
                 alerts=[{'message': 'Test alert'}],
                 warnings=[],
@@ -3171,7 +3261,7 @@ class TestIntelligentDataCleaner:
         user_context = {'secteur_activite': 'finance'}
         
         with patch.object(cleaner_with_claude.quality_agent, 'assess') as mock_assess:
-            mock_assess.return_value = DataQualityAssessment(
+            mock_assess.return_value = sample_quality_assessment
                 quality_score=70.0,
                 alerts=[],
                 warnings=[],
@@ -3259,7 +3349,14 @@ class TestIntelligentDataCleanerStrategies:
         cleaner = IntelligentDataCleaner(config=test_agent_config)
         
         user_context = {'secteur_activite': 'finance'}
-        assessment = Mock(quality_score=60.0, alerts=[{'message': 'Test'}])
+        assessment = DataQualityAssessment(
+            quality_score=60.0,
+            alerts=[{'message': 'Test', 'severity': 'high'}],
+            warnings=[],
+            recommendations=[],
+            drift_risk='medium',
+            target_leakage_risk='low'
+        )
         strategy = {'priorities': []}
         
         # Mock phase agents
