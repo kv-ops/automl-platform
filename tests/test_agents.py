@@ -1309,6 +1309,7 @@ class TestOpenAIAgents:
     """Tests pour les agents OpenAI individuels"""
     
     @pytest.fixture
+    def mock_openai_client(self):
         """Mock du client OpenAI"""
         client = AsyncMock()
         client.beta.assistants.create = AsyncMock(return_value=Mock(id='asst_123'))
