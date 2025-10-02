@@ -212,7 +212,11 @@ class TestProfilerAgentUpdated:
         agent = ProfilerAgent(test_agent_config)
         agent.client = mock_openai_client
         
-        mock_openai_client.beta.threads.runs.retrieve.return_value = Mock(status='completed')
+        mock_openai_client.beta.threads.runs.retrieve.side_effect = [
+            Mock(status='in_progress'),
+            Mock(status='in_progress'),
+            Mock(status='completed')
+        ]
         mock_message = Mock()
         mock_message.role = 'assistant'
         mock_message.content = [Mock(text=Mock(value='{"summary": {}}'))]
@@ -231,7 +235,11 @@ class TestProfilerAgentUpdated:
         
         assert agent._initialized == False
         
-        mock_openai_client.beta.threads.runs.retrieve.return_value = Mock(status='completed')
+        mock_openai_client.beta.threads.runs.retrieve.side_effect = [
+            Mock(status='in_progress'),
+            Mock(status='in_progress'),
+            Mock(status='completed')
+        ]
         mock_message = Mock()
         mock_message.role = 'assistant'
         mock_message.content = [Mock(text=Mock(value='{"quality_issues": []}'))]
@@ -438,6 +446,24 @@ class TestIntelligentContextDetectorWithClaude:
             
             # Devrait utiliser les règles sans essayer Claude
             assert context.problem_type == 'fraud_detection'
+
+    @pytest.mark.asyncio
+    async def test_claude_detection_invalid_json(self, sample_fraud_data):
+        """Test fallback quand Claude retourne JSON invalide"""
+        detector = IntelligentContextDetector(anthropic_api_key="test-key")
+    
+        with patch.object(detector, 'claude_client') as mock_claude:
+            # Simuler réponse non-JSON
+            mock_claude.messages.create = AsyncMock(return_value=Mock(
+                content=[Mock(text='This is not JSON at all!')]
+            ))
+        
+            with patch.object(detector, '_should_use_claude', return_value=True):
+                context = await detector.detect_ml_context(sample_fraud_data, target_col='fraud')
+            
+                # Devrait fallback vers règles
+                assert context.problem_type == 'fraud_detection'
+                assert context.confidence > 0
 
 
 # ============================================================================
@@ -1233,7 +1259,11 @@ class TestOpenAIAgents:
         mock_openai_client.beta.assistants.create.return_value = Mock(id='asst_123')
         mock_openai_client.beta.threads.create.return_value = Mock(id='thread_123')
         mock_openai_client.beta.threads.runs.create.return_value = Mock(id='run_123')
-        mock_openai_client.beta.threads.runs.retrieve.return_value = Mock(status='completed')
+        mock_openai_client.beta.threads.runs.retrieve.side_effect = [
+            Mock(status='in_progress'),
+            Mock(status='in_progress'),
+            Mock(status='completed')
+        ]
         
         mock_message = Mock()
         mock_message.role = 'assistant'
@@ -1745,6 +1775,7 @@ class TestValidatorAgentHybrid:
         agent = ValidatorAgent(test_agent_config, use_claude=True)
     
         # 2. Configurer le mock pour retourner ce que vous voulez
+    with patch.object(agent, 'claude_client') as mock_claude_client:
         mock_claude = AsyncMock()
         mock_claude.messages.create = AsyncMock(return_value=Mock(
             content=[Mock(text=json.dumps({
@@ -1780,6 +1811,7 @@ class TestValidatorAgentHybrid:
         # 5.2 Vérifier le contenu complet de la requête Claude
         call_args = mock_claude.messages.create.call_args
         assert call_args is not None, "Claude n'a pas été appelé"
+        assert 'model' in call_args.kwargs
 
         # 5.3 Vérifier les kwargs obligatoires
         assert 'model' in call_args.kwargs
@@ -1840,9 +1872,14 @@ class TestValidatorAgentHybrid:
         agent = ValidatorAgent(test_agent_config, use_claude=False)
         
         # Mock OpenAI client
-        with patch.object(agent, 'openai_client') as mock_openai:
-            mock_openai.beta.assistants.create = AsyncMock(return_value=Mock(id='asst_123'))
-            await agent._ensure_assistant_initialized()
+            with patch.object(agent, 'openai_client') as mock_openai:
+                mock_beta = Mock()
+                mock_assistants = Mock()
+                mock_assistants.create = AsyncMock(return_value=Mock(id='asst_123'))
+                mock_beta.assistants = mock_assistants
+                mock_openai.beta = mock_beta
+    
+                await agent._ensure_assistant_initialized()
             
             with patch.object(agent, '_web_search') as mock_search:
                 mock_search.return_value = {
@@ -2339,6 +2376,33 @@ class TestCircuitBreakerAndRetry:
         
         assert call_count == 3  # Devrait essayer 3 fois
 
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_blocks_claude_calls(self, test_agent_config):
+        """Test que le circuit breaker bloque réellement les appels Claude"""
+        orchestrator = DataCleaningOrchestrator(test_agent_config, use_claude=True)
+    
+        # Ouvrir le circuit breaker
+        for _ in range(10):
+            test_agent_config.record_llm_failure('claude')
+    
+        assert test_agent_config.can_call_llm('claude') == False
+    
+        # Essayer une opération qui utiliserait Claude
+        df = pd.DataFrame({'col1': [1, 2, 3]})
+        user_context = {'secteur_activite': 'finance'}
+        ml_context = Mock(problem_type='test')
+    
+        # Le circuit breaker devrait empêcher l'appel
+        with patch.object(orchestrator, 'claude_client') as mock_claude:
+            decision = await orchestrator.determine_cleaning_mode_with_claude(
+                df, user_context, ml_context
+            )
+        
+            # Claude NE devrait PAS avoir été appelé
+            assert not mock_claude.messages.create.called
+            # Devrait avoir utilisé le fallback
+            assert 'recommended_mode' in decision
+
 
 # ============================================================================
 # TESTS PRODUCTION UNIVERSAL ML AGENT
@@ -2478,7 +2542,8 @@ class TestProductionUniversalMLAgent:
         
         # Ajouter beaucoup d'items
         for i in range(20):
-            production_agent.cache.put(f'key_{i}', large_data)
+            size_bytes = 1024 * 1024  # 1MB
+            production_agent.cache.put(f'key_{i}', large_data, size_bytes=size_bytes)
         
         # Vérifier que la taille ne dépasse pas max_size
         assert production_agent.cache.current_size <= production_agent.cache.max_size
@@ -3115,7 +3180,7 @@ class TestIntelligentDataCleaner:
                 target_leakage_risk='low'
             )
             
-                with patch.object(agent, 'claude_client') as mock_claude:
+                with patch.object(cleaner_with_claude, 'claude_client') as mock_claude:
                     mock_response = Mock()
                     mock_response.content = [Mock(text='{"key": "value"}')]
                     mock_claude.messages.create = AsyncMock(return_value=mock_response)
@@ -3215,6 +3280,30 @@ class TestIntelligentDataCleanerStrategies:
                 assert report['method'] == 'hybrid'
                 assert 'agent_phase' in report
                 assert 'conversational_phase' in report
+
+    @pytest.mark.asyncio
+    async def test_generate_comprehensive_report_with_claude(self, test_agent_config):
+        """Test génération de rapport avec insights Claude"""
+        cleaner = IntelligentDataCleaner(config=test_agent_config, use_claude=True)
+    
+        initial = DataQualityAssessment(quality_score=60, alerts=[], warnings=[], recommendations=[], drift_risk='low', target_leakage_risk='low')
+        final = DataQualityAssessment(quality_score=85, alerts=[], warnings=[], recommendations=[], drift_risk='low', target_leakage_risk='low')
+        cleaning_report = {'method': 'agents'}
+        strategy = {'summary': 'Test strategy'}
+    
+        with patch.object(cleaner, 'claude_client') as mock_claude:
+            mock_claude.messages.create = AsyncMock(return_value=Mock(
+                content=[Mock(text='Comprehensive Claude insights about the cleaning results.')]
+            ))
+        
+            report = await cleaner._generate_comprehensive_report(
+                initial, final, cleaning_report, 'agents', strategy
+            )
+        
+            # Vérifier que Claude a été appelé pour les insights
+            assert mock_claude.messages.create.called
+            assert 'claude_insights' in report
+            assert len(report['claude_insights']) > 50  # Devrait être détaillé
 
 
 # ============================================================================
