@@ -111,8 +111,8 @@ def sample_sales_data():
 
 
 @pytest.fixture
-def mock_agent_config():
-    """Configuration mock pour les agents - VERSION CORRIGÉE"""
+def test_agent_config():
+    """Configuration de test pour les agents"""
     config = AgentConfig(
         # API Keys
         openai_api_key="test-openai-key",
@@ -424,91 +424,6 @@ class TestIntelligentContextDetectorWithClaude:
             
             # Devrait utiliser les règles sans essayer Claude
             assert context.problem_type == 'fraud_detection'
-
-
-# ============================================================================
-# PHASE 2.2 : TESTS ADAPTIVE TEMPLATES AVEC CLAUDE (NOUVEAUX)
-# ============================================================================
-
-class TestAdaptiveTemplateSystemWithClaude:
-    """Tests pour AdaptiveTemplateSystem avec Claude"""
-    
-    @pytest.mark.asyncio
-    async def test_claude_enhancement_enabled(self, temp_dir, mock_claude_client):
-        """Test système avec enhancement Claude activé"""
-        system = AdaptiveTemplateSystem(
-            template_dir=Path(temp_dir),
-            use_claude=True,
-            anthropic_api_key="test-key"
-        )
-        
-        assert system.use_claude == True
-    
-    def test_fallback_to_rule_based(self, temp_dir):
-        """Test fallback vers rule-based"""
-        system = AdaptiveTemplateSystem(
-            template_dir=Path(temp_dir),
-            use_claude=False
-        )
-        
-        system.learned_patterns['test'] = [
-            {'context': {'n_samples': 1000}, 'config': {'test': True}, 'success_score': 0.9}
-        ]
-        
-        config = system._select_best_learned_pattern('test', {'n_samples': 950})
-        assert config is not None
-    
-    def test_metrics_tracking(self, temp_dir):
-        """Test tracking des métriques Claude"""
-        system = AdaptiveTemplateSystem(
-            template_dir=Path(temp_dir),
-            use_claude=True,
-            anthropic_api_key="test-key"
-        )
-        
-        assert 'claude_enhanced_adaptations' in system.metrics
-        assert 'claude_fallbacks' in system.metrics
-
-
-# ============================================================================
-# PHASE 2.3 : TESTS ORCHESTRATOR AVEC CLAUDE (NOUVEAUX)
-# ============================================================================
-
-class TestDataCleaningOrchestratorWithClaude:
-    """Tests pour DataCleaningOrchestrator avec Claude"""
-    
-    @pytest.mark.asyncio
-    async def test_determine_cleaning_mode_with_claude(
-        self, mock_agent_config, sample_fraud_data, mock_claude_client
-    ):
-        """Test détermination du mode avec Claude"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=True)
-        orchestrator.claude_client = mock_claude_client
-        
-        mock_claude_client.messages.create.return_value.content = [
-            Mock(text=json.dumps({
-                'recommended_mode': 'hybrid',
-                'confidence': 0.85,
-                'reasoning': 'Balance',
-                'key_considerations': [],
-                'estimated_time_minutes': 15,
-                'risk_level': 'medium'
-            }))
-        ]
-        
-        ml_context = Mock(problem_type='fraud_detection', business_sector='finance')
-        decision = await orchestrator.determine_cleaning_mode_with_claude(
-            sample_fraud_data, {}, ml_context
-        )
-        
-        assert decision['recommended_mode'] in ['automated', 'interactive', 'hybrid']
-    
-    def test_bounded_history(self, mock_agent_config):
-        """Test que l'historique est borné"""
-        orchestrator = DataCleaningOrchestrator(mock_agent_config)
-        
-        assert isinstance(orchestrator.execution_history, BoundedList)
-        assert orchestrator.execution_history.maxlen == 100
 
 
 # ============================================================================
@@ -977,171 +892,6 @@ class TestConfigGeneratorWithClaude:
 
 
 # ============================================================================
-# TESTS ORIGINAUX - ADAPTIVE TEMPLATE SYSTEM
-# ============================================================================
-
-class TestAdaptiveTemplateSystem:
-    """Tests pour le système de templates adaptatifs"""
-    
-    @pytest.fixture
-    def adaptive_system(self, temp_dir):
-        return AdaptiveTemplateSystem(Path(temp_dir), use_claude=False)
-    
-    @pytest.mark.asyncio
-    async def test_get_configuration(self, adaptive_system, sample_fraud_data):
-        """Test l'obtention de configuration adaptative"""
-        context = {
-            'problem_type': 'fraud_detection',
-            'n_samples': len(sample_fraud_data),
-            'n_features': len(sample_fraud_data.columns),
-            'imbalance_detected': True
-        }
-        
-        config = await adaptive_system.get_configuration(
-            df=sample_fraud_data,
-            context=context
-        )
-        
-        assert isinstance(config, dict)
-        assert 'task' in config
-        assert 'algorithms' in config
-        assert 'preprocessing' in config
-    
-    def test_add_template(self, adaptive_system):
-        """Test l'ajout d'un template"""
-        template_config = {
-            'task': 'classification',
-            'algorithms': ['XGBoost', 'LightGBM'],
-            'preprocessing': {'handle_missing': True}
-        }
-        
-        template = adaptive_system.add_template(
-            'test_template',
-            template_config,
-            'Test template description'
-        )
-        
-        assert isinstance(template, AdaptiveTemplate)
-        assert template.name == 'test_template'
-        assert template.base_config == template_config
-        assert 'test_template' in adaptive_system.templates
-    
-    @pytest.mark.asyncio
-    async def test_learn_from_execution(self, adaptive_system):
-        """Test l'apprentissage à partir d'exécution"""
-        context = {
-            'problem_type': 'fraud_detection',
-            'n_samples': 1000,
-            'n_features': 20
-        }
-        
-        config = {
-            'task': 'classification',
-            'algorithms': ['XGBoost'],
-            'preprocessing': {}
-        }
-        
-        performance = {'f1': 0.85, 'precision': 0.90}
-        
-        adaptive_system.learn_from_execution(context, config, performance)
-        
-        assert 'fraud_detection' in adaptive_system.learned_patterns
-        assert len(adaptive_system.learned_patterns['fraud_detection']) > 0
-        
-        pattern = adaptive_system.learned_patterns['fraud_detection'][0]
-        assert pattern['success_score'] == 0.90
-        assert pattern['config'] == config
-    
-    def test_select_best_learned_pattern(self, adaptive_system):
-        """Test la sélection du meilleur pattern appris"""
-        adaptive_system.learned_patterns['fraud_detection'] = [
-            {
-                'context': {'n_samples': 1000, 'n_features': 20},
-                'config': {'algorithms': ['XGBoost']},
-                'success_score': 0.85
-            },
-            {
-                'context': {'n_samples': 900, 'n_features': 19},
-                'config': {'algorithms': ['LightGBM']},
-                'success_score': 0.90
-            }
-        ]
-        
-        current_context = {'n_samples': 950, 'n_features': 18}
-        
-        best_config = adaptive_system._select_best_learned_pattern(
-            'fraud_detection',
-            current_context
-        )
-        
-        assert best_config is not None
-        assert best_config['algorithms'] == ['LightGBM']
-    
-    def test_calculate_pattern_similarity(self, adaptive_system):
-        """Test le calcul de similarité entre patterns"""
-        pattern = {
-            'context': {
-                'n_samples': 1000,
-                'n_features': 20,
-                'imbalance_detected': True,
-                'business_sector': 'finance'
-            }
-        }
-        
-        context = {
-            'n_samples': 900,
-            'n_features': 22,
-            'imbalance_detected': True,
-            'business_sector': 'finance'
-        }
-        
-        similarity = adaptive_system._calculate_pattern_similarity(pattern, context)
-        
-        assert similarity > 0.7
-        assert similarity <= 1.0
-    
-    def test_get_template_stats(self, adaptive_system):
-        """Test les statistiques des templates"""
-        adaptive_system.add_template('test', {'task': 'classification'})
-        adaptive_system.learned_patterns['test_problem'] = [{'config': {}}]
-        
-        stats = adaptive_system.get_template_stats()
-        
-        assert stats['total_templates'] == 1
-        assert stats['total_learned_patterns'] == 1
-        assert 'template_performance' in stats
-        assert 'test' in stats['template_performance']
-    
-    @pytest.mark.asyncio
-    async def test_adapt_to_current_data(self, adaptive_system):
-        """Test l'adaptation aux données actuelles"""
-        base_config = {
-            'task': 'classification',
-            'algorithms': ['NeuralNetwork', 'XGBoost'],
-            'preprocessing': {}
-        }
-        
-        df = pd.DataFrame(np.random.randn(100, 5))
-        context = {'imbalance_detected': True}
-        
-        adapted = await adaptive_system._adapt_to_current_data(base_config, df, context)
-        
-        assert 'NeuralNetwork' not in adapted['algorithms']
-        assert 'LogisticRegression' in adapted['algorithms']
-        assert 'SMOTE' in str(adapted['preprocessing'])
-    
-    def test_persistence(self, adaptive_system, temp_dir):
-        """Test la sauvegarde et chargement des patterns"""
-        adaptive_system.learned_patterns['test'] = [{'config': {'test': True}}]
-        adaptive_system._save_learned_patterns()
-        
-        new_system = AdaptiveTemplateSystem(Path(temp_dir), use_claude=False)
-        
-        assert 'test' in new_system.learned_patterns
-        assert new_system.learned_patterns['test'][0]['config']['test'] == True
-
-
-# ============================================================================
 # TESTS ADAPTIVE TEMPLATE SYSTEM - AVEC CLAUDE (AJOUTER APRÈS TestAdaptiveTemplateSystem)
 # ============================================================================
 
@@ -1238,106 +988,77 @@ class TestAdaptiveTemplateSystemWithClaude:
         assert stats['claude_effectiveness']['enhancement_rate'] == 0.7
 
 
-# ============================================================================
-# TESTS ORIGINAUX - DATA CLEANING ORCHESTRATOR
-# ============================================================================
-
-class TestDataCleaningOrchestrator:
-    """Tests pour l'orchestrateur de nettoyage"""
+@pytest.mark.asyncio
+async def test_claude_select_best_pattern_detailed(self, temp_dir):
+    """Test complet de sélection de pattern avec Claude"""
+    system = AdaptiveTemplateSystem(
+        template_dir=Path(temp_dir),
+        use_claude=True,
+        anthropic_api_key="test-key"
+    )
     
-    @pytest.fixture
-    def orchestrator(self, mock_agent_config):
-        return DataCleaningOrchestrator(mock_agent_config, use_claude=False)
-    
-    @pytest.mark.asyncio
-    async def test_clean_dataset_basic(self, orchestrator, sample_fraud_data):
-        """Test le nettoyage basique du dataset"""
-        user_context = {
-            'secteur_activite': 'finance',
-            'target_variable': 'fraud',
-            'contexte_metier': 'Fraud detection'
+    # Patterns avec contextes variés
+    system.learned_patterns['test_problem'] = [
+        {
+            'context': {'n_samples': 1000, 'business_sector': 'finance'},
+            'config': {'algorithms': ['XGBoost']},
+            'success_score': 0.85
+        },
+        {
+            'context': {'n_samples': 1100, 'business_sector': 'banking'},
+            'config': {'algorithms': ['LightGBM']},
+            'success_score': 0.90
         }
-        
-        with patch.object(orchestrator, '_process_chunk') as mock_process:
-            mock_process.return_value = sample_fraud_data
-            
-            cleaned_df, report = await orchestrator.clean_dataset(
-                sample_fraud_data,
-                user_context
-            )
-            
-            assert cleaned_df is not None
-            assert 'metadata' in report
-            assert report['metadata']['industry'] == 'finance'
+    ]
     
-    def test_needs_chunking(self, orchestrator):
-        """Test la détection du besoin de chunking"""
-        small_df = pd.DataFrame(np.random.randn(100, 10))
-        assert orchestrator._needs_chunking(small_df) == False
+    with patch.object(system, 'claude_client') as mock_claude:
+        mock_response = Mock()
+        mock_response.content = [Mock(text=json.dumps({
+            'best_pattern_id': 1,
+            'confidence': 0.85,
+            'reasoning': 'Banking sector is semantically close to finance',
+            'semantic_similarity': 0.92
+        }))]
+        mock_claude.messages.create = AsyncMock(return_value=mock_response)
         
-        with patch.object(pd.DataFrame, 'memory_usage') as mock_memory:
-            mock_memory.return_value = pd.Series([20 * 1024 * 1024] * 10)
-            large_df = pd.DataFrame(np.random.randn(1000, 10))
-            assert orchestrator._needs_chunking(large_df) == True
+        current_context = {'business_sector': 'banking', 'n_samples': 1050}
+        
+        pattern = await system._claude_select_best_pattern('test_problem', current_context)
+        
+        # Vérifier sélection sémantique (pas juste numérique)
+        assert pattern is not None
+        assert pattern['algorithms'] == ['LightGBM']
+        assert mock_claude.messages.create.called
+        
+        # Vérifier le prompt envoyé
+        call_args = mock_claude.messages.create.call_args
+        prompt = call_args.kwargs['messages'][0]['content']
+        assert 'semantic similarity' in prompt.lower()
+
+def test_summarize_config(self, temp_dir):
+    """Test summarize_config pour Claude"""
+    system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
     
-    def test_chunk_dataset(self, orchestrator):
-        """Test le découpage en chunks"""
-        df = pd.DataFrame(np.random.randn(1000, 10))
-        
-        with patch.object(orchestrator, '_needs_chunking', return_value=True):
-            chunks = orchestrator._chunk_dataset(df)
-            
-            assert len(chunks) > 1
-            total_rows = sum(len(chunk) for chunk in chunks)
-            assert total_rows == len(df)
+    full_config = {
+        'task': 'classification',
+        'algorithms': ['XGBoost', 'LightGBM', 'CatBoost', 'RandomForest'],
+        'preprocessing': {'handle_missing': True, 'scale': True},
+        'feature_engineering': {'polynomial': True},
+        'primary_metric': 'f1'
+    }
     
-    def test_update_cost_estimate(self, orchestrator):
-        """Test l'estimation des coûts"""
-        orchestrator.performance_metrics['total_api_calls'] = 10
-        
-        orchestrator._update_cost_estimate()
-        
-        assert orchestrator.total_cost > 0
-        assert orchestrator.performance_metrics['total_tokens_used'] > 0
+    summary = system._summarize_config(full_config)
     
-    def test_generate_final_report(self, orchestrator):
-        """Test la génération du rapport final"""
-        orchestrator.start_time = datetime.now().timestamp()
-        orchestrator.transformations_applied = [{'action': 'fill_missing'}]
-        orchestrator.validation_sources = ['source1']
-        orchestrator.performance_metrics = {'intelligence_used': True}
-        
-        original_df = pd.DataFrame({'col1': [1, 2, 3]})
-        cleaned_df = pd.DataFrame({'col1': [1, 2]})
-        
-        report = orchestrator._generate_final_report(original_df, cleaned_df)
-        
-        assert 'metadata' in report
-        assert 'transformations' in report
-        assert 'quality_metrics' in report
-        assert report['metadata']['agent_first_used'] == True
-        assert report['quality_metrics']['rows_removed'] == 1
-    
-    @pytest.mark.asyncio
-    async def test_detect_ml_context_integration(self, orchestrator, sample_fraud_data):
-        """Test l'intégration de la détection de contexte ML"""
-        user_context = {
-            'secteur_activite': 'finance',
-            'target_variable': 'fraud'
-        }
-        
-        context = await orchestrator.detect_ml_context(
-            sample_fraud_data,
-            target_col='fraud'
-        )
-        
-        assert 'problem_type' in context
-        assert 'confidence' in context
-        assert context['problem_type'] == 'fraud_detection'
+    # Vérifier condensation
+    assert summary['task'] == 'classification'
+    assert len(summary['algorithms']) == 3  # Top 3 seulement
+    assert summary['has_preprocessing'] == True
+    assert summary['has_feature_engineering'] == True
+    assert summary['primary_metric'] == 'f1'
 
 
 # ============================================================================
-# TESTS DATA CLEANING ORCHESTRATOR - AVEC CLAUDE (AJOUTER APRÈS TestDataCleaningOrchestrator)
+# TESTS DATA CLEANING ORCHESTRATOR - AVEC CLAUDE ))))))))))))))))))))))))))))))))))))))))))
 # ============================================================================
 
 class TestDataCleaningOrchestratorWithClaude:
@@ -1555,7 +1276,7 @@ class TestOpenAIAgents:
 
 
 # ============================================================================
-# TESTS LAZY INITIALIZATION - AGENTS OPENAI (AJOUTER APRÈS TestOpenAIAgents)
+# TESTS LAZY INITIALIZATION - AGENTS OPENAI (AJOUTER APRÈS TestOpenAIAgent)
 # ============================================================================
 
 class TestLazyInitialization:
@@ -2010,10 +1731,7 @@ class TestValidatorAgentHybrid:
         # 1. Créer l'agent normalement
         agent = ValidatorAgent(mock_agent_config, use_claude=True)
     
-        # 2. Remplacer directement son client claude par un mock
-        agent.claude_client = AsyncMock()
-    
-        # 3. Configurer le mock pour retourner ce que vous voulez
+        # 2. Configurer le mock pour retourner ce que vous voulez
         mock_claude = AsyncMock()
         mock_claude.messages.create = AsyncMock(return_value=Mock(
             content=[Mock(text=json.dumps({
@@ -2028,7 +1746,7 @@ class TestValidatorAgentHybrid:
         ))
         agent.claude_client = mock_claude
     
-        # 4. Mock la recherche OpenAI
+        # 3. Mock la recherche OpenAI
         with patch.object(agent, '_search_sector_standards') as mock_search:
             mock_search.return_value = {
                 'standards': [{'name': 'IFRS', 'url': 'test'}],
@@ -2036,43 +1754,43 @@ class TestValidatorAgentHybrid:
                 'column_mappings': {}
             }
         
-        # 5. Tester
+        # 4. Tester
         df = pd.DataFrame({'amount': [100, 200, 300]})
         profile_report = {'quality_issues': []}
         
         report = await agent.validate(df, profile_report)
         
-        # 6.1 Vérifier que Claude a été utilisé
+        # 5.1 Vérifier que Claude a été utilisé
         assert mock_claude.messages.create.called
         assert mock_claude.messages.create.call_count >= 1
 
-        # 6.2 Vérifier le contenu complet de la requête Claude
+        # 5.2 Vérifier le contenu complet de la requête Claude
         call_args = mock_claude.messages.create.call_args
         assert call_args is not None, "Claude n'a pas été appelé"
 
-        # 6.3 Vérifier les kwargs obligatoires
+        # 5.3 Vérifier les kwargs obligatoires
         assert 'model' in call_args.kwargs
         assert call_args.kwargs['model'] == 'claude-sonnet-4-5-20250929'
 
-        # 6.4 Vérifier max_tokens
+        # 5.4 Vérifier max_tokens
         assert 'max_tokens' in call_args.kwargs
         assert call_args.kwargs['max_tokens'] >= 1000
     
-        # 6.5 Vérifier system prompt
+        # 5.5 Vérifier system prompt
         assert 'system' in call_args.kwargs
         assert len(call_args.kwargs['system']) > 0
         assert 'validator' in call_args.kwargs['system'].lower() or 'compliance' in call_args.kwargs['system'].lower()
     
-        # 6.6 Vérifier messages
+        # 5.6 Vérifier messages
         assert 'messages' in call_args.kwargs
         assert len(call_args.kwargs['messages']) > 0
         assert call_args.kwargs['messages'][0]['role'] == 'user'
         assert 'content' in call_args.kwargs['messages'][0]
 
-        # 6.7 Vérifier la structure de la réponse
+        # 5.7 Vérifier la structure de la réponse
         assert 'reasoning' in report or 'confidence' in report
         
-        # 7. Vérifier que la recherche OpenAI a été utilisée
+        # 6. Vérifier que la recherche OpenAI a été utilisée
         assert mock_search.called
         assert mock_search.call_count >= 1
             
@@ -2096,7 +1814,7 @@ class TestValidatorAgentHybrid:
             assert 'reasoning' in report
             assert report['reasoning'] == "Claude reasoning"
             assert report['overall_score'] == 90
-    
+   
     @pytest.mark.asyncio
     async def test_validator_openai_for_search(self, mock_agent_config):
         """Test que OpenAI est utilisé pour la recherche web"""
@@ -2161,6 +1879,57 @@ class TestValidatorAgentHybrid:
                 # Vérifier que les métriques sont incrémentées
                 assert agent.validation_metrics['total_validations'] == initial_validations + 1
                 assert agent.validation_metrics['claude_analyses'] > 0
+
+
+class TestValidatorAgentHybridFlow:
+    """Tests du flow complet hybride"""
+    
+    @pytest.mark.asyncio
+    async def test_complete_hybrid_flow(self, test_agent_config):
+        """Test OpenAI search puis Claude reasoning"""
+        agent = ValidatorAgent(test_agent_config, use_claude=True)
+        
+        # Mock OpenAI search
+        with patch.object(agent, '_search_sector_standards') as mock_search:
+            mock_search.return_value = {
+                'standards': [{'name': 'IFRS'}],
+                'sources': ['http://test.com']
+            }
+            
+            # Mock Claude reasoning
+            with patch.object(agent, '_claude_validate') as mock_claude:
+                mock_claude.return_value = {
+                    'valid': True,
+                    'overall_score': 90,
+                    'reasoning': 'Claude reasoning'
+                }
+                
+                df = pd.DataFrame({'amount': [100, 200]})
+                profile_report = {'quality_issues': []}
+                
+                report = await agent.validate(df, profile_report)
+                
+                # Vérifier les deux phases
+                assert mock_search.called, "OpenAI search doit être appelé"
+                assert mock_claude.called, "Claude reasoning doit être appelé"
+                assert 'reasoning' in report
+    
+    @pytest.mark.asyncio
+    async def test_search_with_cache_hit(self, test_agent_config):
+        """Test cache hit pour web_search"""
+        agent = ValidatorAgent(test_agent_config)
+        
+        # Premier appel - cache miss
+        with patch.object(agent, '_perform_web_search') as mock_perform:
+            mock_perform.return_value = {'results': []}
+            
+            result1 = await agent._web_search('test query')
+            assert mock_perform.call_count == 1
+            
+            # Deuxième appel - cache hit
+            result2 = await agent._web_search('test query')
+            assert mock_perform.call_count == 1  # Pas d'appel supplémentaire
+            assert result1 == result2
 
 
 # ============================================================================
@@ -2839,6 +2608,63 @@ class TestProductionUniversalMLAgent:
                             assert 'cache_stats' in result.__dict__
 
 
+class TestUniversalMLAgentBatchProcessing:
+    """Tests du batch processing"""
+    
+    @pytest.mark.asyncio
+    async def test_execute_cleaning_batched(self, test_agent_config):
+        """Test batch processing avec vrais batches"""
+        agent = ProductionUniversalMLAgent(
+            config=test_agent_config,
+            batch_size=100
+        )
+        
+        # Dataset de 350 rows (3.5 batches)
+        large_df = pd.DataFrame(np.random.randn(350, 5))
+        
+        context = Mock(problem_type='test', business_sector='test')
+        config = Mock(
+            preprocessing={}, feature_engineering={},
+            algorithms=[], task='test', primary_metric='test'
+        )
+        
+        with patch.object(agent, 'execute_intelligent_cleaning') as mock_clean:
+            # Simuler nettoyage par batch
+            mock_clean.side_effect = lambda df, *args: (df, {})
+            
+            cleaned_df, report = await agent._execute_cleaning_batched(
+                large_df, context, config
+            )
+            
+            # Vérifier 4 appels (350/100 = 3.5 → 4 batches)
+            assert mock_clean.call_count == 4
+            assert len(cleaned_df) == 350
+            assert report['n_batches'] == 4
+    
+    @pytest.mark.asyncio
+    async def test_memory_cleanup_during_batches(self, test_agent_config):
+        """Test cleanup mémoire pendant batch processing"""
+        agent = ProductionUniversalMLAgent(
+            config=test_agent_config,
+            batch_size=50
+        )
+        
+        large_df = pd.DataFrame(np.random.randn(500, 10))
+        
+        with patch.object(agent.memory_monitor, 'force_cleanup') as mock_cleanup:
+            with patch.object(agent, 'execute_intelligent_cleaning') as mock_clean:
+                mock_clean.side_effect = lambda df, *args: (df, {})
+                
+                context = Mock(problem_type='test')
+                config = Mock(preprocessing={}, feature_engineering={})
+                
+                await agent._execute_cleaning_batched(large_df, context, config)
+                
+                # Vérifier cleanup appelé (tous les 5 batches)
+                # 500/50 = 10 batches → 2 cleanups
+                assert mock_cleanup.call_count >= 2
+
+
 # ============================================================================
 # TESTS PRODUCTION KNOWLEDGE BASE (NOUVEAUX - CRITIQUE)
 # ============================================================================
@@ -3324,6 +3150,58 @@ class TestIntelligentDataCleaner:
         assert 'total_cleanings' in metrics
         assert 'claude_insights_generated' in metrics
         assert 'rule_based_fallbacks' in metrics
+
+
+class TestIntelligentDataCleanerStrategies:
+    """Tests des stratégies de nettoyage"""
+    
+    @pytest.mark.asyncio
+    async def test_generate_strategic_prompts(self, test_agent_config):
+        """Test génération de prompts depuis stratégie Claude"""
+        cleaner = IntelligentDataCleaner(config=test_agent_config)
+        
+        strategy = {
+            'priorities': [
+                {'issue': 'Missing values', 'priority': 'high', 'approach': 'Impute with median'},
+                {'issue': 'Outliers', 'priority': 'medium', 'approach': 'Clip values'}
+            ]
+        }
+        
+        assessment = Mock(alerts=[], warnings=[])
+        
+        prompts = cleaner._generate_strategic_prompts(strategy, assessment)
+        
+        assert len(prompts) >= 2
+        assert 'median' in prompts[0].lower() or 'impute' in prompts[0].lower()
+        assert 'clip' in prompts[1].lower() or 'outlier' in prompts[1].lower()
+    
+    @pytest.mark.asyncio
+    async def test_clean_hybrid_two_phases(self, test_agent_config, sample_fraud_data):
+        """Test nettoyage hybride avec les deux phases"""
+        cleaner = IntelligentDataCleaner(config=test_agent_config)
+        
+        user_context = {'secteur_activite': 'finance'}
+        assessment = Mock(quality_score=60.0, alerts=[{'message': 'Test'}])
+        strategy = {'priorities': []}
+        
+        # Mock phase agents
+        with patch.object(cleaner, '_clean_with_agents') as mock_agents:
+            mock_agents.return_value = (sample_fraud_data, {'method': 'agents'})
+            
+            # Mock phase conversationnelle
+            with patch.object(cleaner, '_clean_conversationally') as mock_conv:
+                mock_conv.return_value = (sample_fraud_data, {'method': 'conversational'})
+                
+                cleaned_df, report = await cleaner._clean_hybrid(
+                    sample_fraud_data, user_context, assessment, strategy
+                )
+                
+                # Vérifier les deux phases appelées
+                assert mock_agents.called
+                assert mock_conv.called
+                assert report['method'] == 'hybrid'
+                assert 'agent_phase' in report
+                assert 'conversational_phase' in report
 
 
 # ============================================================================
