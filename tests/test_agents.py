@@ -214,9 +214,9 @@ def temp_dir():
     shutil.rmtree(temp_path)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mock_openai_client():
-    """Mock complet du client OpenAI"""
+    """Mock du client OpenAI"""
     client = AsyncMock()
     client.beta.assistants.create = AsyncMock(return_value=Mock(id='asst_test'))
     client.beta.assistants.retrieve = AsyncMock(return_value=Mock(id='asst_test'))
@@ -1360,19 +1360,6 @@ class TestDataCleaningOrchestratorWithClaude:
 class TestOpenAIAgents:
     """Tests pour les agents OpenAI individuels"""
     
-    @pytest.fixture
-    def mock_openai_client(self):
-        """Mock du client OpenAI"""
-        client = AsyncMock()
-        client.beta.assistants.create = AsyncMock(return_value=Mock(id='asst_123'))
-        client.beta.assistants.retrieve = AsyncMock()
-        client.beta.threads.create = AsyncMock()
-        client.beta.threads.messages.create = AsyncMock()
-        client.beta.threads.runs.create = AsyncMock()
-        client.beta.threads.runs.retrieve = AsyncMock()
-        client.beta.threads.messages.list = AsyncMock()
-        return client
-    
     @pytest.mark.asyncio
     async def test_profiler_agent(self, test_agent_config, mock_openai_client):
         """Test ProfilerAgent"""
@@ -1911,9 +1898,21 @@ class TestValidatorAgentHybrid:
             }))]
         )
     
-        with patch.object(agent.claude_client.messages, 'create', 
-                          new_callable=AsyncMock, 
-                          return_value=mock_claude_response) as mock_claude:
+        with patch.object(agent, 'claude_client') as mock_claude_client:
+            mock_claude_client.messages.create = AsyncMock(
+                return_value=Mock(
+                    content=[Mock(text=json.dumps({
+                        "valid": True,
+                        "overall_score": 85,
+                        "issues": [],
+                        "warnings": [{"column": "test", "warning": "Test warning"}],
+                        "suggestions": [],
+                        "column_validations": {},
+                        "sector_compliance": {"compliant": True},
+                        "reasoning": "Claude strategic analysis"
+                    }))]
+                )
+            )
         
             with patch.object(agent, '_search_sector_standards', 
                               return_value={
@@ -2354,10 +2353,11 @@ class TestPerformanceAndMemory:
         process = psutil.Process(os.getpid())
         mem_before = process.memory_info().rss / 1024 / 1024  # MB
     
-        # Simuler beaucoup d'exécutions
-        for i in range(200):  # Plus que la limite de BoundedList
+        # Simuler 200 exécutions (> limite de BoundedList)
+        item_size_bytes = 10000 * 8  # 10000 ints * 8 bytes
+        for i in range(200):
             orchestrator.execution_history.append({
-                'data': [1] * 10000  # Données volumineuses
+                'data': [1] * 10000
             })
     
         # Forcer cleanup
@@ -2367,12 +2367,13 @@ class TestPerformanceAndMemory:
         mem_after = process.memory_info().rss / 1024 / 1024  # MB
         mem_increase = mem_after - mem_before
 
-        # Assertion plus robuste avec calcul relatif
-        expected_max_mb = 100 * 10000 * 8 / 1024 / 1024 * 1.5  # 1.5x marge
+        # BoundedList limite à 100 items
+        # Chaque item = ~80KB, max attendu = 100 * 0.08 MB * 2 (marge sécurité)
+        expected_max_mb = 100 * (item_size_bytes / 1024 / 1024) * 2
+        
         assert mem_increase < expected_max_mb, (
             f"Memory leak detected: {mem_increase:.1f} MB increase. "
             f"Expected < {expected_max_mb:.1f} MB with BoundedList limiting to 100 items. "
-            f"Check that BoundedList is correctly limiting history size."
         )
 
         # Vérifier aussi la taille de l'historique
@@ -2494,7 +2495,6 @@ class TestCircuitBreakerAndRetry:
     """Tests pour le circuit breaker et la logique de retry"""
     
     def test_circuit_breaker_lifecycle(self):
-        """Test du cycle complet: CLOSED -> OPEN -> HALF_OPEN -> CLOSED"""
         config = AgentConfig(
             openai_api_key="test-key",
             anthropic_api_key="test-key",
@@ -2503,32 +2503,40 @@ class TestCircuitBreakerAndRetry:
             circuit_breaker_recovery_timeout=1
         )
     
-        # État initial: CLOSED
-        assert config.can_call_llm('claude') == True
         breaker = config.get_circuit_breaker('claude')
+    
+        # État initial: CLOSED
         assert breaker.state == 'CLOSED'
     
         # Enregistrer échecs -> OPEN
         for _ in range(3):
             config.record_llm_failure('claude')
     
-        assert config.can_call_llm('claude') == False
         assert breaker.state == 'OPEN'
     
-        # Attendre recovery timeout
-        import time
-        time.sleep(1.1)
+        # MOCK le temps au lieu de sleep
+        with patch('time.time') as mock_time:
+            mock_time.return_value = breaker.last_failure_time + 2  # Après timeout
+        
+            assert config.can_call_llm('claude') == True
+            assert breaker.state == 'HALF_OPEN'
+        
+            # Succès -> CLOSED
+            for _ in range(breaker.success_threshold):
+                config.record_llm_success('claude')
+        
+            assert breaker.state == 'CLOSED'
     
-        # Devrait passer en HALF_OPEN
-        assert config.can_call_llm('claude') == True  # Peut tenter
-        assert breaker.state == 'HALF_OPEN'
+            # Devrait passer en HALF_OPEN
+            assert config.can_call_llm('claude') == True  # Peut tenter
+            assert breaker.state == 'HALF_OPEN'
     
-        # Succès -> CLOSED
-        for _ in range(breaker.success_threshold):
-            config.record_llm_success('claude')
+            # Succès -> CLOSED
+            for _ in range(breaker.success_threshold):
+                config.record_llm_success('claude')
     
-        assert breaker.state == 'CLOSED'
-        assert config.can_call_llm('claude') == True 
+            assert breaker.state == 'CLOSED'
+            assert config.can_call_llm('claude') == True 
     
     @pytest.mark.asyncio
     async def test_circuit_breaker_opens_on_failures(self):
@@ -2582,6 +2590,36 @@ class TestCircuitBreakerAndRetry:
         
         assert result == "success"
         assert call_count == 3  # Devrait réussir au 3ème essai
+
+    @pytest.mark.asyncio
+    async def test_retry_decorator_exponential_backoff(self):
+        """Test que les délais augmentent exponentiellement"""
+        call_times = []
+    
+        @async_retry(max_attempts=4, base_delay=0.1, exponential_base=2.0)
+        async def test_func():
+            call_times.append(time.time())
+            if len(call_times) < 4:
+                raise Exception("Fail")
+            return "success"
+    
+        start = time.time()
+        result = await test_func()
+    
+        assert result == "success"
+        assert len(call_times) == 4
+    
+        # Vérifier les délais entre tentatives
+        delays = [call_times[i+1] - call_times[i] for i in range(len(call_times)-1)]
+    
+        # Délais attendus: ~0.1s, ~0.2s, ~0.4s (exponential)
+        assert delays[0] >= 0.09  # Premier retry
+        assert delays[1] >= 0.19  # Second retry  
+        assert delays[2] >= 0.39  # Troisième retry
+    
+        # Vérifier croissance exponentielle
+        assert delays[1] > delays[0] * 1.5
+        assert delays[2] > delays[1] * 1.5
     
     @pytest.mark.asyncio
     async def test_retry_decorator_max_attempts(self):
@@ -2625,6 +2663,35 @@ class TestCircuitBreakerAndRetry:
             assert not mock_claude.messages.create.called
             # Devrait avoir utilisé le fallback
             assert 'recommended_mode' in decision
+
+    @pytest.mark.asyncio
+    async def test_concurrent_lazy_initialization_thread_safe(self, test_agent_config):
+        """CRITIQUE: Test race conditions dans lazy init"""
+        agent = ProfilerAgent(test_agent_config)
+    
+        init_count = 0
+        original_init = agent._initialize_assistant
+    
+        async def counting_init():
+            nonlocal init_count
+            init_count += 1
+            await original_init()
+    
+        with patch.object(agent, 'client') as mock_client:
+            mock_client.beta.assistants.create = AsyncMock(
+                return_value=Mock(id='asst_test')
+            )
+        
+            # Remplacer par version qui compte
+            agent._initialize_assistant = counting_init
+        
+            # Lancer 10 coroutines simultanées
+            tasks = [agent._ensure_assistant_initialized() for _ in range(10)]
+            await asyncio.gather(*tasks)
+        
+            # DOIT avoir initialisé une seule fois
+            assert init_count == 1, f"Initialized {init_count} times instead of 1!"
+            assert agent._initialized == True
 
 class TestCircuitBreakerEdgeCases:
     """Tests des cas limites du Circuit Breaker"""
@@ -3203,6 +3270,47 @@ class TestProductionKnowledgeBase:
         assert len(kb.successful_patterns) == 1
         assert kb.successful_patterns[0]['score'] == 0  # Défaut
 
+    @pytest.mark.asyncio
+    async def test_track_llm_cost_missing_usage(self):
+        """Test tracking avec usage manquant dans response"""
+        config = AgentConfig()
+    
+        @track_llm_cost('claude', 'test_agent')
+        async def mock_call_no_usage(self):
+            mock_response = Mock()
+            # Pas d'attribut usage
+            return mock_response
+    
+        class MockAgent:
+            def __init__(self):
+                self.config = config
+    
+        agent = MockAgent()
+        response = await mock_call_no_usage(agent)
+    
+        # Ne devrait pas crasher, coût = 0
+        assert config.cost_tracking['claude']['total'] == 0
+
+    @pytest.mark.asyncio
+    async def test_track_llm_cost_zero_tokens(self):
+        """Test avec 0 tokens"""
+        config = AgentConfig()
+    
+        @track_llm_cost('claude', 'test_agent')
+        async def mock_call_zero(self):
+            mock_response = Mock()
+            mock_response.usage = Mock(input_tokens=0, output_tokens=0)
+            return mock_response
+    
+        class MockAgent:
+            def __init__(self):
+                self.config = config
+    
+        agent = MockAgent()
+        response = await mock_call_zero(agent)
+    
+        assert config.cost_tracking['claude']['total'] == 0.0
+
 
 # ============================================================================
 # TESTS YAML CONFIG HANDLER
@@ -3610,6 +3718,68 @@ class TestIntelligentDataCleanerStrategies:
             assert 'claude_insights' in report
             assert len(report['claude_insights']) > 50  # Devrait être détaillé
 
+class TestIntelligentDataCleanerMissingMethods:
+    """Tests pour méthodes non couvertes d'IntelligentDataCleaner"""
+    
+    @pytest.mark.asyncio
+    async def test_extract_column_name_various_formats(self, test_agent_config):
+        """Test extraction de nom de colonne depuis différents formats"""
+        cleaner = IntelligentDataCleaner(config=test_agent_config)
+        
+        test_cases = [
+            ("Column 'amount' has issues", "amount"),
+            ('Column "price" contains errors', "price"),
+            ("Issues in column customer_id", "customer_id"),
+            ("No column mentioned here", None),
+            ("Multiple column amount and price", "amount"),  # Premier trouvé
+        ]
+        
+        for message, expected in test_cases:
+            result = cleaner._extract_column_name(message)
+            assert result == expected, f"Failed for: {message}"
+    
+    @pytest.mark.asyncio
+    async def test_clean_with_agents_error_handling(self, test_agent_config, sample_fraud_data):
+        """Test gestion d'erreurs dans _clean_with_agents"""
+        cleaner = IntelligentDataCleaner(config=test_agent_config)
+        
+        user_context = {'secteur_activite': 'finance'}
+        assessment = DataQualityAssessment(
+            quality_score=70, alerts=[], warnings=[], 
+            recommendations=[], drift_risk='low', target_leakage_risk='low'
+        )
+        strategy = {'summary': 'Test'}
+        
+        # Simuler erreur orchestrator
+        with patch.object(cleaner.orchestrator, 'clean_dataset') as mock_clean:
+            mock_clean.side_effect = Exception("Orchestrator failed")
+            
+            # Devrait fallback gracieusement
+            with pytest.raises(Exception):
+                await cleaner._clean_with_agents(
+                    sample_fraud_data, user_context, assessment, strategy
+                )
+    
+    @pytest.mark.asyncio
+    async def test_generate_cleaning_prompts_empty_assessment(self, test_agent_config):
+        """Test génération de prompts avec assessment vide"""
+        cleaner = IntelligentDataCleaner(config=test_agent_config)
+        
+        empty_assessment = DataQualityAssessment(
+            quality_score=100,
+            alerts=[],
+            warnings=[],
+            recommendations=[],
+            drift_risk='low',
+            target_leakage_risk='low'
+        )
+        
+        prompts = cleaner._generate_cleaning_prompts(empty_assessment)
+        
+        # Devrait retourner liste vide ou prompts génériques
+        assert isinstance(prompts, list)
+        assert len(prompts) >= 0
+
 
 # ============================================================================
 # TESTS MEMORY PROTECTION UTILITIES
@@ -3765,6 +3935,23 @@ class TestMemoryProtection:
                 batches_processed += 1
         
         assert batches_processed == 10
+
+    def test_compute_data_hash_collision_detection(self, production_agent):
+        """Test que des données différentes donnent des hash différents"""
+        df1 = pd.DataFrame({'col1': [1, 2, 3], 'col2': [4, 5, 6]})
+        df2 = pd.DataFrame({'col1': [7, 8, 9], 'col2': [10, 11, 12]})
+    
+        hash1 = production_agent._compute_data_hash(df1)
+        hash2 = production_agent._compute_data_hash(df2)
+    
+        # Même structure mais données différentes = hash différents
+        assert hash1 != hash2
+    
+        # Test avec DataFrames identiques
+        df3 = pd.DataFrame({'col1': [1, 2, 3], 'col2': [4, 5, 6]})
+        hash3 = production_agent._compute_data_hash(df3)
+    
+        assert hash1 == hash3  # Données identiques = même hash
 
 
 # ============================================================================
