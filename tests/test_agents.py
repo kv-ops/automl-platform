@@ -1089,85 +1089,85 @@ class TestAdaptiveTemplateSystemWithClaude:
         assert stats['claude_effectiveness']['enhancement_rate'] == 0.7
 
 
-@pytest.mark.asyncio
-async def test_claude_select_best_pattern_detailed(temp_dir):
-    """Test complet de sélection de pattern avec Claude"""
-    system = AdaptiveTemplateSystem(
-        template_dir=Path(temp_dir),
-        use_claude=True,
-        anthropic_api_key="test-key"
-    )
+    @pytest.mark.asyncio
+    async def test_claude_select_best_pattern_detailed(temp_dir):
+         """Test complet de sélection de pattern avec Claude"""
+        system = AdaptiveTemplateSystem(
+            template_dir=Path(temp_dir),
+            use_claude=True,
+            anthropic_api_key="test-key"
+        )
     
-    # Patterns avec contextes variés
-    system.learned_patterns['test_problem'] = [
-        {
-            'context': {'n_samples': 1000, 'business_sector': 'finance'},
-            'config': {'algorithms': ['XGBoost']},
-            'success_score': 0.85
-        },
-        {
-            'context': {'n_samples': 1100, 'business_sector': 'banking'},
-            'config': {'algorithms': ['LightGBM']},
-            'success_score': 0.90
-        }
-    ]
+        # Patterns avec contextes variés
+        system.learned_patterns['test_problem'] = [
+            {
+                'context': {'n_samples': 1000, 'business_sector': 'finance'},
+                'config': {'algorithms': ['XGBoost']},
+                'success_score': 0.85
+            },
+            {
+                'context': {'n_samples': 1100, 'business_sector': 'banking'},
+                'config': {'algorithms': ['LightGBM']},
+                'success_score': 0.90
+            }
+        ]
     
-    with patch.object(system, 'claude_client') as mock_claude:
-        mock_response = Mock()
-        mock_response.content = [Mock(text=json.dumps({
-            'best_pattern_id': 1,
-            'confidence': 0.85,
-            'reasoning': 'Banking sector is semantically close to finance',
-            'semantic_similarity': 0.92
-        }))]
-        mock_claude.messages.create = AsyncMock(return_value=mock_response)
+        with patch.object(system, 'claude_client') as mock_claude:
+            mock_response = Mock()
+            mock_response.content = [Mock(text=json.dumps({
+                'best_pattern_id': 1,
+                'confidence': 0.85,
+                'reasoning': 'Banking sector is semantically close to finance',
+                'semantic_similarity': 0.92
+            }))]
+            mock_claude.messages.create = AsyncMock(return_value=mock_response)
         
-        current_context = {'business_sector': 'banking', 'n_samples': 1050}
+            current_context = {'business_sector': 'banking', 'n_samples': 1050}
         
-        pattern = await system._claude_select_best_pattern('test_problem', current_context)
+            pattern = await system._claude_select_best_pattern('test_problem', current_context)
         
-        # Vérifier sélection sémantique (pas juste numérique)
-        assert pattern is not None
-        assert pattern['algorithms'] == ['LightGBM']
-        assert mock_claude.messages.create.called
+            # Vérifier sélection sémantique (pas juste numérique)
+            assert pattern is not None
+            assert pattern['algorithms'] == ['LightGBM']
+            assert mock_claude.messages.create.called
         
-        # Vérifier le prompt envoyé
-        call_args = mock_claude.messages.create.call_args
-        prompt = call_args.kwargs['messages'][0]['content']
-        assert 'semantic similarity' in prompt.lower()
+            # Vérifier le prompt envoyé
+            call_args = mock_claude.messages.create.call_args
+            prompt = call_args.kwargs['messages'][0]['content']
+            assert 'semantic similarity' in prompt.lower()
 
-def test_summarize_config(temp_dir):
-    """Test summarize_config pour Claude"""
-    system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
+    def test_summarize_config(temp_dir):
+        """Test summarize_config pour Claude"""
+        system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
     
-    full_config = {
-        'task': 'classification',
-        'algorithms': ['XGBoost', 'LightGBM', 'CatBoost', 'RandomForest'],
-        'preprocessing': {'handle_missing': True, 'scale': True},
-        'feature_engineering': {'polynomial': True},
-         'primary_metric': 'f1'
-      }
+        full_config = {
+            'task': 'classification',
+            'algorithms': ['XGBoost', 'LightGBM', 'CatBoost', 'RandomForest'],
+            'preprocessing': {'handle_missing': True, 'scale': True},
+            'feature_engineering': {'polynomial': True},
+             'primary_metric': 'f1'
+          }
     
-     summary = system._summarize_config(full_config)
+         summary = system._summarize_config(full_config)
     
-     # Vérifier condensation
-     assert summary['task'] == 'classification'
-     assert len(summary['algorithms']) == 3  # Top 3 seulement
-     assert summary['has_preprocessing'] == True
-     assert summary['has_feature_engineering'] == True
-     assert summary['primary_metric'] == 'f1'
+         # Vérifier condensation
+         assert summary['task'] == 'classification'
+         assert len(summary['algorithms']) == 3  # Top 3 seulement
+         assert summary['has_preprocessing'] == True
+         assert summary['has_feature_engineering'] == True
+         assert summary['primary_metric'] == 'f1'
 
-def test_summarize_config_handles_empty(self, temp_dir):
-     """Test summarize_config avec config vide"""
-     system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
+    def test_summarize_config_handles_empty(self, temp_dir):
+         """Test summarize_config avec config vide"""
+         system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
     
-     empty_config = {}
-     summary = system._summarize_config(empty_config)
+         empty_config = {}
+         summary = system._summarize_config(empty_config)
     
-     assert summary['task'] == 'unknown'
-     assert summary['algorithms'] == []
-     assert summary['has_preprocessing'] == False
-     assert summary['has_feature_engineering'] == False
+         assert summary['task'] == 'unknown'
+         assert summary['algorithms'] == []
+         assert summary['has_preprocessing'] == False
+         assert summary['has_feature_engineering'] == False
 
 class TestAdaptiveTemplateSystemDetailedMethods:
     """Tests des méthodes privées de AdaptiveTemplateSystem"""
