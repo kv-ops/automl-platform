@@ -342,11 +342,10 @@ class TestIntelligentContextDetectorWithClaude:
     @pytest.mark.asyncio
     async def test_claude_enabled_initialization(self):
         """Test initialisation avec Claude activé"""
-        with patch.object(detector, 'claude_client', new_callable=AsyncMock) as mock_claude_class:
-            detector = IntelligentContextDetector(anthropic_api_key="test-key")
+        detector = IntelligentContextDetector(anthropic_api_key="test-key")
             
             assert detector.use_claude == True
-            assert detector.model == "claude-sonnet-4-20250514"
+            assert detector.model == "claude-sonnet-4-5-20250929"
     
     @pytest.mark.asyncio
     async def test_claude_enhanced_detection(self, sample_fraud_data):
