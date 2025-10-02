@@ -136,7 +136,7 @@ class IntelligentContextDetector(AsyncInitMixin):
         
         if self.use_claude:
             self._anthropic_api_key = anthropic_api_key
-            self.model = "claude-sonnet-4-20250514"
+            self.model = "claude-sonnet-4-5-20250929"
             logger.info("IntelligentContextDetector with Claude SDK enabled")
         else:
             self.claude_client = None
