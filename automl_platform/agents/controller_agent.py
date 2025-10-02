@@ -39,7 +39,7 @@ class ControllerAgent:
         self.config = config
         
         # Initialize Claude client
-        anthropic_api_key = config.openai_api_key  # Reuse same config field for now
+        anthropic_api_key = config.anthropic_api_key
         if AsyncAnthropic is not None and anthropic_api_key:
             self.client = AsyncAnthropic(api_key=anthropic_api_key)
         else:
