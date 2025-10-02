@@ -84,7 +84,7 @@ class DataCleaningOrchestrator:
         # Initialize Claude client if available
         if self.use_claude:
             self.claude_client = AsyncAnthropic(api_key=self.config.anthropic_api_key)
-            self.claude_model = "claude-sonnet-4-20250514"
+            self.claude_model = "claude-sonnet-4-5-20250929"
             logger.info("💎 Claude SDK enabled for strategic cleaning decisions")
         else:
             self.claude_client = None
