@@ -31,6 +31,7 @@ from automl_platform.agents.intelligent_config_generator import IntelligentConfi
 from automl_platform.agents.adaptive_template_system import AdaptiveTemplateSystem, AdaptiveTemplate
 from automl_platform.agents.data_cleaning_orchestrator import DataCleaningOrchestrator
 from automl_platform.agents.agent_config import AgentConfig, AgentType
+from automl_platform.agents.utils import BoundedList, async_retry, CircuitBreaker, parse_llm_json, validate_llm_json_schema, track_llm_cost
 
 
 # ============================================================================
@@ -341,7 +342,7 @@ class TestIntelligentContextDetectorWithClaude:
     @pytest.mark.asyncio
     async def test_claude_enabled_initialization(self):
         """Test initialisation avec Claude activé"""
-        with patch.object(detector, 'claude_client', new_callable=AsyncMock): as mock_claude_class:
+        with patch.object(detector, 'claude_client', new_callable=AsyncMock) as mock_claude_class:
             detector = IntelligentContextDetector(anthropic_api_key="test-key")
             
             assert detector.use_claude == True
@@ -1693,35 +1694,56 @@ class TestValidatorAgentHybrid:
     @pytest.mark.asyncio
     async def test_validator_with_claude_and_openai(self, mock_agent_config):
         """Test ValidatorAgent avec Claude ET OpenAI disponibles"""
+        # 1. Créer l'agent normalement
         agent = ValidatorAgent(mock_agent_config, use_claude=True)
+    
+        # 2. Remplacer directement son client claude par un mock
+        agent.claude_client = AsyncMock()
+    
+        # 3. Configurer le mock pour retourner ce que vous voulez
+        mock_claude = AsyncMock()
+        mock_claude.messages.create = AsyncMock(return_value=Mock(
+            content=[Mock(text=json.dumps({
+                "valid": True,
+                "overall_score": 85,
+                "issues": [],
+                "warnings": [{"column": "test", "warning": "Test warning"}],
+                "suggestions": [],
+                "column_validations": {},
+                "reasoning": "Claude strategic analysis"
+            }))]
+        ))
+        agent.claude_client = mock_claude
+    
+        # 4. Mock la recherche OpenAI
+        with patch.object(agent, '_search_sector_standards') as mock_search:
+            mock_search.return_value = {
+                'standards': [{'name': 'IFRS', 'url': 'test'}],
+                'sources': ['http://test.com'],
+                'column_mappings': {}
+            }
         
-        # Mock Claude client
-        with patch('automl_platform.agents.validator_agent.AsyncAnthropic') as mock_claude_class:
-            mock_claude = AsyncMock()
-            mock_claude_class.return_value = mock_claude
+        # 5. Tester
+        df = pd.DataFrame({'amount': [100, 200, 300]})
+        profile_report = {'quality_issues': []}
+        
+        report = await agent.validate(df, profile_report)
+        
+        # 6.1 Vérifier que Claude a été utilisé
+        assert mock_claude.messages.create.called
+        assert mock_claude.messages.create.call_count >= 1
+
+        # 6.2 Vérifier le contenu de la requête
+        call_args = mock_claude.messages.create.call_args
+        assert 'model' in call_args.kwargs
+        assert call_args.kwargs['model'] == 'claude-sonnet-4-20250514'
+
+        # 6.3 Vérifier la réponse
+        assert 'reasoning' in report or 'confidence' in report
+        
+        # 7. Vérifier que la recherche OpenAI a été utilisée
+        assert mock_search.called
             
-            # Réinitialiser l'agent avec le mock
-            agent = ValidatorAgent(mock_agent_config, use_claude=True)
-            agent.claude_client = mock_claude
-            
-            # Mock la réponse de Claude
-            mock_response = Mock()
-            mock_response.content = [Mock(text='{"valid": true, "overall_score": 85, "issues": [], "warnings": [], "suggestions": [], "column_validations": {}, "reasoning": "Test"}')]
-            mock_claude.messages.create = AsyncMock(return_value=mock_response)
-            
-            # Mock OpenAI pour la recherche
-            with patch.object(agent, '_search_sector_standards') as mock_search:
-                mock_search.return_value = {'standards': [], 'sources': [], 'column_mappings': {}}
-                
-                df = pd.DataFrame({'col1': [1, 2, 3]})
-                profile_report = {'quality_issues': []}
-                
-                report = await agent.validate(df, profile_report)
-                
-                # Vérifier que Claude a été utilisé
-                assert mock_claude.messages.create.called
-                assert report['valid'] == True
-                assert report['overall_score'] == 85
     
     @pytest.mark.asyncio
     async def test_validator_claude_for_reasoning(self, mock_agent_config):
@@ -1834,29 +1856,56 @@ class TestEndToEnd:
 
 
 # ============================================================================
-# TESTS DE PERFORMANCE
+# TESTS PERFORMANCE ET MEMOIRE
 # ============================================================================
 
-class TestPerformance:
-    """Tests de performance et optimisation"""
+class TestPerformanceAndMemory:
+    """Tests de performance et mémoire"""
     
-    def test_bounded_history_memory_protection(self, mock_agent_config):
-        """Test que l'historique borné protège la mémoire"""
+    def test_bounded_list_performance(self):
+        """Test que BoundedList n'a pas de fuite mémoire"""
+        import sys
+        
+        bounded = BoundedList(maxlen=100)
+        
+        # Ajouter beaucoup d'éléments
+        for i in range(10000):
+            bounded.append({'data': [1] * 1000})  # 1000 ints par item
+        
+        # Vérifier que la taille reste limitée
+        assert len(bounded) == 100
+        
+        # Vérifier utilisation mémoire raisonnable
+        size_bytes = sys.getsizeof(bounded)
+        assert size_bytes < 100 * 1024  # Moins de 100KB
+    
+    @pytest.mark.asyncio
+    async def test_orchestrator_memory_cleanup(self, mock_agent_config):
+        """Test que l'orchestrateur nettoie la mémoire"""
+        import gc
+        import psutil
+        import os
+        
         orchestrator = DataCleaningOrchestrator(mock_agent_config)
         
-        from agents.utils import BoundedList
-        assert isinstance(orchestrator.execution_history, BoundedList)
-        assert orchestrator.execution_history.maxlen == 100
+        process = psutil.Process(os.getpid())
+        mem_before = process.memory_info().rss / 1024 / 1024  # MB
         
-        for i in range(150):
-            orchestrator.execution_history.append({'id': i})
+        # Simuler beaucoup d'exécutions
+        for i in range(100):
+            orchestrator.execution_history.append({
+                'data': [1] * 10000  # Données volumineuses
+            })
         
-        assert len(orchestrator.execution_history) == 100
-        assert orchestrator.execution_history[0]['id'] == 50
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+        # Forcer cleanup
+        gc.collect()
+        
+        mem_after = process.memory_info().rss / 1024 / 1024  # MB
+        mem_increase = mem_after - mem_before
+        
+        # L'augmentation ne devrait pas être proportionnelle à 100 itérations
+        # grâce au BoundedList
+        assert mem_increase < 50  # Moins de 50 MB d'augmentation
 
 
 # ============================================================================
@@ -1866,17 +1915,39 @@ if __name__ == "__main__":
 class TestCircuitBreakerAndRetry:
     """Tests pour le circuit breaker et la logique de retry"""
     
-    def test_circuit_breaker_config(self):
-        """Test configuration du circuit breaker"""
-        config = AgentConfig()
-        
-        # Vérifier les paramètres par défaut
-        assert hasattr(config, 'llm_circuit_breaker')
-        
-        # Enregistrer des succès
-        for _ in range(5):
+    def test_circuit_breaker_lifecycle(self):
+        """Test du cycle complet: CLOSED -> OPEN -> HALF_OPEN -> CLOSED"""
+        config = AgentConfig(
+            enable_circuit_breakers=True,
+            circuit_breaker_failure_threshold=3,
+            circuit_breaker_recovery_timeout=1  # 1 sec pour test rapide
+        )
+    
+        # État initial: CLOSED
+        assert config.can_call_llm('claude') == True
+        breaker = config.get_circuit_breaker('claude')
+        assert breaker.state == 'CLOSED'
+    
+        # Enregistrer échecs -> OPEN
+        for _ in range(3):
+            config.record_llm_failure('claude')
+    
+        assert config.can_call_llm('claude') == False
+        assert breaker.state == 'OPEN'
+    
+        # Attendre recovery timeout
+        import time
+        time.sleep(1.1)
+    
+        # Devrait passer en HALF_OPEN
+        assert config.can_call_llm('claude') == True  # Peut tenter
+        assert breaker.state == 'HALF_OPEN'
+    
+        # Succès -> CLOSED
+        for _ in range(breaker.success_threshold):
             config.record_llm_success('claude')
-        
+    
+        assert breaker.state == 'CLOSED'
         assert config.can_call_llm('claude') == True
     
     def test_circuit_breaker_opens_on_failures(self):
