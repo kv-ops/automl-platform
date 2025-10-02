@@ -72,7 +72,7 @@ class ValidatorAgent:
         
         # Initialize Claude client for reasoning
         if self.use_claude:
-            self.claude_client = AsyncAnthropic()
+            self.claude_client = AsyncAnthropic(api_key=config.anthropic_api_key)
             self.claude_model = "claude-sonnet-4-5-20250929"
             logger.info("💎 Claude SDK enabled for validation reasoning")
         else:
