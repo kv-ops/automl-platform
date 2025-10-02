@@ -199,7 +199,7 @@ class IntelligentConfigGenerator:
         # Initialize Claude client if available
         if self.use_claude:
             self.claude_client = AsyncAnthropic()
-            self.model = "claude-sonnet-4-20250514"
+            self.model = "claude-sonnet-4-5-20250929"
             logger.info("💎 Claude SDK enabled for strategic config generation")
         else:
             self.claude_client = None
