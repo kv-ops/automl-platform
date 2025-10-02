@@ -47,6 +47,16 @@ from automl_platform.agents.utils import (
     PerformanceMonitor,
     HealthChecker
 )
+from automl_platform.agents.universal_ml_agent import (
+    ProductionUniversalMLAgent,
+    ProductionMLPipelineResult,
+    ProductionKnowledgeBase,
+    MemoryMonitor,
+    MemoryBudget,
+    LRUMemoryCache,
+    memory_safe,
+    dataframe_batch_processor
+)
 
 # Mock des prompts si les fichiers n'existent pas
 try:
@@ -266,28 +276,39 @@ class TestProfilerAgentUpdated:
         assert agent._initialized == True
     
     @pytest.mark.asyncio
-    async def test_analyze_with_lazy_init(self, test_agent_config, mock_openai_client):
+    async def test_analyze_with_lazy_init(self, test_agent_config):
         """Test que l'analyse s'initialise à la première utilisation"""
         agent = ProfilerAgent(test_agent_config)
-        agent.client = mock_openai_client
-        
+    
         assert agent._initialized == False
+    
+        # Utiliser patch.object pour mocker le client de l'agent
+        with patch.object(agent, 'client') as mock_client:
+            # Configurer les mocks pour l'initialisation
+            mock_client.beta.assistants.create = AsyncMock(return_value=Mock(id='asst_test'))
+            mock_client.beta.threads.create = AsyncMock(return_value=Mock(id='thread_test'))
         
-        mock_openai_client.beta.threads.runs.retrieve.side_effect = [
-            Mock(status='in_progress'),
-            Mock(status='in_progress'),
-            Mock(status='completed')
-        ]
-        mock_message = Mock()
-        mock_message.role = 'assistant'
-        mock_message.content = [Mock(text=Mock(value='{"quality_issues": []}'))]
-        mock_openai_client.beta.threads.messages.list.return_value = Mock(data=[mock_message])
+            # Configurer les mocks pour l'exécution
+            mock_client.beta.threads.runs.create = AsyncMock(return_value=Mock(id='run_test'))
+            mock_client.beta.threads.runs.retrieve = AsyncMock(side_effect=[
+                Mock(status='in_progress'),
+                Mock(status='in_progress'),
+                Mock(status='completed')
+            ])
         
-        df = pd.DataFrame({'col1': [1, 2, 3]})
-        result = await agent.analyze(df)
+            # Configurer le mock pour la récupération des messages
+            mock_message = Mock()
+            mock_message.role = 'assistant'
+            mock_message.content = [Mock(text=Mock(value='{"quality_issues": []}'))]
+            mock_client.beta.threads.messages.list = AsyncMock(return_value=Mock(data=[mock_message]))
         
-        assert agent._initialized == True
-        assert isinstance(result, dict)
+              # Exécuter l'analyse
+            df = pd.DataFrame({'col1': [1, 2, 3]})
+            result = await agent.analyze(df)
+        
+            # Vérifications
+            assert agent._initialized == True
+            assert isinstance(result, dict)
     
     @pytest.mark.asyncio
     async def test_analyze_without_openai(self, test_agent_config):
@@ -1818,26 +1839,26 @@ class TestValidatorAgentHybrid:
     """Tests pour l'architecture hybride du ValidatorAgent"""
     
     @pytest.mark.asyncio
-    async def test_validator_with_claude_and_openai(self, test_agent_config):
+    def test_validator_with_claude_and_openai(self, test_agent_config):
         """Test ValidatorAgent avec Claude ET OpenAI disponibles"""
         # 1. Créer l'agent normalement
         agent = ValidatorAgent(test_agent_config, use_claude=True)
     
-        # 2. Configurer le mock pour retourner ce que vous voulez
-    with patch.object(agent, 'claude_client') as mock_claude_client:
-        mock_claude = AsyncMock()
-        mock_claude.messages.create = AsyncMock(return_value=Mock(
-            content=[Mock(text=json.dumps({
-                "valid": True,
-                "overall_score": 85,
-                "issues": [],
-                "warnings": [{"column": "test", "warning": "Test warning"}],
-                "suggestions": [],
-                "column_validations": {},
-                "reasoning": "Claude strategic analysis"
-            }))]
-        ))
-        agent.claude_client = mock_claude
+        # 2. Configurer le mock
+        with patch.object(agent, 'claude_client') as mock_claude_client:
+            mock_claude = AsyncMock()
+            mock_claude.messages.create = AsyncMock(return_value=Mock(
+                content=[Mock(text=json.dumps({
+                    "valid": True,
+                    "overall_score": 85,
+                    "issues": [],
+                    "warnings": [{"column": "test", "warning": "Test warning"}],
+                    "suggestions": [],
+                    "column_validations": {},
+                    "reasoning": "Claude strategic analysis"
+                }))]
+            ))
+            agent.claude_client = mock_claude
     
         # 3. Mock la recherche OpenAI
         with patch.object(agent, '_search_sector_standards') as mock_search:
@@ -2365,34 +2386,41 @@ class TestCircuitBreakerAndRetry:
             config.record_llm_success('claude')
     
         assert breaker.state == 'CLOSED'
-        assert config.can_call_llm('claude') == True
+        assert config.can_call_llm('claude') == True 
     
-    def test_circuit_breaker_opens_on_failures(self):
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_opens_on_failures(self):
         """Test que le circuit breaker s'ouvre après échecs"""
         config = AgentConfig(
             enable_circuit_breakers=True,
             circuit_breaker_failure_threshold=3
         )
-    
-        breaker = config.get_circuit_breaker('claude')
-    
+
         # Enregistrer des échecs
         for _ in range(5):
             config.record_llm_failure('claude')
+
+        # Récupérer le breaker APRÈS les échecs
+        breaker = config.get_circuit_breaker('claude')
     
         # Le circuit devrait être ouvert
         assert breaker.state == 'OPEN'
         assert config.can_call_llm('claude') == False
+         
+        @pytest.mark.asyncio
+        async def test_retry_decorator_success(self):
+            """Test que retry réussit du premier coup"""
     
-        
-        @async_retry(max_attempts=3)
+            call_count = 0
+    
+          @async_retry(max_attempts=3)
         async def test_func():
             nonlocal call_count
             call_count += 1
             return "success"
-        
+    
         result = await test_func()
-        
+    
         assert result == "success"
         assert call_count == 1  # Devrait réussir du premier coup
     
@@ -3207,7 +3235,7 @@ class TestIntelligentDataCleaner:
         
         # Mock des composants
         with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
-            mock_assess.return_value = sample_quality_assessment
+            mock_assess.return_value = DataQualityAssessment(
                 quality_score=75.0,
                 alerts=[],
                 warnings=[],
@@ -3216,18 +3244,18 @@ class TestIntelligentDataCleaner:
                 target_leakage_risk='low'
             )
             
-            with patch.object(cleaner_no_claude, '_clean_with_agents') as mock_clean:
-                mock_clean.return_value = (sample_fraud_data, {'method': 'agents'})
+         with patch.object(cleaner_no_claude, '_clean_with_agents') as mock_clean:
+            mock_clean.return_value = (sample_fraud_data, {'method': 'agents'})
                 
-                cleaned_df, report = await cleaner_no_claude.smart_clean(
-                    sample_fraud_data,
-                    user_context,
-                    mode='auto'
-                )
+            cleaned_df, report = await cleaner_no_claude.smart_clean(
+                sample_fraud_data,
+                user_context,
+                mode='auto'
+            )
                 
-                assert cleaned_df is not None
-                assert 'summary' in report
-                assert 'initial_quality' in report['summary']
+            assert cleaned_df is not None
+            assert 'summary' in report
+            assert 'initial_quality' in report['summary']
     
     @pytest.mark.asyncio
     async def test_recommend_cleaning_approach(self, cleaner_no_claude, sample_fraud_data):
@@ -3235,7 +3263,7 @@ class TestIntelligentDataCleaner:
         user_context = {'secteur_activite': 'finance'}
         
         with patch.object(cleaner_no_claude.quality_agent, 'assess') as mock_assess:
-            mock_assess.return_value = sample_quality_assessment
+            mock_assess.return_value = DataQualityAssessment(
                 quality_score=60.0,
                 alerts=[{'message': 'Test alert'}],
                 warnings=[],
@@ -3260,7 +3288,7 @@ class TestIntelligentDataCleaner:
         user_context = {'secteur_activite': 'finance'}
         
         with patch.object(cleaner_with_claude.quality_agent, 'assess') as mock_assess:
-            mock_assess.return_value = sample_quality_assessment
+            mock_assess.return_value = DataQualityAssessment(
                 quality_score=70.0,
                 alerts=[],
                 warnings=[],
