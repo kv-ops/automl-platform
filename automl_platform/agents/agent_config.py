@@ -74,7 +74,7 @@ class AgentConfig:
     # ============================================================================
     # CLAUDE CONFIGURATION
     # ============================================================================
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-sonnet-4-5-20250929"
     claude_max_tokens: int = 4000
     claude_temperature: float = 0.3
     claude_timeout_seconds: int = 120
