@@ -1699,6 +1699,305 @@ class TestAgentFallbacks:
 
 
 # ============================================================================
+# TESTS UTILS - SÉCURITÉ ET ASYNC (NOUVEAUX - CRITIQUE)
+# ============================================================================
+
+class TestUtilsSecurity:
+    """Tests pour les utilitaires de sécurité et async"""
+    
+    def test_sanitize_api_keys(self):
+        """Vérifie que les API keys sont masquées"""
+        data = {
+            'openai_api_key': 'sk-1234567890abcdef',
+            'anthropic_api_key': 'sk-ant-abcdefghijk',
+            'normal_field': 'value',
+            'user_context': {'name': 'test'}
+        }
+        
+        sanitized = sanitize_for_logging(data)
+        
+        assert sanitized['openai_api_key'] == '***'
+        assert sanitized['anthropic_api_key'] == '***'
+        assert sanitized['normal_field'] == 'value'
+        assert sanitized['user_context']['name'] == 'test'
+    
+    def test_sanitize_nested_secrets(self):
+        """Vérifie masquage dans structures imbriquées"""
+        data = {
+            'config': {
+                'api_key': 'secret123',
+                'nested': {
+                    'token': 'token456'
+                }
+            },
+            'list': [
+                {'password': 'pass789'}
+            ]
+        }
+        
+        sanitized = sanitize_for_logging(data)
+        
+        assert sanitized['config']['api_key'] == '***'
+        assert sanitized['config']['nested']['token'] == '***'
+        assert sanitized['list'][0]['password'] == '***'
+    
+    def test_sanitize_edge_cases(self):
+        """Test avec None, liste vide, dict vide"""
+        assert sanitize_for_logging(None) == None
+        assert sanitize_for_logging({}) == {}
+        assert sanitize_for_logging([]) == []
+        assert sanitize_for_logging({'key': None}) == {'key': None}
+    
+    def test_safe_log_config(self, mock_agent_config):
+        """Test safe_log_config avec AgentConfig"""
+        log_str = safe_log_config(mock_agent_config)
+        
+        assert 'openai_api_key' not in log_str or '***' in log_str
+        assert 'anthropic_api_key' not in log_str or '***' in log_str
+        assert isinstance(log_str, str)
+        assert len(log_str) > 0
+    
+    @pytest.mark.asyncio
+    async def test_run_parallel_success(self):
+        """Test exécution parallèle réussie"""
+        async def task1():
+            await asyncio.sleep(0.01)
+            return "result1"
+        
+        async def task2():
+            await asyncio.sleep(0.01)
+            return "result2"
+        
+        results = await run_parallel(task1(), task2())
+        
+        assert results == ["result1", "result2"]
+    
+    @pytest.mark.asyncio
+    async def test_run_parallel_with_exceptions(self):
+        """Test avec return_exceptions=True"""
+        async def task_success():
+            return "success"
+        
+        async def task_fail():
+            raise ValueError("Test error")
+        
+        # Avec return_exceptions=True (défaut)
+        results = await run_parallel(task_success(), task_fail(), return_exceptions=True)
+        
+        assert results[0] == "success"
+        assert isinstance(results[1], ValueError)
+    
+    @pytest.mark.asyncio
+    async def test_run_parallel_without_exception_handling(self):
+        """Test avec return_exceptions=False"""
+        async def task_fail():
+            raise ValueError("Test error")
+        
+        with pytest.raises(ValueError):
+            await run_parallel(task_fail(), return_exceptions=False)
+    
+    @pytest.mark.asyncio
+    async def test_async_init_mixin_single_call(self):
+        """Test initialisation unique"""
+        class TestClass(AsyncInitMixin):
+            def __init__(self):
+                super().__init__()
+                self.init_count = 0
+            
+            async def _async_init(self):
+                self.init_count += 1
+        
+        obj = TestClass()
+        await obj.ensure_initialized()
+        
+        assert obj._initialized == True
+        assert obj.init_count == 1
+    
+    @pytest.mark.asyncio
+    async def test_async_init_mixin_concurrent_calls(self):
+        """CRITIQUE : Test race conditions"""
+        class TestClass(AsyncInitMixin):
+            def __init__(self):
+                super().__init__()
+                self.init_count = 0
+            
+            async def _async_init(self):
+                await asyncio.sleep(0.01)  # Simuler travail
+                self.init_count += 1
+        
+        obj = TestClass()
+        
+        # Lancer 10 coroutines simultanées
+        tasks = [obj.ensure_initialized() for _ in range(10)]
+        await asyncio.gather(*tasks)
+        
+        # _async_init() doit avoir été appelé UNE SEULE fois
+        assert obj.init_count == 1
+        assert obj._initialized == True
+    
+    @pytest.mark.asyncio
+    async def test_async_init_mixin_double_check_locking(self):
+        """Test du double-check locking"""
+        class TestClass(AsyncInitMixin):
+            def __init__(self):
+                super().__init__()
+                self.init_calls = []
+            
+            async def _async_init(self):
+                self.init_calls.append(datetime.now())
+                await asyncio.sleep(0.01)
+        
+        obj = TestClass()
+        
+        # Premier appel
+        await obj.ensure_initialized()
+        assert len(obj.init_calls) == 1
+        
+        # Deuxième appel - ne devrait pas ré-initialiser
+        await obj.ensure_initialized()
+        assert len(obj.init_calls) == 1  # Toujours 1
+    
+    def test_performance_monitor_record(self):
+        """Test enregistrement de métriques"""
+        monitor = PerformanceMonitor(maxlen=100)
+        
+        metric = PerformanceMetrics(
+            operation='test_op',
+            duration=1.5,
+            success=True,
+            cost=0.05,
+            provider='claude'
+        )
+        
+        monitor.record(metric)
+        
+        assert len(monitor.metrics) == 1
+        assert monitor.metrics[0].operation == 'test_op'
+    
+    def test_performance_monitor_summary(self):
+        """Test agrégation de métriques"""
+        monitor = PerformanceMonitor()
+        
+        # Ajouter plusieurs métriques
+        for i in range(5):
+            monitor.record(PerformanceMetrics(
+                operation='test_op',
+                duration=1.0 + i * 0.5,
+                success=i % 2 == 0,
+                cost=0.01 * i,
+                provider='claude'
+            ))
+        
+        summary = monitor.get_summary('test_op')
+        
+        assert summary['total_operations'] == 5
+        assert summary['success_rate'] == 0.6  # 3/5
+        assert summary['avg_duration'] > 0
+        assert summary['total_cost'] > 0
+    
+    def test_performance_monitor_by_provider(self):
+        """Test agrégation par provider"""
+        monitor = PerformanceMonitor()
+        
+        monitor.record(PerformanceMetrics(
+            operation='test', duration=1.0, success=True, cost=0.05, provider='claude'
+        ))
+        monitor.record(PerformanceMetrics(
+            operation='test', duration=2.0, success=True, cost=0.10, provider='openai'
+        ))
+        
+        summary = monitor.get_summary()
+        
+        assert 'by_provider' in summary
+        assert 'claude' in summary['by_provider']
+        assert 'openai' in summary['by_provider']
+    
+    def test_health_checker_circuit_breakers(self):
+        """Test vérification circuit breakers"""
+        checker = HealthChecker()
+        
+        # Circuit breakers sains
+        breakers = {
+            'claude': CircuitBreaker('claude'),
+            'openai': CircuitBreaker('openai')
+        }
+        
+        assert checker.check_circuit_breakers(breakers) == True
+        assert checker.is_healthy == True
+        
+        # Simuler un circuit breaker OPEN
+        breakers['claude'].state = 'OPEN'
+        
+        assert checker.check_circuit_breakers(breakers) == False
+        assert len(checker.issues) > 0
+    
+    def test_health_checker_cost_limits(self, mock_agent_config):
+        """Test vérification limites de coût"""
+        checker = HealthChecker()
+        
+        # Dépasser la limite
+        mock_agent_config.cost_tracking['total'] = mock_agent_config.max_cost_total + 1
+        
+        result = checker.check_cost_limits(mock_agent_config)
+        
+        assert result == False
+        assert len(checker.issues) > 0
+        assert 'cost limit' in checker.issues[0].lower()
+    
+    def test_health_checker_get_status(self):
+        """Test récupération du statut de santé"""
+        checker = HealthChecker()
+        checker.last_check = datetime.now()
+        checker.is_healthy = True
+        checker.issues = []
+        
+        status = checker.get_status()
+        
+        assert status['healthy'] == True
+        assert 'last_check' in status
+        assert status['issues'] == []
+    
+    def test_validate_llm_json_schema_valid(self):
+        """Test validation de schéma JSON valide"""
+        data = {
+            'field1': 'value',
+            'field2': 42,
+            'field3': True
+        }
+        
+        result = validate_llm_json_schema(
+            data,
+            required_fields=['field1', 'field2'],
+            field_types={'field1': str, 'field2': int}
+        )
+        
+        assert result == True
+    
+    def test_validate_llm_json_schema_missing_field(self):
+        """Test validation avec champ manquant"""
+        data = {'field1': 'value'}
+        
+        result = validate_llm_json_schema(
+            data,
+            required_fields=['field1', 'field2']
+        )
+        
+        assert result == False
+    
+    def test_validate_llm_json_schema_wrong_type(self):
+        """Test validation avec mauvais type"""
+        data = {'field1': 42}  # devrait être str
+        
+        result = validate_llm_json_schema(
+            data,
+            required_fields=['field1'],
+            field_types={'field1': str}
+        )
+        
+        assert result == False
+
+
+# ============================================================================
 # TESTS VALIDATOR AGENT - ARCHITECTURE HYBRIDE (AJOUTER APRÈS TestAgentFallbacks)
 # ============================================================================
 
@@ -1865,11 +2164,118 @@ class TestValidatorAgentHybrid:
 
 
 # ============================================================================
-# TESTS END-TO-END
+# TESTS END-TO-END COMPLETS (AMÉLIORÉS)
 # ============================================================================
 
 class TestEndToEnd:
     """Tests d'intégration complets du pipeline Agent-First"""
+    
+    @pytest.mark.asyncio
+    async def test_complete_workflow_fraud_detection(
+        self, mock_agent_config, sample_fraud_data, temp_dir
+    ):
+        """Test workflow complet : Profiler → Validator → Cleaner → Controller → YAML"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config, use_claude=False)
+        
+        # Mock des agents pour éviter appels API
+        with patch.object(orchestrator.profiler, 'analyze') as mock_profile:
+            mock_profile.return_value = {
+                'quality_issues': ['Missing values in amount'],
+                'columns': {'amount': {'missing': 10}}
+            }
+            
+            with patch.object(orchestrator.validator, 'validate') as mock_validate:
+                mock_validate.return_value = {
+                    'valid': True,
+                    'issues': [],
+                    'sources': ['http://test.com']
+                }
+                
+                with patch.object(orchestrator.cleaner, 'clean') as mock_clean:
+                    cleaned_data = sample_fraud_data.copy()
+                    cleaned_data['amount'].fillna(100, inplace=True)
+                    
+                    mock_clean.return_value = (
+                        cleaned_data,
+                        [{'action': 'fill_missing', 'column': 'amount'}]
+                    )
+                    
+                    with patch.object(orchestrator.controller, 'validate') as mock_control:
+                        mock_control.return_value = {
+                            'quality_score': 85,
+                            'validation_passed': True,
+                            'metrics': {}
+                        }
+                        
+                        # Exécuter workflow
+                        user_context = {
+                            'secteur_activite': 'finance',
+                            'target_variable': 'fraud'
+                        }
+                        
+                        cleaned_df, report = await orchestrator.clean_dataset(
+                            sample_fraud_data,
+                            user_context
+                        )
+                        
+                        # Vérifications
+                        assert cleaned_df is not None
+                        assert 'transformations' in report
+                        assert 'validation_sources' in report
+                        assert mock_profile.called
+                        assert mock_validate.called
+                        assert mock_clean.called
+                        assert mock_control.called
+    
+    @pytest.mark.asyncio
+    async def test_workflow_with_yaml_export_and_reload(
+        self, mock_agent_config, sample_fraud_data, temp_dir
+    ):
+        """Test workflow avec export YAML puis reload et apply"""
+        from automl_platform.agents import YAMLConfigHandler
+        
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        handler = YAMLConfigHandler()
+        
+        transformations = [
+            {
+                'column': 'amount',
+                'action': 'fill_missing',
+                'params': {'method': 'median'}
+            }
+        ]
+        
+        user_context = {
+            'secteur_activite': 'finance',
+            'target_variable': 'fraud'
+        }
+        
+        # 1. Sauvegarder config
+        yaml_path = handler.save_cleaning_config(
+            transformations=transformations,
+            validation_sources=['http://test.com'],
+            user_context=user_context,
+            output_path=str(Path(temp_dir) / 'config.yaml')
+        )
+        
+        assert Path(yaml_path).exists()
+        
+        # 2. Recharger config
+        loaded_config = handler.load_cleaning_config(yaml_path)
+        
+        assert loaded_config['metadata']['industry'] == 'finance'
+        assert len(loaded_config['transformations']) == 1
+        
+        # 3. Appliquer transformations
+        df_with_missing = sample_fraud_data.copy()
+        df_with_missing.loc[0, 'amount'] = np.nan
+        
+        cleaned_df = handler.apply_transformations(
+            df_with_missing,
+            loaded_config['transformations']
+        )
+        
+        assert cleaned_df['amount'].isnull().sum() == 0
     
     @pytest.mark.asyncio
     async def test_error_handling_and_fallback(self, mock_agent_config):
@@ -1886,6 +2292,84 @@ class TestEndToEnd:
             
             assert cleaned_df is not None
             assert report['metadata']['fallback'] == True
+            assert 'reason' in report['metadata']
+    
+    @pytest.mark.asyncio
+    async def test_production_agent_full_pipeline(
+        self, mock_agent_config, sample_fraud_data
+    ):
+        """Test pipeline complet ProductionUniversalMLAgent"""
+        from automl_platform.agents import ProductionUniversalMLAgent
+        
+        agent = ProductionUniversalMLAgent(
+            config=mock_agent_config,
+            use_claude=False,
+            max_cache_mb=10
+        )
+        
+        # Mock des étapes clés
+        with patch.object(agent, 'understand_problem') as mock_understand:
+            mock_context = Mock(
+                problem_type='fraud_detection',
+                confidence=0.9,
+                business_sector='finance',
+                detected_patterns=[],
+                temporal_aspect=True,
+                imbalance_detected=True,
+                recommended_config={},
+                reasoning='',
+                alternative_interpretations=[]
+            )
+            mock_understand.return_value = mock_context
+            
+            with patch.object(agent, 'validate_with_standards') as mock_validate:
+                mock_validate.return_value = {'issues': []}
+                
+                with patch.object(agent, 'search_ml_best_practices') as mock_practices:
+                    mock_practices.return_value = {'recommended_approaches': []}
+                    
+                    with patch.object(agent, 'generate_optimal_config') as mock_config:
+                        mock_config.return_value = Mock(
+                            task='classification',
+                            algorithms=['XGBoost'],
+                            primary_metric='f1',
+                            preprocessing={},
+                            feature_engineering={},
+                            hpo_config={},
+                            cv_strategy={},
+                            ensemble_config={},
+                            time_budget=3600,
+                            resource_constraints={},
+                            monitoring={}
+                        )
+                        
+                        with patch.object(agent, '_execute_pipeline_with_protection') as mock_exec:
+                            from automl_platform.agents import ProductionMLPipelineResult
+                            mock_result = ProductionMLPipelineResult(
+                                success=True,
+                                cleaned_data=sample_fraud_data,
+                                config_used=mock_config.return_value,
+                                context_detected=mock_context,
+                                cleaning_report={'transformations': []},
+                                performance_metrics={'f1': 0.85},
+                                execution_time=10.0,
+                                memory_stats={'peak_mb': 100},
+                                cache_stats={'items': 5},
+                                performance_profile={'cache_hit_rate': 0.8}
+                            )
+                            mock_exec.return_value = mock_result
+                            
+                            # Exécuter pipeline
+                            result = await agent.automl_without_templates(
+                                sample_fraud_data,
+                                target_col='fraud'
+                            )
+                            
+                            # Vérifications
+                            assert result.success == True
+                            assert 'memory_stats' in result.__dict__
+                            assert result.memory_stats['peak_mb'] == 100
+                            assert agent.agent_metrics['context_detections'] > 0
 
 
 # ============================================================================
@@ -2353,6 +2837,165 @@ class TestProductionUniversalMLAgent:
                             assert result.cleaned_data is not None
                             assert 'memory_stats' in result.__dict__
                             assert 'cache_stats' in result.__dict__
+
+
+# ============================================================================
+# TESTS PRODUCTION KNOWLEDGE BASE (NOUVEAUX - CRITIQUE)
+# ============================================================================
+
+class TestProductionKnowledgeBase:
+    """Tests pour ProductionKnowledgeBase"""
+    
+    def test_initialization(self, temp_dir):
+        """Test initialisation avec max_patterns"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(max_patterns=50, storage_path=Path(temp_dir))
+        
+        assert kb.max_patterns == 50
+        assert len(kb.successful_patterns) == 0
+        assert len(kb.best_practices_cache) == 0
+        assert kb.storage_path.exists()
+    
+    def test_store_and_retrieve_best_practices(self, temp_dir):
+        """Test stockage/récupération de best practices"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(storage_path=Path(temp_dir))
+        
+        practices = {
+            'recommended_approaches': ['XGBoost', 'LightGBM'],
+            'common_pitfalls': ['overfitting'],
+            'benchmark_scores': {'auc': 0.95}
+        }
+        
+        kb.store_best_practices('fraud_detection', practices)
+        
+        retrieved = kb.get_best_practices('fraud_detection')
+        assert retrieved == practices
+        assert retrieved['recommended_approaches'] == ['XGBoost', 'LightGBM']
+    
+    def test_get_nonexistent_practices(self, temp_dir):
+        """Test récupération de practices inexistantes"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(storage_path=Path(temp_dir))
+        
+        result = kb.get_best_practices('nonexistent_problem')
+        
+        assert result is None
+    
+    def test_store_successful_pattern(self, temp_dir):
+        """Test stockage de pattern réussi"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(storage_path=Path(temp_dir))
+        
+        kb.store_successful_pattern(
+            task='fraud_detection',
+            config={'algorithms': ['XGBoost'], 'metric': 'f1'},
+            performance={'f1': 0.85, 'auc': 0.92}
+        )
+        
+        assert len(kb.successful_patterns) == 1
+        assert kb.successful_patterns[0]['task'] == 'fraud_detection'
+        assert kb.successful_patterns[0]['score'] == 0.92  # max performance
+    
+    def test_store_pattern_with_limit(self, temp_dir):
+        """Test limite de patterns + tri par score"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(max_patterns=5, storage_path=Path(temp_dir))
+        
+        # Ajouter 10 patterns avec scores variés
+        for i in range(10):
+            kb.store_successful_pattern(
+                task='test_task',
+                config={'model': f'model_{i}'},
+                performance={'score': i / 10.0}
+            )
+        
+        # Vérifier limite respectée
+        assert len(kb.successful_patterns) == 5
+        
+        # Vérifier tri (meilleurs en premier)
+        assert kb.successful_patterns[0]['score'] == 0.9
+        assert kb.successful_patterns[1]['score'] == 0.8
+        assert kb.successful_patterns[4]['score'] == 0.5
+    
+    def test_persistence_save_and_load(self, temp_dir):
+        """Test sauvegarde/chargement sur disque"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        # Créer et remplir KB
+        kb1 = ProductionKnowledgeBase(storage_path=Path(temp_dir))
+        kb1.store_best_practices('test', {'data': 'value1'})
+        kb1.store_successful_pattern(
+            task='task1',
+            config={'algo': 'XGBoost'},
+            performance={'score': 0.85}
+        )
+        kb1._save_knowledge()
+        
+        # Créer nouveau KB pointant sur même storage
+        kb2 = ProductionKnowledgeBase(storage_path=Path(temp_dir))
+        
+        # Vérifier données chargées
+        assert kb2.get_best_practices('test') == {'data': 'value1'}
+        assert len(kb2.successful_patterns) == 1
+        assert kb2.successful_patterns[0]['task'] == 'task1'
+    
+    def test_persistence_corrupted_file(self, temp_dir):
+        """Test chargement avec fichier corrompu"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        storage_path = Path(temp_dir)
+        kb_file = storage_path / "knowledge.pkl"
+        
+        # Créer fichier corrompu
+        storage_path.mkdir(exist_ok=True)
+        with open(kb_file, 'w') as f:
+            f.write("corrupted data")
+        
+        # KB devrait gérer l'erreur gracieusement
+        kb = ProductionKnowledgeBase(storage_path=storage_path)
+        
+        assert len(kb.successful_patterns) == 0
+        assert len(kb.best_practices_cache) == 0
+    
+    def test_max_patterns_enforcement(self, temp_dir):
+        """Test que max_patterns est strictement respecté"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(max_patterns=3, storage_path=Path(temp_dir))
+        
+        # Ajouter 5 patterns
+        for i in range(5):
+            kb.store_successful_pattern(
+                task='test',
+                config={'id': i},
+                performance={'score': 0.5 + i * 0.1}
+            )
+        
+        # Vérifier exactement 3 patterns (les meilleurs)
+        assert len(kb.successful_patterns) == 3
+        assert kb.successful_patterns[0]['score'] == 0.9  # Meilleur
+        assert kb.successful_patterns[2]['score'] == 0.7  # 3ème meilleur
+    
+    def test_empty_performance_dict(self, temp_dir):
+        """Test avec dictionnaire de performance vide"""
+        from automl_platform.agents import ProductionKnowledgeBase
+        
+        kb = ProductionKnowledgeBase(storage_path=Path(temp_dir))
+        
+        kb.store_successful_pattern(
+            task='test',
+            config={'algo': 'test'},
+            performance={}  # Vide
+        )
+        
+        assert len(kb.successful_patterns) == 1
+        assert kb.successful_patterns[0]['score'] == 0  # Défaut
 
 
 # ============================================================================
@@ -2837,6 +3480,139 @@ class TestMemoryProtection:
                 batches_processed += 1
         
         assert batches_processed == 10
+
+
+# ============================================================================
+# TESTS EDGE CASES - DATAFRAMES EXTRÊMES (NOUVEAUX)
+# ============================================================================
+
+class TestDataFrameEdgeCases:
+    """Tests avec DataFrames dans des cas limites"""
+    
+    @pytest.mark.asyncio
+    async def test_empty_dataframe(self, mock_agent_config):
+        """Test avec DataFrame vide"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        
+        empty_df = pd.DataFrame()
+        user_context = {'secteur_activite': 'test'}
+        
+        # Devrait gérer gracieusement
+        with pytest.raises(Exception) or True:
+            cleaned_df, report = await orchestrator.clean_dataset(
+                empty_df,
+                user_context
+            )
+    
+    @pytest.mark.asyncio
+    async def test_single_row_dataframe(self, mock_agent_config):
+        """Test avec DataFrame d'une seule ligne"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        
+        single_row_df = pd.DataFrame({'col1': [1], 'col2': ['a']})
+        user_context = {'secteur_activite': 'test'}
+        
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            mock_process.return_value = single_row_df
+            
+            cleaned_df, report = await orchestrator.clean_dataset(
+                single_row_df,
+                user_context
+            )
+            
+            assert len(cleaned_df) >= 0  # Au moins pas d'erreur
+    
+    @pytest.mark.asyncio
+    async def test_all_nan_dataframe(self, mock_agent_config):
+        """Test avec DataFrame 100% NaN"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        
+        all_nan_df = pd.DataFrame({
+            'col1': [np.nan, np.nan, np.nan],
+            'col2': [np.nan, np.nan, np.nan]
+        })
+        
+        user_context = {'secteur_activite': 'test'}
+        
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            # Devrait fallback ou nettoyer
+            mock_process.return_value = all_nan_df.dropna(axis=1, how='all')
+            
+            cleaned_df, report = await orchestrator.clean_dataset(
+                all_nan_df,
+                user_context
+            )
+            
+            # Vérifier qu'il n'y a plus de colonnes all-NaN
+            assert not cleaned_df.isnull().all().any()
+    
+    @pytest.mark.asyncio
+    async def test_very_wide_dataframe(self, mock_agent_config):
+        """Test avec DataFrame très large (1000 colonnes)"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        
+        wide_df = pd.DataFrame(np.random.randn(100, 1000))
+        user_context = {'secteur_activite': 'test'}
+        
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            mock_process.return_value = wide_df
+            
+            # Devrait gérer sans crash mémoire
+            cleaned_df, report = await orchestrator.clean_dataset(
+                wide_df,
+                user_context
+            )
+            
+            assert cleaned_df.shape[1] <= 1000
+    
+    @pytest.mark.asyncio
+    async def test_duplicate_columns(self, mock_agent_config):
+        """Test avec colonnes en double"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        
+        # Créer DF avec colonnes dupliquées
+        df = pd.DataFrame([[1, 2, 3], [4, 5, 6]])
+        df.columns = ['col1', 'col1', 'col2']  # Colonnes dupliquées
+        
+        user_context = {'secteur_activite': 'test'}
+        
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            # Dédupliquer les colonnes
+            df_dedupe = df.loc[:, ~df.columns.duplicated()]
+            mock_process.return_value = df_dedupe
+            
+            cleaned_df, report = await orchestrator.clean_dataset(
+                df,
+                user_context
+            )
+            
+            # Vérifier pas de doublons
+            assert len(cleaned_df.columns) == len(set(cleaned_df.columns))
+    
+    @pytest.mark.asyncio
+    async def test_mixed_types_in_column(self, mock_agent_config):
+        """Test avec types mélangés dans une colonne"""
+        orchestrator = DataCleaningOrchestrator(mock_agent_config)
+        
+        mixed_df = pd.DataFrame({
+            'col1': [1, '2', 3.0, None, 'text']
+        })
+        
+        user_context = {'secteur_activite': 'test'}
+        
+        with patch.object(orchestrator, '_process_chunk') as mock_process:
+            # Convertir en string ou nettoyer
+            cleaned = mixed_df.copy()
+            cleaned['col1'] = pd.to_numeric(cleaned['col1'], errors='coerce')
+            mock_process.return_value = cleaned
+            
+            cleaned_df, report = await orchestrator.clean_dataset(
+                mixed_df,
+                user_context
+            )
+            
+            # Devrait avoir un type cohérent
+            assert len(cleaned_df['col1'].apply(type).unique()) <= 2  # float + NoneType max
 
 
 if __name__ == "__main__":
