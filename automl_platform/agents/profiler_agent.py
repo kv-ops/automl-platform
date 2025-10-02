@@ -206,7 +206,7 @@ class ProfilerAgent:
         """Wait for assistant run to complete"""
         start_time = time.time()
         
-        while time.time() - start_time < self.config.timeout_seconds:
+        while time.time() - start_time < self.config.openai_timeout_seconds:
             run_status = await self.client.beta.threads.runs.retrieve(
                 thread_id=thread_id,
                 run_id=run_id
