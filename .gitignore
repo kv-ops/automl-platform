@@ -127,6 +127,7 @@ data/
 *.xlsx
 *.xls
 *.json
+!tests/fixtures/*.json
 *.h5
 *.hdf5
 *.feather

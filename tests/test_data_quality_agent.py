@@ -4,14 +4,16 @@ Tests for data quality agent module
 Tests for data quality assessment and cleaning agents.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 import json
-from datetime import datetime
-from unittest.mock import Mock, AsyncMock, patch
-import sys
 import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,6 +39,7 @@ class TestRiskLevel:
             (True, RiskLevel.HIGH),
             (False, RiskLevel.NONE),
             ("  medium  ", RiskLevel.MEDIUM),
+            ("super_high", RiskLevel.NONE),
         ],
     )
     def test_from_string_handles_case_and_booleans(self, value, expected):
@@ -51,6 +54,8 @@ class TestRiskLevel:
     def test_from_string_handles_none_and_invalid_types(self):
         assert RiskLevel.from_string(None) is RiskLevel.NONE
         assert RiskLevel.from_string(123, default=RiskLevel.HIGH) is RiskLevel.HIGH
+        assert RiskLevel.from_string(["high"]) is RiskLevel.NONE
+        assert RiskLevel.from_string({"risk": "high"}, default=RiskLevel.LOW) is RiskLevel.LOW
 
 
 class TestDataQualityAssessment:
@@ -182,6 +187,18 @@ class TestDataQualityAssessment:
         assert cloned.drift_risk is RiskLevel.LOW
         assert cloned.target_leakage_risk is RiskLevel.MEDIUM
         assert cloned.alerts == assessment.alerts
+
+    def test_data_quality_assessment_from_legacy_fixture(self):
+        payload = json.loads(
+            Path(__file__).parent.joinpath("fixtures", "legacy_data_quality_assessment.json").read_text()
+        )
+
+        assessment = DataQualityAssessment(**payload)
+
+        assert assessment.drift_risk is RiskLevel.HIGH
+        assert assessment.target_leakage_risk is RiskLevel.HIGH
+        assert assessment.quality_score == pytest.approx(72.5)
+        assert assessment.to_dict()["target_leakage_risk"] == "high"
 
 
 class TestDataRobotStyleQualityMonitor:

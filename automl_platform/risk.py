@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import logging
 from typing import Any, Callable, Optional, Tuple
 
 
@@ -52,7 +53,9 @@ class RiskLevel(str, Enum):
             compatibility with historical boolean leakage indicators.
         default:
             The level returned when the value cannot be mapped. When omitted the
-            method returns ``RiskLevel.NONE`` for unknown inputs.
+            method returns ``RiskLevel.NONE`` for unknown inputs. The fallback is
+            logged at ``DEBUG`` level for observability without polluting normal
+            application logs.
         """
 
         level = cls._convert(value)
@@ -60,8 +63,14 @@ class RiskLevel(str, Enum):
             return level
 
         if default is not None:
+            logging.getLogger(__name__).debug(
+                "RiskLevel.from_string falling back to default %s for value %r", default, value
+            )
             return default
 
+        logging.getLogger(__name__).debug(
+            "RiskLevel.from_string falling back to RiskLevel.NONE for value %r", value
+        )
         return cls.NONE
 
     @classmethod
