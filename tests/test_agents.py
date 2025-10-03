@@ -1915,11 +1915,11 @@ class TestValidatorAgentHybrid:
             )
         
             with patch.object(agent, '_search_sector_standards', 
-                              return_value={
-                                  'standards': [{'name': 'IFRS', 'url': 'test'}],
-                                  'sources': ['http://test.com'],
-                                  'column_mappings': {}
-                              }) as mock_search:
+                return_value={
+                    'standards': [{'name': 'IFRS', 'url': 'test'}],
+                    'sources': ['http://test.com'],
+                    'column_mappings': {}
+                }) as mock_search:
             
                 # Données de test
                 df = pd.DataFrame({'amount': [100, 200, 300]})
