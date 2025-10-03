@@ -18,7 +18,7 @@ import re
 logger = logging.getLogger(__name__)
 
 
-# Risk severity levels for data quality issues
+@dataclass
 class RiskLevel(str, Enum):
     """Risk severity levels for data quality assessment."""
     NONE = 'none'
@@ -27,7 +27,6 @@ class RiskLevel(str, Enum):
     HIGH = 'high'
 
 
-@dataclass
 class DataQualityAssessment:
     """DataRobot-style quality assessment with visual alerts."""
 
