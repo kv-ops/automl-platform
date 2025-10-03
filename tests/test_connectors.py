@@ -1,6 +1,6 @@
 """
-Tests unitaires complets pour tous les connecteurs de données
-Inclut : PostgreSQL, Snowflake, Excel, Google Sheets, CRM
+Tests unitaires complets pour les connecteurs de données
+Inclut : PostgreSQL, Snowflake, BigQuery, Databricks, MongoDB, Excel, Google Sheets, CRM
 """
 
 import pytest
@@ -23,6 +23,9 @@ from automl_platform.api.connectors import (
     # Connecteurs traditionnels
     PostgreSQLConnector,
     SnowflakeConnector,
+    BigQueryConnector,
+    DatabricksConnector,
+    MongoDBConnector,
     # Nouveaux connecteurs
     ExcelConnector,
     GoogleSheetsConnector,
@@ -140,6 +143,23 @@ class TestConnectionConfig:
         assert 'username' not in config_dict
         assert 'password' not in config_dict
 
+    def test_safe_dict_masks_sensitive_fields(self):
+        """Les champs sensibles doivent être masqués dans to_safe_dict."""
+        config = ConnectionConfig(
+            connection_type='databricks',
+            token='secret-token',
+            password='hunter2',
+            credentials_json={'type': 'service_account'},
+            api_key='apikey',
+        )
+
+        safe_dict = config.to_safe_dict()
+
+        assert safe_dict['token'] == '***'
+        assert safe_dict['password'] == '***'
+        assert safe_dict['credentials_json'] == '***'
+        assert safe_dict['api_key'] == '***'
+
 
 class TestBaseConnector:
     """Tests pour la classe de base BaseConnector."""
@@ -168,22 +188,77 @@ class TestBaseConnector:
         class TestConnector(BaseConnector):
             def connect(self): pass
             def disconnect(self): pass
-            def _execute_query(self, query, params=None): 
+            def _execute_query(self, query, params=None):
                 return pd.DataFrame({'col': [1, 2, 3]})
             def _read_table_impl(self, table_name, schema=None): return pd.DataFrame()
             def _write_table_impl(self, df, table_name, schema=None, if_exists='append'): pass
             def list_tables(self, schema=None): return []
             def get_table_info(self, table_name, schema=None): return {}
-        
+
         config = ConnectionConfig(connection_type='test', tenant_id='test_tenant')
         connector = TestConnector(config)
-        
+
         # Exécuter une requête
         result = connector.query("SELECT * FROM test")
-        
+
         # Vérifier le résultat
         assert not result.empty
         assert len(result) == 3
+
+    def test_rate_limiter_is_used(self):
+        """Le rate limiter doit être appelé lorsqu'il est configuré."""
+
+        class LimitedConnector(BaseConnector):
+            def connect(self): pass
+            def disconnect(self): pass
+            def _execute_query(self, query, params=None):
+                return pd.DataFrame({'col': [1]})
+            def _read_table_impl(self, table_name, schema=None): return pd.DataFrame()
+            def _write_table_impl(self, df, table_name, schema=None, if_exists='append'): pass
+            def list_tables(self, schema=None): return []
+            def get_table_info(self, table_name, schema=None): return {}
+
+        config = ConnectionConfig(connection_type='test', requests_per_minute=10)
+        connector = LimitedConnector(config)
+        connector._rate_limiter = MagicMock()
+
+        connector.query("SELECT 1")
+
+        connector._rate_limiter.acquire.assert_called_once()
+
+    def test_run_with_retries_success(self):
+        """La logique de retry doit réessayer avant de réussir."""
+
+        class RetryConnector(BaseConnector):
+            def connect(self): pass
+            def disconnect(self): pass
+            def _execute_query(self, query, params=None):
+                return pd.DataFrame()
+            def _read_table_impl(self, table_name, schema=None): return pd.DataFrame()
+            def _write_table_impl(self, df, table_name, schema=None, if_exists='append'): pass
+            def list_tables(self, schema=None): return []
+            def get_table_info(self, table_name, schema=None): return {}
+
+        config = ConnectionConfig(
+            connection_type='test',
+            max_retries=2,
+            retry_backoff_seconds=0,
+            retry_backoff_factor=1.0,
+        )
+        connector = RetryConnector(config)
+
+        call_count = {'value': 0}
+
+        def flaky_operation():
+            call_count['value'] += 1
+            if call_count['value'] < 3:
+                raise RuntimeError('temporary failure')
+            return 'ok'
+
+        result = connector._run_with_retries('flaky', flaky_operation)
+
+        assert result == 'ok'
+        assert call_count['value'] == 3
 
 
 class TestPostgreSQLConnector:
@@ -1220,6 +1295,43 @@ class TestConnectorFactory:
         with patch('automl_platform.api.connectors.snowflake.connector'):
             connector = ConnectorFactory.create_connector(config)
             assert isinstance(connector, SnowflakeConnector)
+
+    def test_create_bigquery_connector(self):
+        """Test de création d'un connecteur BigQuery."""
+        config = ConnectionConfig(connection_type='bigquery', project_id='demo', dataset_id='dataset')
+        with patch('automl_platform.api.connectors.bigquery') as mock_bigquery:
+            mock_bigquery.Client.return_value = MagicMock()
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, BigQueryConnector)
+
+    def test_create_databricks_connector(self):
+        """Test de création d'un connecteur Databricks."""
+        config = ConnectionConfig(
+            connection_type='databricks',
+            host='adb.databricks.com',
+            http_path='/sql/1.0/endpoints/123',
+            token='secret'
+        )
+        fake_connection = MagicMock()
+        fake_connection.cursor.return_value = MagicMock()
+        with patch('automl_platform.api.connectors.databricks_sql') as mock_db_sql:
+            mock_db_sql.connect.return_value = fake_connection
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, DatabricksConnector)
+
+    def test_create_mongodb_connector(self):
+        """Test de création d'un connecteur MongoDB."""
+        config = ConnectionConfig(
+            connection_type='mongodb',
+            host='localhost',
+            database='testdb'
+        )
+        fake_client = MagicMock()
+        fake_client.__getitem__.return_value = MagicMock()
+        with patch('automl_platform.api.connectors.pymongo') as mock_pymongo:
+            mock_pymongo.MongoClient.return_value = fake_client
+            connector = ConnectorFactory.create_connector(config)
+            assert isinstance(connector, MongoDBConnector)
     
     def test_create_excel_connector(self):
         """Test de création d'un connecteur Excel."""
@@ -1239,6 +1351,63 @@ class TestConnectorFactory:
             config = ConnectionConfig(connection_type='googlesheets')
             connector = ConnectorFactory.create_connector(config)
             assert isinstance(connector, GoogleSheetsConnector)
+
+
+class TestCloudConnectorSecurity:
+    """Tests supplémentaires pour la sécurité et la robustesse des connecteurs cloud."""
+
+    def test_bigquery_credentials_from_env(self, monkeypatch):
+        """Les credentials BigQuery peuvent être fournis via une variable d'environnement."""
+        config = ConnectionConfig(connection_type='bigquery', project_id='demo-project', dataset_id='demo')
+
+        fake_client = MagicMock()
+        fake_credentials = MagicMock(project_id='demo-project')
+        credentials_payload = {
+            'type': 'service_account',
+            'project_id': 'demo-project',
+            'private_key': '-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n',
+            'client_email': 'service-account@demo-project.iam.gserviceaccount.com'
+        }
+
+        with patch('automl_platform.api.connectors.bigquery') as mock_bigquery, \
+             patch('automl_platform.api.connectors.service_account') as mock_service_account:
+            mock_bigquery.Client.return_value = fake_client
+            mock_service_account.Credentials.from_service_account_info.return_value = fake_credentials
+
+            monkeypatch.setenv('GOOGLE_BIGQUERY_CREDENTIALS_JSON', json.dumps(credentials_payload))
+
+            connector = BigQueryConnector(config)
+            connector.connect()
+
+            mock_service_account.Credentials.from_service_account_info.assert_called_once()
+            mock_bigquery.Client.assert_called_once()
+            _, kwargs = mock_bigquery.Client.call_args
+            assert kwargs['credentials'] is fake_credentials
+            assert kwargs['project'] == 'demo-project'
+
+    def test_databricks_env_fallback(self, monkeypatch):
+        """Les paramètres Databricks doivent pouvoir être lus depuis l'environnement."""
+        config = ConnectionConfig(connection_type='databricks')
+
+        fake_connection = MagicMock()
+        fake_connection.cursor.return_value = MagicMock()
+
+        with patch('automl_platform.api.connectors.databricks_sql') as mock_db_sql:
+            mock_db_sql.connect.return_value = fake_connection
+
+            monkeypatch.setenv('DATABRICKS_HOST', 'adb.example.com')
+            monkeypatch.setenv('DATABRICKS_HTTP_PATH', '/sql/path')
+            monkeypatch.setenv('DATABRICKS_TOKEN', 'env-token')
+
+            connector = DatabricksConnector(config)
+            connector.connect()
+
+            mock_db_sql.connect.assert_called_once()
+            _, kwargs = mock_db_sql.connect.call_args
+            assert kwargs['server_hostname'] == 'adb.example.com'
+            assert kwargs['http_path'] == '/sql/path'
+            assert kwargs['access_token'] == 'env-token'
+            assert kwargs['timeout'] == config.timeout
             
             # Alias
             for conn_type in ['google_sheets', 'gsheets']:
@@ -1274,6 +1443,9 @@ class TestConnectorFactory:
         assert 'postgresql' in connectors
         assert 'postgres' in connectors
         assert 'snowflake' in connectors
+        assert 'bigquery' in connectors
+        assert 'databricks' in connectors
+        assert 'mongodb' in connectors
         
         # Vérifier les nouveaux connecteurs
         assert 'excel' in connectors
@@ -1295,6 +1467,7 @@ class TestConnectorFactory:
         assert 'files' in categories
         assert 'cloud' in categories
         assert 'crm' in categories
+        assert 'nosql' in categories
         
         # Vérifier le contenu des catégories
         assert 'postgresql' in categories['databases']
@@ -1302,6 +1475,8 @@ class TestConnectorFactory:
         assert 'excel' in categories['files']
         assert 'googlesheets' in categories['cloud']
         assert 'hubspot' in categories['crm']
+        assert 'bigquery' in categories['databases']
+        assert 'mongodb' in categories['nosql']
     
     def test_invalid_connector_type(self):
         """Test avec type de connecteur invalide."""

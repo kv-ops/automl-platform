@@ -1,5 +1,113 @@
 # Guide de Configuration des Connecteurs AutoML Platform
 
+## ☁️ Google BigQuery
+
+### 1. Préparer le compte de service
+
+1. Créez un projet ou sélectionnez un projet existant dans la [Google Cloud Console](https://console.cloud.google.com/).
+2. Activez l'API **BigQuery** et **BigQuery Storage** (nécessaire pour les chargements rapides).
+3. Dans *IAM & Admin → Service Accounts*, créez un compte de service dédié.
+4. Téléchargez la clé JSON **et** stockez-la de façon sécurisée (Vault, Secret Manager, etc.).
+
+### 2. Configuration sécurisée
+
+```bash
+# Option 1 — chemin vers le fichier (non recommandé en production)
+export GOOGLE_APPLICATION_CREDENTIALS="/chemin/vers/key.json"
+
+# Option 2 — JSON inline (recommandé pour les déploiements containerisés)
+export GOOGLE_BIGQUERY_CREDENTIALS_JSON='{"type": "service_account", ...}'
+```
+
+```python
+config = ConnectionConfig(
+    connection_type='bigquery',
+    project_id='mon-projet',
+    dataset_id='mon_dataset',
+    requests_per_minute=60,      # limite par défaut appliquée par la plateforme
+    max_retries=3,               # nombre de retries
+    retry_backoff_seconds=1.0,   # backoff exponentiel avec jitter
+)
+connector = BigQueryConnector(config)
+```
+
+> 💡 **Astuce sécurité** : utilisez `credentials_json` (dictionnaire) si vous chargez la configuration depuis un secret manager afin d'éviter toute écriture sur disque.
+
+### 3. Respect des quotas & coûts
+
+- Limite par défaut : **60 requêtes/minute** par connecteur pour éviter les dépassements de quota.
+- Ajustez `requests_per_minute` si vous disposez d'un quota personnalisé.
+- BigQuery facture chaque requête : surveillez les volumes via les métriques `ml_connectors_data_volume_bytes`.
+
+### 4. Gestion des erreurs
+
+- Les opérations de lecture utilisent un retry exponentiel (`max_retries`, `retry_backoff_seconds`).
+- Les écritures utilisent un identifiant de job idempotent pour éviter les doublons lors des retries.
+
+---
+
+## 🔥 Databricks SQL Warehouse
+
+### 1. Récupérer les identifiants
+
+1. Dans l'espace de travail Databricks → *Settings → Developer* : générez un **token personnel**.
+2. Depuis votre entrepôt SQL, copiez le **Server Hostname** et le **HTTP Path**.
+
+### 2. Configuration sécurisée
+
+```bash
+export DATABRICKS_HOST="adb-12345.6.azuredatabricks.net"
+export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/abcdef"
+export DATABRICKS_TOKEN="dapiXXXXXXXXXXXXXXXX"
+```
+
+```python
+config = ConnectionConfig(
+    connection_type='databricks',
+    catalog='main',
+    schema='analytics',
+    requests_per_minute=120,   # throttle automatique pour respecter les SLAs
+    max_retries=2,
+    retry_backoff_seconds=1.5,
+)
+connector = DatabricksConnector(config)
+```
+
+> 🔐 Aucun token n'est loggué et les valeurs peuvent être fournies uniquement via les variables d'environnement ci-dessus.
+
+### 3. Bonnes pratiques
+
+- Les requêtes `SELECT` bénéficient du retry exponentiel automatique.
+- Les inserts utilisent un commit explicite ; pour les charges sensibles, préférez un staging table + `MERGE` côté Databricks.
+- Surveillez l'utilisation via les métriques Prometheus fournies (`requests_total`, `latency_seconds`, `errors_total`).
+
+---
+
+## 🍃 MongoDB Atlas & Self-hosted
+
+### 1. Connexion
+
+- Utilisez une URI Atlas standard (`mongodb+srv://user:pass@cluster.mongodb.net/db`).
+- Ou définissez `MONGODB_URI` dans l'environnement ; sinon fournissez `host`, `port`, `username`, `password`.
+
+```python
+import os
+
+config = ConnectionConfig(
+    connection_type='mongodb',
+    connection_uri=os.environ.get('MONGODB_URI'),
+    database='analytics'
+)
+connector = MongoDBConnector(config)
+```
+
+### 2. Astuces de performance
+
+- Limitez `max_rows` pour contrôler le volume de documents rapatriés.
+- Les champs `_id` sont convertis en chaînes pour faciliter la sérialisation JSON.
+
+---
+
 ## 📋 Google Sheets
 
 ### 1. Créer un compte de service Google Cloud
@@ -233,6 +341,12 @@ Pour la production, utilisez :
 - Donnez uniquement les permissions nécessaires
 - Utilisez des comptes de service dédiés
 - Séparez les accès lecture/écriture
+
+### 5. Throttling & retries centralisés
+
+- Configurez `requests_per_minute` pour chaque connecteur critique afin d'éviter les dépassements de quotas.
+- Ajustez `max_retries`, `retry_backoff_seconds` et `retry_backoff_factor` pour répondre aux SLAs internes.
+- Les métriques Prometheus (`ml_connectors_requests_total`, `ml_connectors_latency_seconds`, `ml_connectors_errors_total`) facilitent l'audit.
 
 ## 🧪 Test des Connecteurs
 
