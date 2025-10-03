@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import json
 import asyncio
+import timee
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch, MagicMock, call
@@ -30,6 +31,7 @@ from automl_platform.agents.intelligent_context_detector import IntelligentConte
 from automl_platform.agents.intelligent_config_generator import IntelligentConfigGenerator, OptimalConfig
 from automl_platform.agents.adaptive_template_system import AdaptiveTemplateSystem, AdaptiveTemplate
 from automl_platform.agents.data_cleaning_orchestrator import DataCleaningOrchestrator
+from automl_platform.agents.intelligent_data_cleaning import IntelligentDataCleaner
 from automl_platform.agents.agent_config import AgentConfig, AgentType
 from automl_platform.data_quality_agent import (
     DataQualityAssessment,
@@ -1913,8 +1915,9 @@ class TestValidatorAgentHybrid:
                     }))]
                 )
             )
-        
-            with patch.object(agent, '_search_sector_standards', 
+            mock_claude = mock_claude_client.messages.create
+
+            with patch.object(agent, '_search_sector_standards',
                 return_value={
                     'standards': [{'name': 'IFRS', 'url': 'test'}],
                     'sources': ['http://test.com'],
