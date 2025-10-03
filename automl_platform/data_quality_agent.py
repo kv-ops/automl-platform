@@ -18,6 +18,15 @@ import re
 logger = logging.getLogger(__name__)
 
 
+# Risk severity levels for data quality issues
+class RiskLevel(str, Enum):
+    """Risk severity levels for data quality assessment."""
+    NONE = 'none'
+    LOW = 'low'
+    MEDIUM = 'medium'
+    HIGH = 'high'
+
+
 @dataclass
 class DataQualityAssessment:
     """DataRobot-style quality assessment with visual alerts."""
@@ -746,33 +755,44 @@ class DataRobotStyleQualityMonitor:
         df: pd.DataFrame, 
         target_column: str
     ) -> RiskLevel:
-        """Detect potential target leakage."""
+        """
+        Detect potential target leakage through correlations.
     
+        Returns:
+            RiskLevel based on max correlation found:
+            - HIGH: correlation >= 0.95 (near perfect)
+            - MEDIUM: correlation >= 0.85 (very high)
+            - LOW: correlation >= 0.70 (high)
+            - NONE: correlation < 0.70
+        """
         if target_column not in df.columns:
             return RiskLevel.NONE
             
         target_series = df[target_column]
+        max_correlation = 0.0
         
         # Check for perfect correlation
         for col in df.columns:
             if col == target_column or not pd.api.types.is_numeric_dtype(df[col]):
                 continue
 
-            corr = pd.Series(df[col]).corr(pd.Series(target_series))
-            if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
-                return RiskLevel.HIGH
-
-        return RiskLevel.NONE
+            try:
+                corr = pd.Series(df[col]).corr(pd.Series(target_series))
+                if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
+                    max_correlation = max(max_correlation, abs(corr))
+            except Exception:
+                 continue
         
-        # Check for columns with target in name
-        target_keywords = ['target', 'label', 'y', 'outcome', 'result']
-        for col in df.columns:
-            if col != target_column:
-                if any(keyword in col.lower() for keyword in target_keywords):
-                    return True
+        # Return graduated risk levels
+        if max_correlation >= 0.95:
+            return RiskLevel.HIGH
+        elif max_correlation >= 0.85:
+            return RiskLevel.MEDIUM
+        elif max_correlation >= 0.70:
+            return RiskLevel.LOW
+        else:
+            return RiskLevel.NONE
         
-        return False
-    
     def _assess_statistical_anomalies(self, df: pd.DataFrame) -> Dict:
         """Detect statistical anomalies in the data."""
         
