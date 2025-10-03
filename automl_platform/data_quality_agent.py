@@ -13,12 +13,21 @@ import asyncio
 import os
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 import re
 
 from .risk import RiskLevel
 
 
 logger = logging.getLogger(__name__)
+
+
+class RiskLevel(str, Enum):
+    """Risk severity levels for data quality assessment."""
+    NONE = 'none'
+    LOW = 'low'
+    MEDIUM = 'medium'
+    HIGH = 'high'
 
 
 @dataclass
@@ -30,8 +39,8 @@ class DataQualityAssessment:
     warnings: List[Dict[str, Any]] = field(default_factory=list)  # Non-critical issues
     recommendations: List[Dict[str, Any]] = field(default_factory=list)  # Suggested improvements
     statistics: Dict[str, Any] = field(default_factory=dict)  # Statistical summary
-    drift_risk: RiskLevel = RiskLevel.LOW
-    target_leakage_risk: RiskLevel = RiskLevel.LOW
+    drift_risk: str = "low"  # "low", "medium", "high"
+    target_leakage_risk: str = "low"  # Align with tests expecting string levels
     visualization_data: Dict[str, Any] = field(default_factory=dict)  # Data for visual quality assessment
     ml_context: Optional[Dict[str, Any]] = None  # Agent-First ML context
 
@@ -758,37 +767,49 @@ class DataRobotStyleQualityMonitor:
             "penalty": penalty
         }
     
-    def _detect_target_leakage(self, df: pd.DataFrame, target_column: str) -> RiskLevel:
-        """Detect potential target leakage and rate its severity."""
-
-        risk_level = RiskLevel.LOW
-
-        if not pd.api.types.is_numeric_dtype(df[target_column]):
-            target_series = pd.factorize(df[target_column])[0]
-        else:
-            target_series = df[target_column]
-
+    def _detect_target_leakage(
+        self, 
+        df: pd.DataFrame, 
+        target_column: str
+    ) -> RiskLevel:
+        """
+        Detect potential target leakage through correlations.
+    
+        Returns:
+            RiskLevel based on max correlation found:
+            - HIGH: correlation >= 0.95 (near perfect)
+            - MEDIUM: correlation >= 0.85 (very high)
+            - LOW: correlation >= 0.70 (high)
+            - NONE: correlation < 0.70
+        """
+        if target_column not in df.columns:
+            return RiskLevel.NONE
+            
+        target_series = df[target_column]
+        max_correlation = 0.0
+        
         # Check for perfect correlation
         for col in df.columns:
             if col == target_column or not pd.api.types.is_numeric_dtype(df[col]):
                 continue
 
-            corr = pd.Series(df[col]).corr(pd.Series(target_series))
-            if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
-                return RiskLevel.HIGH
-
-        # Check for columns with target in name
-        target_keywords = ['target', 'label', 'y', 'outcome', 'result']
-        for col in df.columns:
-            if col == target_column:
-                continue
-
-            if any(keyword in col.lower() for keyword in target_keywords):
-                risk_level = RiskLevel.MEDIUM
-                break
-
-        return risk_level
-    
+            try:
+                corr = pd.Series(df[col]).corr(pd.Series(target_series))
+                if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
+                    max_correlation = max(max_correlation, abs(corr))
+            except Exception:
+                 continue
+        
+        # Return graduated risk levels
+        if max_correlation >= 0.95:
+            return RiskLevel.HIGH
+        elif max_correlation >= 0.85:
+            return RiskLevel.MEDIUM
+        elif max_correlation >= 0.70:
+            return RiskLevel.LOW
+        else:
+            return RiskLevel.NONE
+        
     def _assess_statistical_anomalies(self, df: pd.DataFrame) -> Dict:
         """Detect statistical anomalies in the data."""
         
