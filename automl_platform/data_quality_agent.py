@@ -13,6 +13,7 @@ import asyncio
 import os
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 import re
 
 logger = logging.getLogger(__name__)
