@@ -564,8 +564,8 @@ async def assess_data_quality(
         "warnings": assessment.warnings,
         "recommendations": assessment.recommendations,
         "statistics": assessment.statistics,
-        "drift_risk": assessment.drift_risk,
-        "target_leakage_risk": assessment.target_leakage_risk
+        "drift_risk": assessment.drift_risk.value,
+        "target_leakage_risk": assessment.target_leakage_risk.value
     }
     
     if generate_visuals:

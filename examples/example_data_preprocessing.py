@@ -26,9 +26,10 @@ warnings.filterwarnings('ignore')
 from automl_platform.data_prep import DataPreprocessor, validate_data, create_lag_features
 from automl_platform.feature_engineering import AutoFeatureEngineer, create_time_series_features
 from automl_platform.data_quality_agent import (
-    DataQualityAssessment, 
+    DataQualityAssessment,
     DataRobotStyleQualityMonitor,
-    IntelligentDataQualityAgent
+    IntelligentDataQualityAgent,
+    RiskLevel,
 )
 from automl_platform.orchestrator import AutoMLOrchestrator
 from automl_platform.config import AutoMLConfig
@@ -344,7 +345,11 @@ def demonstrate_quality_assessment(X, y):
     logger.info(f"\n📊 QUALITY ASSESSMENT RESULTS")
     logger.info(f"  Overall Quality Score: {assessment.quality_score:.1f}/100")
     logger.info(f"  Drift Risk: {assessment.drift_risk}")
-    logger.info(f"  Target Leakage Risk: {'Yes' if assessment.target_leakage_risk else 'No'}")
+    if assessment.target_leakage_risk == RiskLevel.NONE:
+        leakage_display = "None (no target assessed)"
+    else:
+        leakage_display = assessment.target_leakage_risk.capitalize()
+    logger.info(f"  Target Leakage Risk: {leakage_display}")
     
     # Display alerts
     if assessment.alerts:

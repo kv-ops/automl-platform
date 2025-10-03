@@ -20,7 +20,8 @@ from automl_platform.data_quality_agent import (
     DataQualityAssessment,
     AkkioStyleCleaningAgent,
     DataRobotStyleQualityMonitor,
-    IntelligentDataQualityAgent
+    IntelligentDataQualityAgent,
+    RiskLevel,
 )
 
 
@@ -35,8 +36,8 @@ class TestDataQualityAssessment:
             warnings=[{'type': 'outlier', 'message': 'Outliers detected'}],
             recommendations=[{'priority': 'high', 'action': 'Impute missing'}],
             statistics={'rows': 1000, 'columns': 20},
-            drift_risk='medium',
-            target_leakage_risk=False,
+            drift_risk=RiskLevel.MEDIUM,
+            target_leakage_risk=RiskLevel.MEDIUM,
             visualization_data={'missing_heatmap': {}}
         )
         
@@ -47,8 +48,8 @@ class TestDataQualityAssessment:
         assert assessment.warnings[0]['type'] == 'outlier'
         assert len(assessment.recommendations) == 1
         assert assessment.statistics['rows'] == 1000
-        assert assessment.drift_risk == 'medium'
-        assert assessment.target_leakage_risk is False
+        assert assessment.drift_risk == RiskLevel.MEDIUM
+        assert assessment.target_leakage_risk == RiskLevel.MEDIUM
         assert 'missing_heatmap' in assessment.visualization_data
     
     def test_data_quality_assessment_defaults(self):
@@ -59,16 +60,63 @@ class TestDataQualityAssessment:
             warnings=[],
             recommendations=[],
             statistics={},
-            drift_risk='low',
-            target_leakage_risk=True,
+            drift_risk=RiskLevel.LOW,
+            target_leakage_risk=RiskLevel.LOW,
             visualization_data={}
         )
         
         assert assessment.quality_score == 90.0
         assert assessment.alerts == []
         assert assessment.warnings == []
-        assert assessment.drift_risk == 'low'
-        assert assessment.target_leakage_risk is True
+        assert assessment.drift_risk == RiskLevel.LOW
+        assert assessment.target_leakage_risk == RiskLevel.LOW
+
+    def test_data_quality_assessment_rejects_invalid_leakage_risk(self):
+        """Ensure target_leakage_risk enforces the allowed literal values."""
+        with pytest.raises(ValueError):
+            DataQualityAssessment(
+                quality_score=75.0,
+                alerts=[],
+                warnings=[],
+                recommendations=[],
+                statistics={},
+                drift_risk=RiskLevel.LOW,
+                target_leakage_risk='extreme',
+                visualization_data={}
+            )
+
+
+    def test_data_quality_assessment_normalizes_legacy_boolean_risks(self):
+        """Booleans from historical payloads are normalized into the enum values."""
+        assessment = DataQualityAssessment(
+            quality_score=88.0,
+            alerts=[],
+            warnings=[],
+            recommendations=[],
+            statistics={},
+            drift_risk=True,
+            target_leakage_risk=False,
+            visualization_data={},
+        )
+
+        assert assessment.drift_risk == RiskLevel.HIGH
+        assert assessment.target_leakage_risk == RiskLevel.NONE
+
+    def test_data_quality_assessment_normalizes_string_risks(self):
+        """String inputs are still accepted and normalized into RiskLevel enums."""
+        assessment = DataQualityAssessment(
+            quality_score=82.0,
+            alerts=[],
+            warnings=[],
+            recommendations=[],
+            statistics={},
+            drift_risk="medium",
+            target_leakage_risk="high",
+            visualization_data={},
+        )
+
+        assert assessment.drift_risk is RiskLevel.MEDIUM
+        assert assessment.target_leakage_risk is RiskLevel.HIGH
 
 
 class TestDataRobotStyleQualityMonitor:
@@ -96,17 +144,17 @@ class TestDataRobotStyleQualityMonitor:
         np.random.seed(42)
         df = pd.DataFrame({
             'numeric_clean': np.random.randn(100),
-            'numeric_missing': np.concatenate([np.random.randn(40), [np.nan] * 60]),  # 60% missing
+            'numeric_missing': np.concatenate([np.random.randn(30), [np.nan] * 70]),  # 70% missing
             'numeric_outliers': np.concatenate([np.random.randn(90), [100, -100, 200, -200, 300, 400, 500, -500, 600, -600]]),
             'categorical': np.random.choice(['A', 'B', 'C'], 100),
             'high_cardinality': [f'ID_{i}' for i in range(100)],  # Unique values
             'constant': [1] * 100,
-            'target': np.random.choice([0, 1], 100, p=[0.95, 0.05])  # Severe imbalance
+            'target': np.concatenate([np.zeros(95, dtype=int), np.ones(5, dtype=int)])  # Severe imbalance
         })
-        
+
         # Add duplicates
         df = pd.concat([df, df.iloc[:10]], ignore_index=True)
-        
+
         return df
     
     def test_initialization(self, monitor):
@@ -121,12 +169,20 @@ class TestDataRobotStyleQualityMonitor:
     def test_assess_quality_clean_data(self, monitor, clean_data):
         """Test quality assessment on clean data"""
         assessment = monitor.assess_quality(clean_data, target_column='target')
-        
+
         assert isinstance(assessment, DataQualityAssessment)
         assert assessment.quality_score > 70  # Clean data should have good score
         assert len(assessment.alerts) == 0 or len(assessment.alerts) <= 1  # No or minimal alerts
-        assert assessment.drift_risk in ['low', 'medium', 'high']
-        assert isinstance(assessment.target_leakage_risk, bool)
+        assert assessment.drift_risk in (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH)
+        assert assessment.target_leakage_risk in (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH)
+
+    def test_assess_quality_without_target(self, monitor, clean_data):
+        """When no target column is provided, leakage risk should be marked as none."""
+        features_only = clean_data.drop(columns=['target'])
+
+        assessment = monitor.assess_quality(features_only)
+
+        assert assessment.target_leakage_risk == RiskLevel.NONE
     
     def test_assess_quality_problematic_data(self, monitor, problematic_data):
         """Test quality assessment on problematic data"""
@@ -154,7 +210,7 @@ class TestDataRobotStyleQualityMonitor:
         
         # Check numeric_missing column with 60% missing
         assert 'numeric_missing' in report['column_missing_pct']
-        assert report['column_missing_pct']['numeric_missing'] == 60.0
+        assert report['column_missing_pct']['numeric_missing'] == pytest.approx(63.636, rel=1e-3)
         
         # Should have critical alert for high missing
         assert any('numeric_missing' in str(alert) for alert in report['alerts'])
@@ -246,8 +302,8 @@ class TestDataRobotStyleQualityMonitor:
         })
         df['leaky_feature'] = df['target'] * 2 + np.random.randn(100) * 0.01  # Almost perfect correlation
         
-        has_leakage = monitor._detect_target_leakage(df, 'target')
-        assert has_leakage is True
+        leakage_risk = monitor._detect_target_leakage(df, 'target')
+        assert leakage_risk is RiskLevel.HIGH
     
     def test_detect_target_leakage_naming(self, monitor):
         """Test target leakage detection via column naming"""
@@ -257,8 +313,8 @@ class TestDataRobotStyleQualityMonitor:
             'target': np.random.randn(100)
         })
         
-        has_leakage = monitor._detect_target_leakage(df, 'target')
-        assert has_leakage is True
+        leakage_risk = monitor._detect_target_leakage(df, 'target')
+        assert leakage_risk is RiskLevel.MEDIUM
         
         # Test other suspicious names
         df2 = pd.DataFrame({
@@ -267,8 +323,8 @@ class TestDataRobotStyleQualityMonitor:
             'target': np.random.randn(100)
         })
         
-        has_leakage = monitor._detect_target_leakage(df2, 'target')
-        assert has_leakage is True
+        leakage_risk = monitor._detect_target_leakage(df2, 'target')
+        assert leakage_risk is RiskLevel.MEDIUM
     
     def test_assess_statistical_anomalies(self, monitor, problematic_data):
         """Test statistical anomaly detection"""
@@ -287,9 +343,14 @@ class TestDataRobotStyleQualityMonitor:
     def test_assess_skewness(self, monitor):
         """Test skewness detection"""
         # Create highly skewed data
+        np.random.seed(42)
+        skewed = np.concatenate([
+            np.ones(95),
+            np.full(5, 100.0)
+        ])
         df = pd.DataFrame({
             'normal': np.random.randn(100),
-            'skewed': np.exp(np.random.randn(100)) * 10  # Right-skewed
+            'skewed': skewed  # Strong right skew
         })
         
         report = monitor._assess_statistical_anomalies(df)
@@ -310,18 +371,20 @@ class TestDataRobotStyleQualityMonitor:
         })
         
         risk = monitor._calculate_drift_risk(df)
-        assert risk == 'low'
+        assert risk is RiskLevel.LOW
     
     def test_calculate_drift_risk_medium(self, monitor):
         """Test drift risk calculation for medium-risk data"""
-        # Many numeric features
+        # Mix of high-cardinality categorical data and time features
         df = pd.DataFrame({
             **{f'num_{i}': np.random.randn(100) for i in range(30)},
-            'cat1': np.random.choice(['A', 'B'], 100)
+            'cat1': np.random.choice(['A', 'B'], 100),
+            'customer_id': [f'ID_{i}' for i in range(100)],
+            'event_time': pd.date_range('2024-01-01', periods=100)
         })
-        
+
         risk = monitor._calculate_drift_risk(df)
-        assert risk in ['medium', 'high']
+        assert risk is RiskLevel.MEDIUM
     
     def test_calculate_drift_risk_high(self, monitor):
         """Test drift risk calculation for high-risk data"""
@@ -334,7 +397,7 @@ class TestDataRobotStyleQualityMonitor:
         })
         
         risk = monitor._calculate_drift_risk(df)
-        assert risk == 'high'
+        assert risk is RiskLevel.HIGH
     
     def test_generate_recommendations(self, monitor):
         """Test recommendation generation"""
@@ -675,8 +738,8 @@ class TestIntelligentDataQualityAgent:
                 'missing_cells': 500,
                 'duplicate_rows': 10
             },
-            drift_risk='medium',
-            target_leakage_risk=True,
+            drift_risk=RiskLevel.MEDIUM,
+            target_leakage_risk=RiskLevel.HIGH,
             visualization_data={}
         )
         
@@ -697,7 +760,7 @@ class TestIntelligentDataQualityAgent:
         assert 'High missing values' in report
         assert 'Severe class imbalance' in report
         assert 'Data Drift Risk: **medium**' in report
-        assert 'Target Leakage Risk: **Yes**' in report
+        assert 'Target Leakage Risk: **High**' in report
         
         # Check recommendations formatting
         assert '### 1. Address Missing Data' in report
@@ -719,8 +782,8 @@ class TestIntelligentDataQualityAgent:
                 }
             ],
             statistics={'rows': 100, 'columns': 5},
-            drift_risk='low',
-            target_leakage_risk=False,
+            drift_risk=RiskLevel.LOW,
+            target_leakage_risk=RiskLevel.LOW,
             visualization_data={}
         )
         
@@ -730,7 +793,7 @@ class TestIntelligentDataQualityAgent:
         assert '## Critical Alerts (0)' in report
         assert '## Warnings (0)' in report
         assert 'Data Drift Risk: **low**' in report
-        assert 'Target Leakage Risk: **No**' in report
+        assert 'Target Leakage Risk: **Low**' in report
 
 
 if __name__ == "__main__":
