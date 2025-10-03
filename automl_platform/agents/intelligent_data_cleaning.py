@@ -28,6 +28,20 @@ if _anthropic_spec is not None:
 else:
     AsyncAnthropic = None
 
+
+class _MockClaudeClient:
+    """Lightweight placeholder used when the Anthropic SDK is unavailable."""
+
+    class _Messages:
+        async def create(self, *args, **kwargs):
+            raise RuntimeError(
+                "Anthropic SDK is not installed. Install the 'anthropic' package to "
+                "enable Claude-powered features."
+            )
+
+    def __init__(self):
+        self.messages = self._Messages()
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,24 +69,31 @@ class IntelligentDataCleaner:
             use_claude: Whether to use Claude SDK for strategic insights
         """
         self.config = config or AgentConfig()
-        self.use_claude = use_claude and AsyncAnthropic is not None
-        
+        self.use_claude = use_claude
+
         # Initialize both systems
         self.orchestrator = DataCleaningOrchestrator(
-            self.config, 
+            self.config,
             use_claude=use_claude
         ) if config else None
-        
+
         self.quality_agent = IntelligentDataQualityAgent(llm_provider)
         self.monitor = DataRobotStyleQualityMonitor()
-        
+
         # Initialize Claude client for strategic insights
         if self.use_claude:
-            self.claude_client = AsyncAnthropic(
-                api_key=self.config.anthropic_api_key
-            )
+            if AsyncAnthropic is not None:
+                self.claude_client = AsyncAnthropic(
+                    api_key=self.config.anthropic_api_key
+                )
+                logger.info("💎 Claude SDK enabled for strategic cleaning insights")
+            else:
+                self.claude_client = _MockClaudeClient()
+                logger.warning(
+                    "⚠️ Claude SDK requested but the 'anthropic' package is not installed. "
+                    "Falling back to a mock client; install the SDK to enable live calls."
+                )
             self.claude_model = self.config.claude_model
-            logger.info("💎 Claude SDK enabled for strategic cleaning insights")
         else:
             self.claude_client = None
             if use_claude:
@@ -554,8 +575,8 @@ Respond with JSON:
             "cleaning_details": cleaning_report,
             "recommendations": final_assessment.recommendations[:3],
             "risks": {
-                "drift_risk": final_assessment.drift_risk,
-                "leakage_risk": final_assessment.target_leakage_risk
+                "drift_risk": final_assessment.drift_risk.value,
+                "leakage_risk": final_assessment.target_leakage_risk.value
             },
             "strategy": strategy.get("summary", "Rule-based") if strategy else "Rule-based"
         }

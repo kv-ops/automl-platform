@@ -1,0 +1,32 @@
+{
+  "quality_score": 72.5,
+  "alerts": [
+    {
+      "type": "missing_values",
+      "message": "Column country_code has 22% missing values"
+    }
+  ],
+  "warnings": [
+    {
+      "type": "duplicate_rows",
+      "message": "Potential duplicates detected"
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": "medium",
+      "action": "Impute missing country codes"
+    }
+  ],
+  "statistics": {
+    "rows": 2500,
+    "columns": 18
+  },
+  "drift_risk": "HIGH",
+  "target_leakage_risk": true,
+  "visualization_data": {
+    "missing_heatmap": {
+      "country_code": 0.22
+    }
+  }
+}

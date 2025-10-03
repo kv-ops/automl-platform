@@ -6,7 +6,7 @@ Integrated with Universal ML Agent for intelligent context detection
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple
 import logging
 import json
 import asyncio
@@ -15,6 +15,9 @@ from datetime import datetime
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 import re
+
+from .risk import RiskLevel
+
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,20 @@ class DataQualityAssessment:
     target_leakage_risk: str = "low"  # Align with tests expecting string levels
     visualization_data: Dict[str, Any] = field(default_factory=dict)  # Data for visual quality assessment
     ml_context: Optional[Dict[str, Any]] = None  # Agent-First ML context
+
+    def __post_init__(self) -> None:
+        self.drift_risk = RiskLevel.normalize(self.drift_risk, field_name="drift_risk")
+        self.target_leakage_risk = RiskLevel.normalize(
+            self.target_leakage_risk, field_name="target_leakage_risk"
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable representation of the assessment."""
+
+        data = asdict(self)
+        data["drift_risk"] = self.drift_risk.value
+        data["target_leakage_risk"] = self.target_leakage_risk.value
+        return data
 
 
 class AkkioStyleCleaningAgent:
@@ -480,11 +497,11 @@ class DataRobotStyleQualityMonitor:
             target_report = self._assess_target(df, target_column)
             quality_score -= target_report["penalty"]
             alerts.extend(target_report["alerts"])
-            
+
             # Check for leakage
             leakage_risk = self._detect_target_leakage(df, target_column)
         else:
-            leakage_risk = False
+            leakage_risk = RiskLevel.NONE
         
         # 6. Statistical anomalies
         stat_report = self._assess_statistical_anomalies(df)
@@ -822,7 +839,7 @@ class DataRobotStyleQualityMonitor:
         
         return {"warnings": warnings}
     
-    def _calculate_drift_risk(self, df: pd.DataFrame) -> str:
+    def _calculate_drift_risk(self, df: pd.DataFrame) -> RiskLevel:
         """Calculate risk of data drift."""
         
         risk_score = 0
@@ -842,11 +859,11 @@ class DataRobotStyleQualityMonitor:
             risk_score += 2
         
         if risk_score >= 4:
-            return "high"
+            return RiskLevel.HIGH
         elif risk_score >= 2:
-            return "medium"
+            return RiskLevel.MEDIUM
         else:
-            return "low"
+            return RiskLevel.LOW
     
     def _generate_recommendations(self, issues: List[Dict], 
                                  missing_report: Dict,
@@ -1024,7 +1041,13 @@ class IntelligentDataQualityAgent:
         
         report += f"\n## Risk Assessment\n"
         report += f"- Data Drift Risk: **{assessment.drift_risk}**\n"
-        report += f"- Target Leakage Risk: **{'Yes' if assessment.target_leakage_risk else 'No'}**\n"
+        leakage_risk = assessment.target_leakage_risk
+        if leakage_risk == RiskLevel.NONE:
+            leakage_display = "None (no target assessed)"
+        else:
+            leakage_display = leakage_risk.capitalize()
+
+        report += f"- Target Leakage Risk: **{leakage_display}**\n"
         
         report += f"\n## Top Recommendations\n"
         for i, rec in enumerate(assessment.recommendations[:3], 1):
@@ -1090,3 +1113,4 @@ if __name__ == "__main__":
     # Run if OpenAI API key is available
     if os.getenv("OPENAI_API_KEY"):
         asyncio.run(test_agent_first())
+
