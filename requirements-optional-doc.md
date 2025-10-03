@@ -192,15 +192,15 @@ Computer vision tools:
 ### `[cloud]` - Cloud Providers
 Cloud storage and compute:
 - AWS (boto3, s3fs)
-- Google Cloud (BigQuery, Storage)
+- Google Cloud (BigQuery via `google-cloud-bigquery`, Storage)
 - Azure (Blob Storage, Identity)
-- Snowflake
-- Databricks (databricks-sql-connector for SQL)
+- Snowflake (`snowflake-connector-python`)
+- Databricks SQL (`databricks-sql-connector`)
 
 ### `[connectors]` - Extended Data Connectors
 CRM and database connectors:
 - HubSpot, Salesforce, Pipedrive, Zoho CRM
-- Oracle, MongoDB, Cassandra, Elasticsearch
+- Oracle, MongoDB (`pymongo>=4.6`), Cassandra, Elasticsearch
 - InfluxDB, MySQL
 - Advanced Excel and Google Sheets
 - Databricks (databricks-connect for Spark)
