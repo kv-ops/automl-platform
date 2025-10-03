@@ -49,11 +49,6 @@ class DataQualityAssessment:
         data["target_leakage_risk"] = self.target_leakage_risk.value
         return data
 
-    def dict(self) -> Dict[str, Any]:
-        """Alias for :meth:`to_dict` to mirror pydantic-style APIs used in docs/tests."""
-
-        return self.to_dict()
-
 
 class AkkioStyleCleaningAgent:
     """

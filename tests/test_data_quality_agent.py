@@ -36,6 +36,7 @@ class TestRiskLevel:
             ("HIGH", RiskLevel.HIGH),
             (True, RiskLevel.HIGH),
             (False, RiskLevel.NONE),
+            ("  medium  ", RiskLevel.MEDIUM),
         ],
     )
     def test_from_string_handles_case_and_booleans(self, value, expected):
@@ -46,6 +47,10 @@ class TestRiskLevel:
 
     def test_from_string_allows_custom_default(self):
         assert RiskLevel.from_string("unknown", default=RiskLevel.MEDIUM) is RiskLevel.MEDIUM
+
+    def test_from_string_handles_none_and_invalid_types(self):
+        assert RiskLevel.from_string(None) is RiskLevel.NONE
+        assert RiskLevel.from_string(123, default=RiskLevel.HIGH) is RiskLevel.HIGH
 
 
 class TestDataQualityAssessment:
@@ -153,11 +158,30 @@ class TestDataQualityAssessment:
             visualization_data={},
         )
 
-        payload = assessment.dict()
+        payload = assessment.to_dict()
         assert payload["drift_risk"] == RiskLevel.HIGH.value
         assert payload["target_leakage_risk"] == RiskLevel.LOW.value
         # Ensure the payload is JSON serializable without custom encoders
         assert json.loads(json.dumps(payload))["drift_risk"] == "high"
+
+    def test_data_quality_assessment_roundtrip_serialization(self):
+        assessment = DataQualityAssessment(
+            quality_score=73.0,
+            alerts=[{"type": "missing", "message": "Check column"}],
+            warnings=[],
+            recommendations=[],
+            statistics={},
+            drift_risk=RiskLevel.LOW,
+            target_leakage_risk="medium",
+            visualization_data={},
+        )
+
+        payload = assessment.to_dict()
+        cloned = DataQualityAssessment(**payload)
+
+        assert cloned.drift_risk is RiskLevel.LOW
+        assert cloned.target_leakage_risk is RiskLevel.MEDIUM
+        assert cloned.alerts == assessment.alerts
 
 
 class TestDataRobotStyleQualityMonitor:

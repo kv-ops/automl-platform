@@ -18,8 +18,15 @@ if assessment.drift_risk >= RiskLevel.MEDIUM:
 # Backwards compatible
 if assessment.drift_risk.value == "high":
     ...
+
+# Normalizing legacy payloads
+payload = {"drift_risk": "HIGH", "target_leakage_risk": True}
+
+drift = RiskLevel.from_string(payload["drift_risk"])       # -> RiskLevel.HIGH
+leakage = RiskLevel.from_string(payload["target_leakage_risk"])  # -> RiskLevel.HIGH
 ```
 
 ## Additional Helpers
 - Use `RiskLevel.from_string(...)` to normalize legacy payloads or user input.
-- Call `assessment.dict()` to obtain JSON-serializable payloads where risk levels are exported as lowercase strings.
+- Call `assessment.to_dict()` to obtain JSON-serializable payloads where risk levels are exported as lowercase strings.
+- Boolean or legacy string inputs can be normalized with `RiskLevel.from_string(..., default=RiskLevel.NONE)`.
