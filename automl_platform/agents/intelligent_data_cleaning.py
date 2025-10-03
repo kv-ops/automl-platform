@@ -503,11 +503,21 @@ Respond with JSON:
         return prompts
     
     def _extract_column_name(self, message: str) -> Optional[str]:
-        """Extract column name from message"""
+        """Extract a plausible column name from a quality message."""
+
         import re
-        pattern = r"[Cc]olumn ['\"]?(\w+)['\"]?"
-        match = re.search(pattern, message)
-        return match.group(1) if match else None
+
+        # Match quoted column names first, then bare identifiers while skipping
+        # generic words like "mentioned" that aren't column names.
+        pattern = re.compile(r"[Cc]olumn\s+(?:['\"](?P<quoted>[^'\"]+)['\"]|(?P<bare>[A-Za-z0-9_]+))")
+        stop_words = {"mentioned", "mention", "here", "there", "issues", "issue", "data", "value", "values"}
+
+        for match in pattern.finditer(message):
+            column = match.group("quoted") or match.group("bare")
+            if column and column.lower() not in stop_words:
+                return column
+
+        return None
     
     async def _generate_comprehensive_report(
         self,

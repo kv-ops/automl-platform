@@ -39,7 +39,7 @@ _anthropic_spec = importlib.util.find_spec("anthropic")
 if _anthropic_spec is not None:
     from anthropic import AsyncAnthropic
 else:
-    AsyncAnthronic = None
+    AsyncAnthropic = None
 
 from .intelligent_context_detector import IntelligentContextDetector, MLContext
 from .intelligent_config_generator import IntelligentConfigGenerator, OptimalConfig
