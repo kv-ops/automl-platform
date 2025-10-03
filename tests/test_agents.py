@@ -1145,29 +1145,29 @@ class TestAdaptiveTemplateSystemWithClaude:
             'algorithms': ['XGBoost', 'LightGBM', 'CatBoost', 'RandomForest'],
             'preprocessing': {'handle_missing': True, 'scale': True},
             'feature_engineering': {'polynomial': True},
-             'primary_metric': 'f1'
-          }
-    
-         summary = system._summarize_config(full_config)
-    
-         # Vérifier condensation
-         assert summary['task'] == 'classification'
-         assert len(summary['algorithms']) == 3  # Top 3 seulement
-         assert summary['has_preprocessing'] == True
-         assert summary['has_feature_engineering'] == True
-         assert summary['primary_metric'] == 'f1'
+            'primary_metric': 'f1'
+        }
+
+        summary = system._summarize_config(full_config)
+
+        # Vérifier condensation
+        assert summary['task'] == 'classification'
+        assert len(summary['algorithms']) == 3  # Top 3 seulement
+        assert summary['has_preprocessing'] == True
+        assert summary['has_feature_engineering'] == True
+        assert summary['primary_metric'] == 'f1'
 
     def test_summarize_config_handles_empty(self, temp_dir):
-         """Test summarize_config avec config vide"""
-         system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
-    
-         empty_config = {}
-         summary = system._summarize_config(empty_config)
-    
-         assert summary['task'] == 'unknown'
-         assert summary['algorithms'] == []
-         assert summary['has_preprocessing'] == False
-         assert summary['has_feature_engineering'] == False
+        """Test summarize_config avec config vide"""
+        system = AdaptiveTemplateSystem(template_dir=Path(temp_dir))
+
+        empty_config = {}
+        summary = system._summarize_config(empty_config)
+
+        assert summary['task'] == 'unknown'
+        assert summary['algorithms'] == []
+        assert summary['has_preprocessing'] == False
+        assert summary['has_feature_engineering'] == False
 
 class TestAdaptiveTemplateSystemDetailedMethods:
     """Tests des méthodes privées de AdaptiveTemplateSystem"""
@@ -1983,26 +1983,26 @@ class TestValidatorAgentHybrid:
         agent = ValidatorAgent(test_agent_config, use_claude=False)
         
         # Mock OpenAI client
-            with patch.object(agent, 'openai_client') as mock_openai:
-                mock_beta = Mock()
-                mock_assistants = Mock()
-                mock_assistants.create = AsyncMock(return_value=Mock(id='asst_123'))
-                mock_beta.assistants = mock_assistants
-                mock_openai.beta = mock_beta
-    
-                await agent._ensure_assistant_initialized()
-            
-            with patch.object(agent, '_web_search') as mock_search:
-                mock_search.return_value = {
-                    'results': [{'title': 'IFRS Standards', 'url': 'http://test.com', 'snippet': 'Test'}],
-                    'urls': ['http://test.com']
-                }
-                
-                references = await agent._search_sector_standards('finance', ['amount', 'date'])
-                
-                # Vérifier que la recherche a été appelée
-                assert mock_search.called
-                assert len(references['sources']) > 0
+        with patch.object(agent, 'openai_client') as mock_openai:
+            mock_beta = Mock()
+            mock_assistants = Mock()
+            mock_assistants.create = AsyncMock(return_value=Mock(id='asst_123'))
+            mock_beta.assistants = mock_assistants
+            mock_openai.beta = mock_beta
+
+            await agent._ensure_assistant_initialized()
+
+        with patch.object(agent, '_web_search') as mock_search:
+            mock_search.return_value = {
+                'results': [{'title': 'IFRS Standards', 'url': 'http://test.com', 'snippet': 'Test'}],
+                'urls': ['http://test.com']
+            }
+
+            references = await agent._search_sector_standards('finance', ['amount', 'date'])
+
+            # Vérifier que la recherche a été appelée
+            assert mock_search.called
+            assert len(references['sources']) > 0
     
     @pytest.mark.asyncio
     async def test_validator_fallback_without_claude(self, test_agent_config):
@@ -2557,10 +2557,10 @@ class TestCircuitBreakerAndRetry:
         assert breaker.state == 'OPEN'
         assert config.can_call_llm('claude') == False
          
-     @pytest.mark.asyncio
-     async def test_retry_decorator_success(self):
+    @pytest.mark.asyncio
+    async def test_retry_decorator_success(self):
         """Test que retry réussit du premier coup"""
-         call_count = 0
+        call_count = 0
     
         @async_retry(max_attempts=3)
         async def test_func():
@@ -3535,8 +3535,8 @@ class TestIntelligentDataCleaner:
                 drift_risk='low',
                 target_leakage_risk='low'
             )
-            
-         with patch.object(cleaner_no_claude, '_clean_with_agents') as mock_clean:
+
+        with patch.object(cleaner_no_claude, '_clean_with_agents') as mock_clean:
             mock_clean.return_value = (sample_fraud_data, {'method': 'agents'})
                 
             cleaned_df, report = await cleaner_no_claude.smart_clean(
@@ -3591,26 +3591,26 @@ class TestIntelligentDataCleaner:
             with patch.object(cleaner_with_claude, 'claude_client') as mock_claude:
                 mock_response = Mock()
                 mock_response.content = [Mock(text='{"key": "value"}')]
-                    mock_claude.messages.create = AsyncMock(return_value=mock_response)
-                    content=[Mock(text=json.dumps({
-                        'recommended_mode': 'hybrid',
-                        'confidence': 0.85,
-                        'reasoning': 'Claude decision',
-                        'estimated_time_minutes': 15,
-                        'key_considerations': ['test']
-                    }))]
-                
-                    with patch.object(cleaner_with_claude, '_clean_hybrid') as mock_clean:
-                        mock_clean.return_value = (sample_fraud_data, {})
-                    
-                        cleaned_df, report = await cleaner_with_claude.smart_clean(
-                            sample_fraud_data,
-                            user_context,
-                            mode='auto'
-                        )
-                    
-                        assert mock_claude.messages.create.called
-                        assert mock_claude.messages.create.call_count >= 1
+                mock_claude.messages.create = AsyncMock(return_value=mock_response)
+                content=[Mock(text=json.dumps({
+                    'recommended_mode': 'hybrid',
+                    'confidence': 0.85,
+                    'reasoning': 'Claude decision',
+                    'estimated_time_minutes': 15,
+                    'key_considerations': ['test']
+                }))]
+
+                with patch.object(cleaner_with_claude, '_clean_hybrid') as mock_clean:
+                    mock_clean.return_value = (sample_fraud_data, {})
+
+                    cleaned_df, report = await cleaner_with_claude.smart_clean(
+                        sample_fraud_data,
+                        user_context,
+                        mode='auto'
+                    )
+
+                    assert mock_claude.messages.create.called
+                    assert mock_claude.messages.create.call_count >= 1
     
     def test_get_cleaning_summary(self, cleaner_no_claude):
         """Test récupération du résumé de nettoyage"""
