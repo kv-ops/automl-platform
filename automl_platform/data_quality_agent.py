@@ -6,14 +6,17 @@ Integrated with Universal ML Agent for intelligent context detection
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple
 import logging
 import json
 import asyncio
 import os
 from datetime import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 import re
+
+from .risk import RiskLevel
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +24,22 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DataQualityAssessment:
     """DataRobot-style quality assessment with visual alerts."""
+
     quality_score: float  # 0-100
-    alerts: List[Dict[str, Any]]  # Critical issues requiring attention
-    warnings: List[Dict[str, Any]]  # Non-critical issues
-    recommendations: List[Dict[str, Any]]  # Suggested improvements
-    statistics: Dict[str, Any]  # Statistical summary
-    drift_risk: str  # "low", "medium", "high"
-    target_leakage_risk: bool
-    visualization_data: Dict[str, Any]  # Data for visual quality assessment
+    alerts: List[Dict[str, Any]] = field(default_factory=list)  # Critical issues requiring attention
+    warnings: List[Dict[str, Any]] = field(default_factory=list)  # Non-critical issues
+    recommendations: List[Dict[str, Any]] = field(default_factory=list)  # Suggested improvements
+    statistics: Dict[str, Any] = field(default_factory=dict)  # Statistical summary
+    drift_risk: RiskLevel = RiskLevel.LOW
+    target_leakage_risk: RiskLevel = RiskLevel.LOW
+    visualization_data: Dict[str, Any] = field(default_factory=dict)  # Data for visual quality assessment
     ml_context: Optional[Dict[str, Any]] = None  # Agent-First ML context
+
+    def __post_init__(self) -> None:
+        self.drift_risk = RiskLevel.normalize(self.drift_risk, field_name="drift_risk")
+        self.target_leakage_risk = RiskLevel.normalize(
+            self.target_leakage_risk, field_name="target_leakage_risk"
+        )
 
 
 class AkkioStyleCleaningAgent:
@@ -470,11 +480,11 @@ class DataRobotStyleQualityMonitor:
             target_report = self._assess_target(df, target_column)
             quality_score -= target_report["penalty"]
             alerts.extend(target_report["alerts"])
-            
+
             # Check for leakage
             leakage_risk = self._detect_target_leakage(df, target_column)
         else:
-            leakage_risk = False
+            leakage_risk = RiskLevel.NONE
         
         # 6. Statistical anomalies
         stat_report = self._assess_statistical_anomalies(df)
@@ -740,25 +750,36 @@ class DataRobotStyleQualityMonitor:
             "penalty": penalty
         }
     
-    def _detect_target_leakage(self, df: pd.DataFrame, target_column: str) -> bool:
-        """Detect potential target leakage."""
-        
+    def _detect_target_leakage(self, df: pd.DataFrame, target_column: str) -> RiskLevel:
+        """Detect potential target leakage and rate its severity."""
+
+        risk_level = RiskLevel.LOW
+
+        if not pd.api.types.is_numeric_dtype(df[target_column]):
+            target_series = pd.factorize(df[target_column])[0]
+        else:
+            target_series = df[target_column]
+
         # Check for perfect correlation
         for col in df.columns:
-            if col != target_column and pd.api.types.is_numeric_dtype(df[col]):
-                if pd.api.types.is_numeric_dtype(df[target_column]):
-                    corr = df[col].corr(df[target_column])
-                    if abs(corr) > self.quality_thresholds["correlation_high"]:
-                        return True
-        
+            if col == target_column or not pd.api.types.is_numeric_dtype(df[col]):
+                continue
+
+            corr = pd.Series(df[col]).corr(pd.Series(target_series))
+            if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
+                return RiskLevel.HIGH
+
         # Check for columns with target in name
         target_keywords = ['target', 'label', 'y', 'outcome', 'result']
         for col in df.columns:
-            if col != target_column:
-                if any(keyword in col.lower() for keyword in target_keywords):
-                    return True
-        
-        return False
+            if col == target_column:
+                continue
+
+            if any(keyword in col.lower() for keyword in target_keywords):
+                risk_level = RiskLevel.MEDIUM
+                break
+
+        return risk_level
     
     def _assess_statistical_anomalies(self, df: pd.DataFrame) -> Dict:
         """Detect statistical anomalies in the data."""
@@ -789,7 +810,7 @@ class DataRobotStyleQualityMonitor:
         
         return {"warnings": warnings}
     
-    def _calculate_drift_risk(self, df: pd.DataFrame) -> str:
+    def _calculate_drift_risk(self, df: pd.DataFrame) -> RiskLevel:
         """Calculate risk of data drift."""
         
         risk_score = 0
@@ -809,11 +830,11 @@ class DataRobotStyleQualityMonitor:
             risk_score += 2
         
         if risk_score >= 4:
-            return "high"
+            return RiskLevel.HIGH
         elif risk_score >= 2:
-            return "medium"
+            return RiskLevel.MEDIUM
         else:
-            return "low"
+            return RiskLevel.LOW
     
     def _generate_recommendations(self, issues: List[Dict], 
                                  missing_report: Dict,
@@ -991,7 +1012,13 @@ class IntelligentDataQualityAgent:
         
         report += f"\n## Risk Assessment\n"
         report += f"- Data Drift Risk: **{assessment.drift_risk}**\n"
-        report += f"- Target Leakage Risk: **{'Yes' if assessment.target_leakage_risk else 'No'}**\n"
+        leakage_risk = assessment.target_leakage_risk
+        if leakage_risk == RiskLevel.NONE:
+            leakage_display = "None (no target assessed)"
+        else:
+            leakage_display = leakage_risk.capitalize()
+
+        report += f"- Target Leakage Risk: **{leakage_display}**\n"
         
         report += f"\n## Top Recommendations\n"
         for i, rec in enumerate(assessment.recommendations[:3], 1):
@@ -1057,3 +1084,4 @@ if __name__ == "__main__":
     # Run if OpenAI API key is available
     if os.getenv("OPENAI_API_KEY"):
         asyncio.run(test_agent_first())
+

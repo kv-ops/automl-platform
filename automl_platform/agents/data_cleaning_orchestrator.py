@@ -40,6 +40,8 @@ from .utils import (
     parse_llm_json
 )
 
+from ..risk import RiskLevel
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,10 +65,11 @@ class DataCleaningOrchestrator:
         """Initialize orchestrator with configuration"""
         self.config = config or AgentConfig()
         self.automl_config = automl_config or {}
-        self.use_claude = use_claude and AsyncAnthropic is not None
-        
+        self.use_claude = use_claude
+        self._claude_available = use_claude and AsyncAnthropic is not None
+
         self.config.validate()
-        
+
         # Initialize agents
         self.profiler = ProfilerAgent(self.config)
         self.validator = ValidatorAgent(self.config, use_claude=use_claude)
@@ -82,13 +85,18 @@ class DataCleaningOrchestrator:
         self.adaptive_templates = AdaptiveTemplateSystem(use_claude=use_claude)
         
         # Initialize Claude client if available
-        if self.use_claude:
+        self.claude_client: Optional[Any] = None
+        self.claude_model = "claude-sonnet-4-5-20250929"
+        if self._claude_available:
             self.claude_client = AsyncAnthropic(api_key=self.config.anthropic_api_key)
-            self.claude_model = "claude-sonnet-4-5-20250929"
             logger.info("💎 Claude SDK enabled for strategic cleaning decisions")
         else:
-            self.claude_client = None
-            logger.info("📋 Using rule-based cleaning orchestration")
+            if self.use_claude and AsyncAnthropic is None:
+                logger.warning(
+                    "⚠️ Claude SDK requested but not installed. Falling back to rule-based orchestration."
+                )
+            else:
+                logger.info("📋 Using rule-based cleaning orchestration")
         
         # Tracking with MEMORY LEAK PROTECTION
         self.execution_history = BoundedList(maxlen=100)  # FIX: Bounded list
@@ -150,9 +158,17 @@ class DataCleaningOrchestrator:
         ml_context: Any
     ) -> Dict[str, Any]:
         """Use Claude to intelligently determine the best cleaning mode"""
-        if not self.use_claude or not self.config.can_call_llm('claude'):
+        if (
+            not self.use_claude
+            or not self.config.can_call_llm('claude')
+            or self.claude_client is None
+        ):
+            if self.use_claude and self.claude_client is None:
+                logger.warning(
+                    "Claude client unavailable; falling back to rule-based mode determination."
+                )
             return await self._determine_best_mode_rule_based(df, user_context, ml_context)
-        
+
         logger.info("💎 Using Claude to determine optimal cleaning mode...")
         self.performance_metrics["claude_decisions"] += 1
         
@@ -214,10 +230,23 @@ Respond ONLY with valid JSON:
                 response.content[0].text.strip(),
                 fallback=await self._determine_best_mode_rule_based(df, user_context, ml_context)
             )
-            
+
+            try:
+                decision_risk = RiskLevel.normalize(
+                    decision.get("risk_level"), field_name="risk_level"
+                )
+            except ValueError:
+                logger.warning(
+                    "Received invalid risk level '%s' from Claude decision, defaulting to medium.",
+                    decision.get("risk_level"),
+                )
+                decision_risk = RiskLevel.MEDIUM
+
+            decision["risk_level"] = decision_risk.value
+
             logger.info(f"💎 Claude recommends: {decision.get('recommended_mode', 'unknown')} mode")
             logger.info(f"   Confidence: {decision.get('confidence', 0):.1%}")
-            
+
             return decision
             
         except Exception as e:
@@ -240,23 +269,23 @@ Respond ONLY with valid JSON:
         if is_critical or missing_ratio > 0.3:
             mode = 'interactive'
             estimated_time = 25
-            risk = 'high'
+            risk = RiskLevel.HIGH
         elif missing_ratio > 0.15 or len(df) > 100000:
             mode = 'hybrid'
             estimated_time = 15
-            risk = 'medium'
+            risk = RiskLevel.MEDIUM
         else:
             mode = 'automated'
             estimated_time = 8
-            risk = 'low'
-        
+            risk = RiskLevel.LOW
+
         return {
             'recommended_mode': mode,
             'confidence': 0.7,
-            'reasoning': f"Rule-based: {risk} risk sector, {missing_ratio:.1%} missing data",
+            'reasoning': f"Rule-based: {risk.value} risk sector, {missing_ratio:.1%} missing data",
             'key_considerations': ['Data quality', 'Sector criticality', 'Dataset size'],
             'estimated_time_minutes': estimated_time,
-            'risk_level': risk
+            'risk_level': risk.value
         }
     
     @async_retry(max_attempts=2, base_delay=1.0)
@@ -268,7 +297,15 @@ Respond ONLY with valid JSON:
         ml_context: Any
     ) -> str:
         """Generate rich cleaning recommendations with Claude"""
-        if not self.use_claude or not self.config.can_call_llm('claude'):
+        if (
+            not self.use_claude
+            or not self.config.can_call_llm('claude')
+            or self.claude_client is None
+        ):
+            if self.use_claude and self.claude_client is None:
+                logger.warning(
+                    "Claude client unavailable; using basic recommendation fallback."
+                )
             return self._generate_basic_recommendation(df, profile_report, ml_context)
         
         logger.info("💎 Generating cleaning recommendations with Claude...")

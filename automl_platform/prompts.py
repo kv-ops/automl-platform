@@ -6,17 +6,24 @@ Inspired by DataRobot and Akkio's approaches
 from typing import Dict, Any, List
 import json
 
+from .risk import RiskLevel
+
+
+_NON_NEUTRAL_RISK_LEVELS = "|".join(
+    level.value for level in (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH)
+)
+
 
 class PromptTemplates:
     """Collection of optimized prompts for different AutoML tasks."""
     
     # ========== Data Analysis Prompts ==========
     
-    DATA_QUALITY_ANALYSIS = """
+    DATA_QUALITY_ANALYSIS = f"""
 You are an expert data scientist performing a comprehensive data quality assessment.
 
 Analyze this dataset:
-{dataset_summary}
+{{dataset_summary}}
 
 Provide a detailed analysis covering:
 
@@ -50,7 +57,7 @@ Format your response as structured JSON:
     "critical_issues": [...],
     "warnings": [...],
     "recommendations": [...],
-    "risk_level": "low|medium|high"
+    "risk_level": "{_NON_NEUTRAL_RISK_LEVELS}"
 }}
 """
 

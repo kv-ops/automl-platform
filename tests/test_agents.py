@@ -36,7 +36,8 @@ from automl_platform.agents.agent_config import AgentConfig, AgentType
 from automl_platform.data_quality_agent import (
     DataQualityAssessment,
     IntelligentDataQualityAgent,
-    DataRobotStyleQualityMonitor
+    DataRobotStyleQualityMonitor,
+    RiskLevel,
 )
 from automl_platform.agents.utils import (
     BoundedList, async_retry, CircuitBreaker, 
@@ -169,8 +170,8 @@ def sample_quality_assessment():
         alerts=[],
         warnings=[],
         recommendations=[],
-        drift_risk='low',
-        target_leakage_risk='low'
+        drift_risk=RiskLevel.LOW,
+        target_leakage_risk=RiskLevel.LOW
     )
 
 
@@ -1232,9 +1233,10 @@ class TestDataCleaningOrchestratorWithClaude:
                 user_context,
                 ml_context
             )
-            
+
             assert decision['recommended_mode'] == 'hybrid'
             assert decision['confidence'] == 0.85
+            assert decision['risk_level'] == RiskLevel.MEDIUM.value
     
     @pytest.mark.asyncio
     async def test_recommend_approach_with_claude(self, test_agent_config, sample_fraud_data):
@@ -1276,9 +1278,10 @@ class TestDataCleaningOrchestratorWithClaude:
                 user_context,
                 ml_context
             )
-            
+
             assert 'recommended_mode' in decision
             assert decision['confidence'] > 0
+            assert decision['risk_level'] in {level.value for level in RiskLevel}
     
     @pytest.mark.asyncio
     async def test_parallel_execution(self, test_agent_config):
@@ -3535,8 +3538,8 @@ class TestIntelligentDataCleaner:
                 alerts=[],
                 warnings=[],
                 recommendations=[],
-                drift_risk='low',
-                target_leakage_risk='low'
+                drift_risk=RiskLevel.LOW,
+                target_leakage_risk=RiskLevel.LOW
             )
 
         with patch.object(cleaner_no_claude, '_clean_with_agents') as mock_clean:
@@ -3562,8 +3565,8 @@ class TestIntelligentDataCleaner:
                 alerts=[{'message': 'Test alert'}],
                 warnings=[],
                 recommendations=[],
-                drift_risk='medium',
-                target_leakage_risk='low'
+                drift_risk=RiskLevel.MEDIUM,
+                target_leakage_risk=RiskLevel.LOW
             )
             
             recommendation = await cleaner_no_claude.recommend_cleaning_approach(
@@ -3587,8 +3590,8 @@ class TestIntelligentDataCleaner:
                 alerts=[],
                 warnings=[],
                 recommendations=[],
-                drift_risk='low',
-                target_leakage_risk='low'
+                drift_risk=RiskLevel.LOW,
+                target_leakage_risk=RiskLevel.LOW
             )
             
             with patch.object(cleaner_with_claude, 'claude_client') as mock_claude:
@@ -3675,8 +3678,8 @@ class TestIntelligentDataCleanerStrategies:
             alerts=[{'message': 'Test', 'severity': 'high'}],
             warnings=[],
             recommendations=[],
-            drift_risk='medium',
-            target_leakage_risk='low'
+            drift_risk=RiskLevel.MEDIUM,
+            target_leakage_risk=RiskLevel.LOW
         )
         strategy = {'priorities': []}
         
@@ -3702,8 +3705,8 @@ class TestIntelligentDataCleanerStrategies:
         """Test génération de rapport avec insights Claude"""
         cleaner = IntelligentDataCleaner(config=test_agent_config, use_claude=True)
     
-        initial = DataQualityAssessment(quality_score=60, alerts=[], warnings=[], recommendations=[], drift_risk='low', target_leakage_risk='low')
-        final = DataQualityAssessment(quality_score=85, alerts=[], warnings=[], recommendations=[], drift_risk='low', target_leakage_risk='low')
+        initial = DataQualityAssessment(quality_score=60, alerts=[], warnings=[], recommendations=[], drift_risk=RiskLevel.LOW, target_leakage_risk=RiskLevel.LOW)
+        final = DataQualityAssessment(quality_score=85, alerts=[], warnings=[], recommendations=[], drift_risk=RiskLevel.LOW, target_leakage_risk=RiskLevel.LOW)
         cleaning_report = {'method': 'agents'}
         strategy = {'summary': 'Test strategy'}
     
@@ -3748,8 +3751,8 @@ class TestIntelligentDataCleanerMissingMethods:
         
         user_context = {'secteur_activite': 'finance'}
         assessment = DataQualityAssessment(
-            quality_score=70, alerts=[], warnings=[], 
-            recommendations=[], drift_risk='low', target_leakage_risk='low'
+            quality_score=70, alerts=[], warnings=[],
+            recommendations=[], drift_risk=RiskLevel.LOW, target_leakage_risk=RiskLevel.LOW
         )
         strategy = {'summary': 'Test'}
         
@@ -3773,8 +3776,8 @@ class TestIntelligentDataCleanerMissingMethods:
             alerts=[],
             warnings=[],
             recommendations=[],
-            drift_risk='low',
-            target_leakage_risk='low'
+            drift_risk=RiskLevel.LOW,
+            target_leakage_risk=RiskLevel.LOW
         )
         
         prompts = cleaner._generate_cleaning_prompts(empty_assessment)
