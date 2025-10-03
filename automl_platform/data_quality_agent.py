@@ -741,16 +741,28 @@ class DataRobotStyleQualityMonitor:
             "penalty": penalty
         }
     
-    def _detect_target_leakage(self, df: pd.DataFrame, target_column: str) -> bool:
+    def _detect_target_leakage(
+        self, 
+        df: pd.DataFrame, 
+        target_column: str
+    ) -> RiskLevel:
         """Detect potential target leakage."""
+    
+        if target_column not in df.columns:
+            return RiskLevel.NONE
+            
+        target_series = df[target_column]
         
         # Check for perfect correlation
         for col in df.columns:
-            if col != target_column and pd.api.types.is_numeric_dtype(df[col]):
-                if pd.api.types.is_numeric_dtype(df[target_column]):
-                    corr = df[col].corr(df[target_column])
-                    if abs(corr) > self.quality_thresholds["correlation_high"]:
-                        return True
+            if col == target_column or not pd.api.types.is_numeric_dtype(df[col]):
+                continue
+
+            corr = pd.Series(df[col]).corr(pd.Series(target_series))
+            if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
+                return RiskLevel.HIGH
+
+        return RiskLevel.NONE
         
         # Check for columns with target in name
         target_keywords = ['target', 'label', 'y', 'outcome', 'result']
