@@ -18,8 +18,8 @@ class RiskLevel(str, Enum):
         return self.value
 
     @classmethod
-    def normalize(cls, value: Any, *, field_name: str) -> "RiskLevel":
-        """Normalize input into a valid ``RiskLevel`` with backward compatibility."""
+    def _convert(cls, value: Any) -> Optional["RiskLevel"]:
+        """Convert raw values into a ``RiskLevel`` when possible."""
 
         if isinstance(value, cls):
             return value
@@ -28,7 +28,7 @@ class RiskLevel(str, Enum):
             return cls.HIGH if value else cls.NONE
 
         if value is None:
-            return cls.NONE
+            return None
 
         if isinstance(value, str):
             normalized = value.strip().lower()
@@ -36,24 +36,50 @@ class RiskLevel(str, Enum):
                 if normalized == level.value:
                     return level
 
-        raise ValueError(
-            f"{field_name} must be one of {[level.value for level in cls]}, got {value!r}"
-        )
+        return None
+
+    @classmethod
+    def from_string(
+        cls, value: Any, *, default: Optional["RiskLevel"] = None
+    ) -> "RiskLevel":
+        """Best-effort conversion to ``RiskLevel``.
+
+        Parameters
+        ----------
+        value:
+            The input value to normalize. Strings are matched case-insensitively.
+            ``True``/``False`` values are treated as ``HIGH``/``NONE`` for backward
+            compatibility with historical boolean leakage indicators.
+        default:
+            The level returned when the value cannot be mapped. When omitted the
+            method returns ``RiskLevel.NONE`` for unknown inputs.
+        """
+
+        level = cls._convert(value)
+        if level is not None:
+            return level
+
+        if default is not None:
+            return default
+
+        return cls.NONE
+
+    @classmethod
+    def normalize(cls, value: Any, *, field_name: str) -> "RiskLevel":
+        """Normalize input into a valid ``RiskLevel`` with strict validation."""
+
+        level = cls._convert(value)
+        if level is None:
+            raise ValueError(
+                f"{field_name} must be one of {[risk.value for risk in cls]}, got {value!r}"
+            )
+        return level
 
     @classmethod
     def _coerce(cls, value: Any) -> Optional["RiskLevel"]:
         """Best-effort conversion for comparison helpers."""
 
-        if isinstance(value, cls):
-            return value
-
-        if isinstance(value, str):
-            try:
-                return cls.normalize(value, field_name="risk_level")
-            except ValueError:
-                return None
-
-        return None
+        return cls._convert(value)
 
     @classmethod
     def _order(cls) -> Tuple["RiskLevel", ...]:

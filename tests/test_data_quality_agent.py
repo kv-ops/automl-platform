@@ -25,6 +25,29 @@ from automl_platform.data_quality_agent import (
 )
 
 
+class TestRiskLevel:
+    """Unit tests for the shared RiskLevel enum utilities."""
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("high", RiskLevel.HIGH),
+            ("High", RiskLevel.HIGH),
+            ("HIGH", RiskLevel.HIGH),
+            (True, RiskLevel.HIGH),
+            (False, RiskLevel.NONE),
+        ],
+    )
+    def test_from_string_handles_case_and_booleans(self, value, expected):
+        assert RiskLevel.from_string(value) is expected
+
+    def test_from_string_unknown_defaults_to_none_level(self):
+        assert RiskLevel.from_string("unknown") is RiskLevel.NONE
+
+    def test_from_string_allows_custom_default(self):
+        assert RiskLevel.from_string("unknown", default=RiskLevel.MEDIUM) is RiskLevel.MEDIUM
+
+
 class TestDataQualityAssessment:
     """Tests for DataQualityAssessment dataclass"""
     
@@ -117,6 +140,24 @@ class TestDataQualityAssessment:
 
         assert assessment.drift_risk is RiskLevel.MEDIUM
         assert assessment.target_leakage_risk is RiskLevel.HIGH
+
+    def test_data_quality_assessment_dict_serializes_enum_values(self):
+        assessment = DataQualityAssessment(
+            quality_score=91.0,
+            alerts=[],
+            warnings=[],
+            recommendations=[],
+            statistics={},
+            drift_risk=RiskLevel.HIGH,
+            target_leakage_risk=RiskLevel.LOW,
+            visualization_data={},
+        )
+
+        payload = assessment.dict()
+        assert payload["drift_risk"] == RiskLevel.HIGH.value
+        assert payload["target_leakage_risk"] == RiskLevel.LOW.value
+        # Ensure the payload is JSON serializable without custom encoders
+        assert json.loads(json.dumps(payload))["drift_risk"] == "high"
 
 
 class TestDataRobotStyleQualityMonitor:

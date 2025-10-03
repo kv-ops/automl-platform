@@ -41,6 +41,19 @@ class DataQualityAssessment:
             self.target_leakage_risk, field_name="target_leakage_risk"
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable representation of the assessment."""
+
+        data = asdict(self)
+        data["drift_risk"] = self.drift_risk.value
+        data["target_leakage_risk"] = self.target_leakage_risk.value
+        return data
+
+    def dict(self) -> Dict[str, Any]:
+        """Alias for :meth:`to_dict` to mirror pydantic-style APIs used in docs/tests."""
+
+        return self.to_dict()
+
 
 class AkkioStyleCleaningAgent:
     """
