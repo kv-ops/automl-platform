@@ -12,7 +12,7 @@ import json
 import asyncio
 import os
 from datetime import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 import re
 
 logger = logging.getLogger(__name__)
@@ -21,14 +21,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DataQualityAssessment:
     """DataRobot-style quality assessment with visual alerts."""
+
     quality_score: float  # 0-100
-    alerts: List[Dict[str, Any]]  # Critical issues requiring attention
-    warnings: List[Dict[str, Any]]  # Non-critical issues
-    recommendations: List[Dict[str, Any]]  # Suggested improvements
-    statistics: Dict[str, Any]  # Statistical summary
-    drift_risk: str  # "low", "medium", "high"
-    target_leakage_risk: bool
-    visualization_data: Dict[str, Any]  # Data for visual quality assessment
+    alerts: List[Dict[str, Any]] = field(default_factory=list)  # Critical issues requiring attention
+    warnings: List[Dict[str, Any]] = field(default_factory=list)  # Non-critical issues
+    recommendations: List[Dict[str, Any]] = field(default_factory=list)  # Suggested improvements
+    statistics: Dict[str, Any] = field(default_factory=dict)  # Statistical summary
+    drift_risk: str = "low"  # "low", "medium", "high"
+    target_leakage_risk: str = "low"  # Align with tests expecting string levels
+    visualization_data: Dict[str, Any] = field(default_factory=dict)  # Data for visual quality assessment
     ml_context: Optional[Dict[str, Any]] = None  # Agent-First ML context
 
 
