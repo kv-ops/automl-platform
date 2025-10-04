@@ -4098,3 +4098,181 @@ class TestDataFrameEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+# ============================================================================
+# Tests pour nouvelles stratégies de nettoyage
+# ============================================================================
+
+def test_cleaner_agent_knn_imputation():
+    """Test KNN imputation strategy"""
+    if not SKLEARN_AVAILABLE:
+        pytest.skip("sklearn not available")
+    
+    config = AgentConfig()
+    agent = CleanerAgent(config)
+    
+    df = pd.DataFrame({
+        'value': [1, 2, None, 4, 5],
+        'related': [10, 20, 30, 40, 50]
+    })
+    
+    df_result, trans = agent._apply_missing_strategy(df, 'value', 'knn')
+    
+    assert df_result['value'].isnull().sum() == 0
+    assert trans['params']['method'] == 'knn'
+
+def test_cleaner_agent_mice_imputation():
+    """Test MICE imputation strategy"""
+    if not SKLEARN_AVAILABLE:
+        pytest.skip("sklearn not available")
+    
+    config = AgentConfig()
+    agent = CleanerAgent(config)
+    
+    df = pd.DataFrame({
+        'value': [1, 2, None, 4, 5],
+        'col2': [10, 20, 30, None, 50]
+    })
+    
+    df_result, trans = agent._apply_missing_strategy(df, 'value', 'mice')
+    
+    assert df_result['value'].isnull().sum() == 0
+    assert trans['params']['method'] == 'mice'
+
+def test_cleaner_agent_winsorize_outliers():
+    """Test winsorize outlier strategy"""
+    config = AgentConfig()
+    agent = CleanerAgent(config)
+    
+    df = pd.DataFrame({
+        'value': [1, 2, 3, 4, 5, 100]  # 100 is outlier
+    })
+    
+    df_result, trans = agent._apply_outlier_strategy(df, 'value', 'winsorize')
+    
+    assert df_result['value'].max() < 100
+    assert trans['params']['method'] == 'winsorize'
+
+def test_cleaner_agent_isolation_forest():
+    """Test isolation forest outlier detection"""
+    if not SKLEARN_AVAILABLE:
+        pytest.skip("sklearn not available")
+    
+    config = AgentConfig()
+    agent = CleanerAgent(config)
+    
+    df = pd.DataFrame({
+        'value': [1, 2, 3, 4, 5, 100, 200]  # 100, 200 are outliers
+    })
+    
+    df_result, trans = agent._apply_outlier_strategy(df, 'value', 'isolation_forest')
+    
+    assert len(df_result) < len(df)  # Outliers removed
+    assert trans['params']['method'] == 'isolation_forest'
+
+@pytest.mark.asyncio
+async def test_cleaner_agent_test_and_apply_strategies():
+    """Test the new testing methodology"""
+    config = AgentConfig()
+    agent = CleanerAgent(config)
+    
+    df = pd.DataFrame({
+        'col1': [1, 2, None, 4, 5],
+        'col2': [10, 20, 30, 40, 1000]  # 1000 is outlier
+    })
+    
+    profile_report = {'quality_issues': []}
+    
+    df_cleaned, transformations = await agent._test_and_apply_strategies(df, profile_report)
+    
+    # Check missing values handled
+    assert df_cleaned['col1'].isnull().sum() == 0
+    
+    # Check outliers handled
+    assert df_cleaned['col2'].max() < 1000
+    
+    # Check transformations recorded
+    assert len(transformations) >= 2
+
+def test_yaml_handler_knn_strategy():
+    """Test YAML handler with KNN strategy"""
+    if not SKLEARN_AVAILABLE:
+        pytest.skip("sklearn not available")
+    
+    handler = YAMLConfigHandler()
+    
+    df = pd.DataFrame({
+        'value': [1, 2, None, 4, 5]
+    })
+    
+    transformations = [{
+        "column": "value",
+        "action": "fill_missing",
+        "params": {"method": "knn", "n_neighbors": 3}
+    }]
+    
+    df_result = handler.apply_transformations(df, transformations)
+    
+    assert df_result['value'].isnull().sum() == 0
+
+def test_yaml_handler_mice_strategy():
+    """Test YAML handler with MICE strategy"""
+    if not SKLEARN_AVAILABLE:
+        pytest.skip("sklearn not available")
+    
+    handler = YAMLConfigHandler()
+    
+    df = pd.DataFrame({
+        'value': [1, 2, None, 4, 5],
+        'col2': [10, 20, 30, 40, 50]
+    })
+    
+    transformations = [{
+        "column": "value",
+        "action": "fill_missing",
+        "params": {"method": "mice", "max_iter": 5}
+    }]
+    
+    df_result = handler.apply_transformations(df, transformations)
+    
+    assert df_result['value'].isnull().sum() == 0
+
+def test_yaml_handler_winsorize():
+    """Test YAML handler with winsorize"""
+    handler = YAMLConfigHandler()
+    
+    df = pd.DataFrame({
+        'value': [1, 2, 3, 4, 5, 100]
+    })
+    
+    transformations = [{
+        "column": "value",
+        "action": "handle_outliers",
+        "params": {"method": "winsorize", "lower_percentile": 0.05, "upper_percentile": 0.95}
+    }]
+    
+    df_result = handler.apply_transformations(df, transformations)
+    
+    assert df_result['value'].max() < 100
+
+def test_yaml_handler_isolation_forest():
+    """Test YAML handler with isolation forest"""
+    if not SKLEARN_AVAILABLE:
+        pytest.skip("sklearn not available")
+    
+    handler = YAMLConfigHandler()
+    
+    df = pd.DataFrame({
+        'value': [1, 2, 3, 4, 5, 100, 200]
+    })
+    
+    transformations = [{
+        "column": "value",
+        "action": "handle_outliers",
+        "params": {"method": "isolation_forest", "contamination": 0.2}
+    }]
+    
+    df_result = handler.apply_transformations(df, transformations)
+    
+    assert len(df_result) < len(df)
