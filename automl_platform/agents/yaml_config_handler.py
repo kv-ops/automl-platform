@@ -13,6 +13,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Import sklearn for advanced strategies
+try:
+    from sklearn.impute import SimpleImputer, KNNImputer, IterativeImputer
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.ensemble import IsolationForest
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    logger.warning("scikit-learn not available, advanced cleaning strategies disabled in YAML handler")
+
 
 class YAMLConfigHandler:
     """
@@ -154,7 +164,7 @@ class YAMLConfigHandler:
     
     @staticmethod
     def _apply_fill_missing(df: pd.DataFrame, column: str, params: Dict) -> pd.DataFrame:
-        """Apply missing value imputation"""
+        """Apply missing value imputation with extended strategies"""
         if column not in df.columns:
             return df
         
@@ -173,12 +183,35 @@ class YAMLConfigHandler:
             df[column].fillna(method='ffill', inplace=True)
         elif method == "backward_fill":
             df[column].fillna(method='bfill', inplace=True)
+        elif method == "knn" and SKLEARN_AVAILABLE:
+            if pd.api.types.is_numeric_dtype(df[column]):
+                imputer = KNNImputer(n_neighbors=params.get("n_neighbors", 5))
+                df[[column]] = imputer.fit_transform(df[[column]])
+            else:
+                logger.warning(f"KNN imputation requires numeric data, falling back to mode for {column}")
+                mode_val = df[column].mode()[0] if not df[column].mode().empty else "missing"
+                df[column].fillna(mode_val, inplace=True)
+        elif method == "mice" and SKLEARN_AVAILABLE:
+            if pd.api.types.is_numeric_dtype(df[column]):
+                imputer = IterativeImputer(max_iter=params.get("max_iter", 10), random_state=0)
+                df[[column]] = imputer.fit_transform(df[[column]])
+            else:
+                logger.warning(f"MICE imputation requires numeric data, falling back to mode for {column}")
+                mode_val = df[column].mode()[0] if not df[column].mode().empty else "missing"
+                df[column].fillna(mode_val, inplace=True)
+        else:
+            # Fallback strategy
+            if pd.api.types.is_numeric_dtype(df[column]):
+                df[column].fillna(df[column].median(), inplace=True)
+            else:
+                df[column].fillna("missing", inplace=True)
+            logger.warning(f"Unknown or unavailable method '{method}', used fallback for {column}")
         
         return df
     
     @staticmethod
     def _apply_handle_outliers(df: pd.DataFrame, column: str, params: Dict) -> pd.DataFrame:
-        """Apply outlier handling"""
+        """Apply outlier handling with extended strategies"""
         if column not in df.columns or not pd.api.types.is_numeric_dtype(df[column]):
             return df
         
@@ -188,12 +221,29 @@ class YAMLConfigHandler:
             lower = df[column].quantile(params.get("lower_percentile", 0.01))
             upper = df[column].quantile(params.get("upper_percentile", 0.99))
             df[column] = df[column].clip(lower, upper)
+        elif method == "winsorize":
+            lower = df[column].quantile(params.get("lower_percentile", 0.05))
+            upper = df[column].quantile(params.get("upper_percentile", 0.95))
+            df[column] = df[column].clip(lower, upper)
         elif method == "remove":
             Q1 = df[column].quantile(0.25)
             Q3 = df[column].quantile(0.75)
             IQR = Q3 - Q1
             mask = (df[column] >= Q1 - 1.5 * IQR) & (df[column] <= Q3 + 1.5 * IQR)
             df = df[mask]
+        elif method == "isolation_forest" and SKLEARN_AVAILABLE:
+            iso = IsolationForest(
+                contamination=params.get("contamination", 0.1),
+                random_state=params.get("random_state", 0)
+            )
+            mask = iso.fit_predict(df[[column]].values.reshape(-1, 1)) == 1
+            df = df[mask]
+        else:
+            # Fallback to clip
+            lower = df[column].quantile(0.01)
+            upper = df[column].quantile(0.99)
+            df[column] = df[column].clip(lower, upper)
+            logger.warning(f"Unknown or unavailable method '{method}', used clip fallback for {column}")
         
         return df
     
@@ -280,21 +330,26 @@ class YAMLConfigHandler:
         
         method = params.get("method", "label")
         
-        if method == "label":
-            from sklearn.preprocessing import LabelEncoder
+        if method == "label" and SKLEARN_AVAILABLE:
             le = LabelEncoder()
             df[column] = le.fit_transform(df[column].astype(str))
         elif method == "onehot":
             # One-hot encoding
             dummies = pd.get_dummies(df[column], prefix=column)
             df = pd.concat([df.drop(columns=[column]), dummies], axis=1)
+        else:
+            # Fallback: simple label encoding without sklearn
+            unique_vals = df[column].unique()
+            mapping = {val: idx for idx, val in enumerate(unique_vals)}
+            df[column] = df[column].map(mapping)
+            logger.warning(f"sklearn unavailable, used simple label encoding for {column}")
         
         return df
     
     @staticmethod
     def create_example_config(output_path: Optional[str] = None) -> str:
         """
-        Create an example YAML configuration file
+        Create an example YAML configuration file with extended strategies
         
         Args:
             output_path: Optional path for the example file
@@ -333,19 +388,38 @@ class YAMLConfigHandler:
                     "column": "income",
                     "action": "fill_missing",
                     "params": {
-                        "method": "median"
+                        "method": "knn",
+                        "n_neighbors": 5
                     },
-                    "rationale": "Impute missing income values with median"
+                    "rationale": "Impute missing income using KNN (context-aware)"
+                },
+                {
+                    "column": "age",
+                    "action": "fill_missing",
+                    "params": {
+                        "method": "mice",
+                        "max_iter": 10
+                    },
+                    "rationale": "Impute missing age using MICE (multivariate)"
                 },
                 {
                     "column": "income",
                     "action": "handle_outliers",
                     "params": {
-                        "method": "clip",
-                        "lower_percentile": 0.01,
-                        "upper_percentile": 0.99
+                        "method": "winsorize",
+                        "lower_percentile": 0.05,
+                        "upper_percentile": 0.95
                     },
-                    "rationale": "Clip extreme income values to reduce outlier impact"
+                    "rationale": "Winsorize extreme income values (less aggressive than clip)"
+                },
+                {
+                    "column": "transaction_amount",
+                    "action": "handle_outliers",
+                    "params": {
+                        "method": "isolation_forest",
+                        "contamination": 0.1
+                    },
+                    "rationale": "Detect anomalous transactions using Isolation Forest"
                 },
                 {
                     "column": "employment_status",
@@ -442,6 +516,8 @@ if __name__ == "__main__":
         'amount': [1000, 2000, None, 1500, 999999],
         'date': ['2024-01-01', '2024/01/02', '01-03-2024', '2024-01-04', '2024-01-05'],
         'income': [50000, 60000, None, 45000, 1000000],
+        'age': [25, 30, None, 35, 40],
+        'transaction_amount': [100, 200, 150, 175, 50000],
         'employment_status': ['Employed', 'Self-employed', 'Unemployed', 'Employed', 'Retired']
     })
     
