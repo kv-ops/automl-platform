@@ -10,11 +10,16 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from sqlalchemy import create_engine
 from datetime import datetime
+from io import BytesIO
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import re
 import time
-import os
-from pathlib import Path
-from typing import Optional, Dict, List
+import math
+from typing import Optional, Dict, List, Any, Tuple
+import numpy as np
+import requests
 
 # Configuration de la page
 st.set_page_config(
@@ -38,7 +43,15 @@ class SessionState:
             'selected_template': None,
             'training_config': {},
             'expert_mode': False,
-            'training_status': 'idle'
+            'training_status': 'idle',
+            'manual_prediction_df': None,
+            'manual_prediction_columns': [],
+            'manual_prediction_results': None,
+            'manual_prediction_schema': {},
+            'manual_prediction_validation_errors': {},
+            'selected_task_type': None,
+            'target_classes': [],
+            'target_stats': {}
         }
         
         for key, value in defaults.items():
@@ -126,12 +139,294 @@ class AutoMLWizard:
             self._step_training()
         elif st.session_state.wizard_step == 4:
             self._step_results()
-    
+
+    def _reset_manual_prediction_state(self) -> None:
+        """Réinitialise l'état lié aux prédictions manuelles."""
+        st.session_state.manual_prediction_df = None
+        st.session_state.manual_prediction_columns = []
+        st.session_state.manual_prediction_results = None
+        st.session_state.manual_prediction_schema = {}
+        st.session_state.manual_prediction_validation_errors = {}
+
+    def _display_loaded_data(self, df: pd.DataFrame, source_label: str) -> None:
+        """Enregistre les données chargées et affiche un résumé standardisé."""
+        st.session_state.uploaded_data = df
+        st.session_state.selected_target = None
+        st.session_state.selected_task_type = None
+        st.session_state.target_classes = []
+        st.session_state.target_stats = {}
+        self._reset_manual_prediction_state()
+        st.success(f"✅ {len(df)} lignes et {len(df.columns)} colonnes chargées depuis {source_label}")
+
+        with st.expander("Aperçu des données", expanded=True):
+            st.dataframe(df.head(10))
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Lignes", f"{len(df):,}")
+        with col2:
+            st.metric("Colonnes", len(df.columns))
+        with col3:
+            st.metric("Valeurs manquantes", f"{df.isna().sum().sum():,}")
+
+    @staticmethod
+    def _default_value_for_dtype(dtype: Any):
+        """Retourne une valeur par défaut selon le type de donnée."""
+        if dtype is not None and pd.api.types.is_bool_dtype(dtype):
+            return False
+        return None
+
+    @staticmethod
+    def _build_column_configs(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Construit les configurations de colonnes pour le data editor."""
+        configs: Dict[str, Any] = {}
+        for column, dtype in schema.items():
+            if pd.api.types.is_datetime64_any_dtype(dtype):
+                configs[column] = st.column_config.DatetimeColumn(column)
+            elif pd.api.types.is_numeric_dtype(dtype):
+                configs[column] = st.column_config.NumberColumn(column)
+            elif pd.api.types.is_bool_dtype(dtype):
+                configs[column] = st.column_config.CheckboxColumn(column)
+            else:
+                configs[column] = st.column_config.TextColumn(column)
+        return configs
+
+    @staticmethod
+    def _is_non_empty_value(value: Any) -> bool:
+        """Détermine si une valeur doit être considérée comme renseignée."""
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value.strip() != ""
+        if isinstance(value, float) and np.isnan(value):
+            return False
+        if pd.isna(value):
+            return False
+        return True
+
+    @staticmethod
+    def _google_sheets_csv_url(url: str, worksheet: Optional[str]) -> str:
+        """Normalise une URL Google Sheets pour récupérer un CSV."""
+        if not url or not url.strip():
+            raise ValueError("Le lien Google Sheets est vide.")
+
+        stripped_url = url.strip()
+        normalized_sheet = worksheet.strip() if worksheet and worksheet.strip() else None
+        normalized_input = stripped_url if "://" in stripped_url else f"https://{stripped_url}"
+        parsed = urlparse(normalized_input)
+
+        if not parsed.scheme:
+            parsed = parsed._replace(scheme="https")
+
+        if not parsed.netloc:
+            raise ValueError("Le lien doit inclure un domaine valide (ex: docs.google.com).")
+
+        normalized_netloc = parsed.netloc.lower()
+        host = normalized_netloc.split(":", 1)[0]
+        allowed_hosts = {"docs.google.com", "spreadsheets.google.com"}
+        if host not in allowed_hosts:
+            raise ValueError(
+                "Le lien doit provenir de docs.google.com ou spreadsheets.google.com."
+            )
+
+        lower_input = normalized_input.lower()
+
+        def _merge_params(*dicts: Dict[str, List[str]]) -> Dict[str, List[str]]:
+            merged: Dict[str, List[str]] = {}
+            for source in dicts:
+                for key, values in source.items():
+                    if not values:
+                        continue
+                    merged[key] = values
+            return merged
+
+        if "/export" in parsed.path.lower() and not normalized_sheet:
+            export_params = _merge_params(parse_qs(parsed.query, keep_blank_values=True))
+            export_params["format"] = ["csv"]
+            normalized_query = urlencode(export_params, doseq=True)
+            return urlunparse(parsed._replace(query=normalized_query))
+
+        if "/gviz/tq" in parsed.path.lower():
+            query_params = _merge_params(
+                parse_qs(parsed.query, keep_blank_values=True),
+                parse_qs(parsed.fragment, keep_blank_values=True) if parsed.fragment else {},
+            )
+            query_params["tqx"] = ["out:csv"]
+            if normalized_sheet:
+                query_params.pop("gid", None)
+                query_params["sheet"] = [normalized_sheet]
+            normalized_query = urlencode(query_params, doseq=True)
+            return urlunparse(parsed._replace(query=normalized_query))
+
+        if "/pub" in parsed.path.lower():
+            pub_params = _merge_params(parse_qs(parsed.query, keep_blank_values=True))
+            pub_params["output"] = ["csv"]
+            normalized_query = urlencode(pub_params, doseq=True)
+            return urlunparse(parsed._replace(query=normalized_query, path=re.sub(r"/pub(html)?$", "/pub", parsed.path)))
+
+        if "export?format=" in lower_input and not normalized_sheet:
+            export_params = _merge_params(parse_qs(parsed.query, keep_blank_values=True))
+            export_params["format"] = ["csv"]
+            normalized_query = urlencode(export_params, doseq=True)
+            return urlunparse(parsed._replace(query=normalized_query))
+
+        match = re.search(
+            r"/spreadsheets/(?:u/\d+/)?d/(?:(?P<prefix>e)/)?(?P<id>[a-zA-Z0-9-_]+)",
+            parsed.path,
+        )
+        if not match:
+            raise ValueError("Impossible d'identifier l'identifiant du document.")
+
+        document_id = match.group("id")
+        has_published_prefix = match.group("prefix") == "e"
+        document_path = (
+            f"/spreadsheets/d/{'e/' if has_published_prefix else ''}{document_id}"
+        )
+        query_params = parse_qs(parsed.query, keep_blank_values=True)
+        fragment_params = parse_qs(parsed.fragment, keep_blank_values=True) if parsed.fragment else {}
+        merged_params = _merge_params(query_params, fragment_params)
+        gid = (merged_params.get("gid") or [None])[0]
+
+        if normalized_sheet:
+            gviz_params = merged_params.copy()
+            gviz_params["tqx"] = ["out:csv"]
+            gviz_params.pop("gid", None)
+            gviz_params["sheet"] = [normalized_sheet]
+            gviz_query = urlencode(gviz_params, doseq=True)
+            return urlunparse(
+                (
+                    parsed.scheme,
+                    "docs.google.com",
+                    f"{document_path}/gviz/tq",
+                    "",
+                    gviz_query,
+                    "",
+                )
+            )
+
+        export_params = merged_params.copy()
+        export_params["format"] = ["csv"]
+        normalized_query = urlencode(export_params, doseq=True)
+        return urlunparse(
+            (
+                parsed.scheme,
+                "docs.google.com",
+                f"{document_path}/export",
+                "",
+                normalized_query,
+                "",
+            )
+        )
+
+    @staticmethod
+    def _parse_bool(value: Any) -> Optional[bool]:
+        """Convertit une entrée utilisateur en booléen si possible."""
+        if isinstance(value, bool):
+            return value
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return None
+        if pd.isna(value):
+            return None
+
+        if isinstance(value, (int, float)):
+            if value == 1 or value == 1.0:
+                return True
+            if value == 0 or value == 0.0:
+                return False
+
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y", "vrai", "oui"}:
+                return True
+            if normalized in {"false", "0", "no", "n", "faux", "non"}:
+                return False
+        return None
+
+    def _validate_manual_input(self, df: pd.DataFrame, schema: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """Valide et convertit les valeurs saisies pour la prédiction manuelle."""
+        cleaned_df = df.copy()
+        errors: Dict[str, str] = {}
+
+        for column, dtype in schema.items():
+            if column not in cleaned_df.columns:
+                continue
+
+            series = cleaned_df[column]
+
+            if pd.api.types.is_numeric_dtype(dtype):
+                converted = pd.to_numeric(series, errors="coerce")
+                non_empty = series.apply(self._is_non_empty_value)
+                invalid_mask = non_empty & converted.isna()
+                if invalid_mask.any():
+                    errors[column] = f"{invalid_mask.sum()} valeur(s) non numériques"
+                cleaned_df[column] = converted
+            elif pd.api.types.is_datetime64_any_dtype(dtype):
+                converted = pd.to_datetime(series, errors="coerce")
+                non_empty = series.apply(self._is_non_empty_value)
+                invalid_mask = non_empty & converted.isna()
+                if invalid_mask.any():
+                    errors[column] = f"{invalid_mask.sum()} valeur(s) de date invalides"
+                cleaned_df[column] = converted
+            elif pd.api.types.is_bool_dtype(dtype):
+                converted_values = []
+                invalid_count = 0
+                for value in series:
+                    parsed = self._parse_bool(value)
+                    if parsed is None:
+                        if self._is_non_empty_value(value):
+                            invalid_count += 1
+                        converted_values.append(None)
+                    else:
+                        converted_values.append(parsed)
+                if invalid_count:
+                    errors[column] = f"{invalid_count} valeur(s) non booléennes"
+                cleaned_df[column] = converted_values
+
+        return cleaned_df, errors
+
+    def _simulate_predictions(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Génère des prédictions simulées reproductibles à partir des données saisies."""
+        if df.empty:
+            return pd.DataFrame()
+
+        reference_df = df.copy()
+        for column in reference_df.columns:
+            reference_df[column] = reference_df[column].apply(
+                lambda value: "" if pd.isna(value) else value
+            )
+        hashed = pd.util.hash_pandas_object(reference_df, index=False).astype('uint64')
+        normalized = (hashed % np.uint64(10000)).astype('float64') / 10000.0
+
+        target_name = st.session_state.selected_target or "target"
+        task_type = st.session_state.selected_task_type or "Classification"
+
+        results_df = df.copy()
+
+        if "Régression" in task_type:
+            stats = st.session_state.target_stats or {}
+            mean_value = stats.get("mean", 0.0)
+            std_value = stats.get("std", 1.0)
+            if std_value == 0.0:
+                std_value = 1.0
+            predictions = mean_value + (normalized - 0.5) * 2 * std_value
+            results_df[f"prediction_{target_name}"] = np.round(predictions, 4)
+        else:
+            classes = st.session_state.target_classes or ["Classe 0", "Classe 1"]
+            if not classes:
+                classes = ["Classe 0", "Classe 1"]
+            mapped_predictions = [
+                classes[int(val * len(classes)) % len(classes)] for val in normalized
+            ]
+            results_df[f"prediction_{target_name}"] = mapped_predictions
+            results_df["score"] = np.round(normalized, 4)
+
+        return results_df
+
     def _step_data_loading(self):
         """Étape 1: Chargement des données."""
         st.header("📤 Chargement des données")
         st.write("Commencez par charger vos données pour l'entraînement du modèle.")
-        
+
         # Sélection de la source de données
         data_source = st.selectbox(
             "Source de données",
@@ -148,30 +443,109 @@ class AutoMLWizard:
                 with st.spinner("Chargement des données..."):
                     df = DataLoader.load_from_file(uploaded_file)
                     if df is not None:
-                        st.session_state.uploaded_data = df
-                        st.success(f"✅ {len(df)} lignes et {len(df.columns)} colonnes chargées")
-                        
-                        # Aperçu des données
-                        with st.expander("Aperçu des données", expanded=True):
-                            st.dataframe(df.head(10))
-                        
-                        # Statistiques rapides
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Lignes", f"{len(df):,}")
-                        with col2:
-                            st.metric("Colonnes", len(df.columns))
-                        with col3:
-                            st.metric("Valeurs manquantes", f"{df.isna().sum().sum():,}")
-        
+                        self._display_loaded_data(df, "le fichier local")
+
         elif data_source == "📊 Excel":
-            st.info("📊 Connexion Excel disponible dans la version complète")
-            st.write("Pour utiliser cette fonctionnalité, assurez-vous que les connecteurs Excel sont installés.")
-        
+            uploaded_excel = st.file_uploader(
+                "Importer un classeur Excel",
+                type=['xlsx', 'xls'],
+                help="Chargez un fichier Excel et choisissez la feuille à importer."
+            )
+
+            if uploaded_excel is not None:
+                excel_bytes = uploaded_excel.getvalue()
+                try:
+                    workbook = pd.ExcelFile(BytesIO(excel_bytes))
+                    sheet_name = st.selectbox(
+                        "Sélectionnez la feuille",
+                        workbook.sheet_names,
+                        key="excel_sheet_selector"
+                    )
+
+                    if sheet_name:
+                        with st.spinner("Chargement de la feuille Excel..."):
+                            df = pd.read_excel(BytesIO(excel_bytes), sheet_name=sheet_name)
+                            self._display_loaded_data(df, f"Excel - feuille '{sheet_name}'")
+                except Exception as exc:
+                    st.error(f"Erreur lors de la lecture du fichier Excel : {exc}")
+
         elif data_source == "📋 Google Sheets":
-            st.info("📋 Connexion Google Sheets disponible dans la version complète")
-            st.write("Cette fonctionnalité nécessite une configuration OAuth2.")
-        
+            st.write("Connectez une feuille Google Sheets en fournissant un lien de partage public.")
+            raw_url = st.text_input(
+                "URL Google Sheets",
+                placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
+            )
+
+            if raw_url:
+                sheet_hint = st.text_input(
+                    "Nom de la feuille (optionnel)",
+                    help="Utilisé pour cibler une feuille spécifique lorsque le lien n'indique pas de gid."
+                )
+
+                if st.button("🔄 Charger la feuille", key="load_google_sheet", type="primary"):
+                    try:
+                        export_url = self._google_sheets_csv_url(
+                            raw_url,
+                            sheet_hint.strip() or None if sheet_hint else None
+                        )
+                    except ValueError as exc:
+                        st.error(f"URL Google Sheets invalide : {exc}")
+                    else:
+                        with st.spinner("Chargement depuis Google Sheets..."):
+                            try:
+                                response = requests.get(export_url, timeout=15)
+                                response.raise_for_status()
+                                df = pd.read_csv(BytesIO(response.content))
+                                self._display_loaded_data(df, "Google Sheets")
+                            except requests.RequestException as exc:
+                                st.error(
+                                    "Impossible d'accéder à la feuille. Vérifiez les droits de partage et le lien fourni. "
+                                    f"Détail : {exc}"
+                                )
+                            except Exception as exc:
+                                st.error(
+                                    "Le contenu téléchargé n'a pas pu être lu en tant que CSV. "
+                                    f"Détail : {exc}"
+                                )
+
+        elif data_source == "🗄️ Base de données":
+            st.write("Interrogez une base SQL en utilisant une chaîne de connexion SQLAlchemy.")
+            mask_connection = st.checkbox(
+                "Masquer la chaîne de connexion",
+                value=True,
+                help="Décochez pour afficher la valeur saisie et vérifier la syntaxe."
+            )
+            connection_url = st.text_input(
+                "Chaîne de connexion",
+                placeholder="dialect+driver://user:password@host:port/database",
+                type="password" if mask_connection else "default"
+            )
+            query = st.text_area(
+                "Requête SQL",
+                value="SELECT * FROM information_schema.tables LIMIT 100"
+            )
+
+            if st.button("🔌 Charger depuis la base", type="primary"):
+                if not connection_url:
+                    st.warning("Veuillez renseigner une chaîne de connexion valide.")
+                elif not query.strip():
+                    st.warning("Veuillez saisir une requête SQL à exécuter.")
+                else:
+                    with st.spinner("Exécution de la requête..."):
+                        try:
+                            engine = create_engine(connection_url)
+                            try:
+                                with engine.connect() as connection:
+                                    df = pd.read_sql_query(query, con=connection)
+                            finally:
+                                engine.dispose()
+                            self._display_loaded_data(df, "la base de données")
+                        except Exception as exc:
+                            st.error(
+                                "Connexion ou exécution impossible. Vérifiez les identifiants et la requête. "
+                                f"Détail : {exc}"
+                            )
+
         else:
             st.info(f"{data_source} - Fonctionnalité en développement")
         
@@ -203,18 +577,23 @@ class AutoMLWizard:
         columns = df.columns.tolist()
         
         # Sélection de la colonne cible
+        previous_target = st.session_state.selected_target
+
         target_col = st.selectbox(
             "Colonne cible (à prédire)",
             ["Sélectionner..."] + columns,
             help="Sélectionnez la colonne que vous souhaitez prédire"
         )
-        
+
         if target_col and target_col != "Sélectionner...":
             st.session_state.selected_target = target_col
-            
+
+            if previous_target and previous_target != target_col:
+                self._reset_manual_prediction_state()
+
             # Analyse de la cible
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 # Détection du type de tâche
                 unique_values = df[target_col].nunique()
@@ -227,7 +606,21 @@ class AutoMLWizard:
                 else:
                     task_type = "Régression"
                     st.info(f"ℹ️ Type: **{task_type}**")
-                
+
+                st.session_state.selected_task_type = task_type
+
+                target_series = df[target_col].dropna()
+                if "Classification" in task_type:
+                    st.session_state.target_classes = list(pd.unique(target_series))[:50]
+                    st.session_state.target_stats = {}
+                else:
+                    mean_value = float(target_series.mean()) if not target_series.empty else 0.0
+                    std_value = float(target_series.std()) if len(target_series) > 1 else 0.0
+                    if math.isnan(std_value):
+                        std_value = 0.0
+                    st.session_state.target_classes = []
+                    st.session_state.target_stats = {"mean": mean_value, "std": std_value}
+
                 st.metric("Valeurs uniques", unique_values)
                 st.metric("Valeurs manquantes", df[target_col].isna().sum())
             
@@ -482,7 +875,166 @@ class AutoMLWizard:
                             mime="text/csv"
                         )
             else:
-                st.info("Saisie manuelle disponible dans la version complète")
+                st.write(
+                    "Créez un petit jeu de données de prédiction en éditant le tableau ci-dessous."
+                )
+
+                feature_columns: List[str] = []
+                schema: Dict[str, Any] = {}
+                previous_columns = list(st.session_state.manual_prediction_columns)
+
+                if st.session_state.uploaded_data is not None:
+                    feature_columns = [
+                        col for col in st.session_state.uploaded_data.columns
+                        if not st.session_state.selected_target or col != st.session_state.selected_target
+                    ]
+                    if feature_columns:
+                        st.caption(
+                            "Les colonnes sont pré-remplies à partir des données d'entraînement chargées."
+                        )
+                    else:
+                        st.warning(
+                            "Aucune colonne de caractéristiques disponible. Vérifiez la colonne cible sélectionnée."
+                        )
+
+                manual_columns_entry = st.text_input(
+                    "Colonnes de caractéristiques (séparées par des virgules)",
+                    value=", ".join(st.session_state.manual_prediction_columns)
+                    if st.session_state.manual_prediction_columns and not feature_columns
+                    else "",
+                    help=(
+                        "Précisez les colonnes à utiliser pour la prédiction lorsque aucune donnée n'a été chargée."
+                    ),
+                    key="manual_prediction_columns_input",
+                    disabled=bool(feature_columns)
+                )
+
+                if manual_columns_entry and not feature_columns:
+                    parsed_columns = [
+                        col.strip() for col in manual_columns_entry.split(",") if col.strip()
+                    ]
+                    feature_columns = parsed_columns
+                    if parsed_columns != previous_columns:
+                        st.session_state.manual_prediction_columns = parsed_columns
+                        schema = {col: object for col in parsed_columns}
+                        st.session_state.manual_prediction_schema = schema
+                        st.session_state.manual_prediction_validation_errors = {}
+                        st.session_state.manual_prediction_df = None
+                    else:
+                        schema = st.session_state.manual_prediction_schema
+                elif feature_columns:
+                    if feature_columns != previous_columns:
+                        st.session_state.manual_prediction_columns = feature_columns
+                        schema = {
+                            col: st.session_state.uploaded_data[col].dtype
+                            if st.session_state.uploaded_data is not None and col in st.session_state.uploaded_data.columns
+                            else object
+                            for col in feature_columns
+                        }
+                        st.session_state.manual_prediction_schema = schema
+                        st.session_state.manual_prediction_validation_errors = {}
+                        st.session_state.manual_prediction_df = None
+                    else:
+                        schema = st.session_state.manual_prediction_schema
+
+                if not st.session_state.manual_prediction_columns:
+                    st.info(
+                        "Ajoutez au moins une colonne pour saisir des données de prédiction."
+                    )
+                    st.session_state.manual_prediction_df = pd.DataFrame()
+                else:
+                    manual_df = st.session_state.manual_prediction_df
+                    if (
+                        manual_df is None
+                        or list(manual_df.columns) != st.session_state.manual_prediction_columns
+                    ):
+                        manual_df = pd.DataFrame([
+                            {
+                                col: self._default_value_for_dtype(
+                                    st.session_state.manual_prediction_schema.get(col)
+                                )
+                                for col in st.session_state.manual_prediction_columns
+                            }
+                        ])
+
+                    edited_df = st.data_editor(
+                        manual_df,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key="manual_prediction_editor",
+                        column_config=self._build_column_configs(
+                            st.session_state.manual_prediction_schema
+                        ),
+                    )
+
+                    if len(edited_df) > 500:
+                        st.warning(
+                            "Seules les 500 premières lignes seront conservées pour les prédictions manuelles."
+                        )
+                        edited_df = edited_df.head(500)
+
+                    st.session_state.manual_prediction_df = edited_df
+
+                    validation_errors = st.session_state.manual_prediction_validation_errors
+                    if validation_errors:
+                        error_box = st.container()
+                        with error_box:
+                            st.error("Certaines valeurs doivent être corrigées avant de lancer les prédictions :")
+                            for col_name, message in validation_errors.items():
+                                st.markdown(f"- **{col_name}** : {message}")
+
+                    actions_col1, actions_col2 = st.columns(2)
+                    with actions_col1:
+                        if st.button("♻️ Réinitialiser la saisie", use_container_width=True):
+                            self._reset_manual_prediction_state()
+                            st.rerun()
+                    with actions_col2:
+                        if st.button(
+                            "🔮 Lancer les prédictions (saisie)",
+                            type="primary",
+                            use_container_width=True
+                        ):
+                            cleaned_df, errors = self._validate_manual_input(
+                                edited_df,
+                                st.session_state.manual_prediction_schema
+                            )
+
+                            if errors:
+                                st.session_state.manual_prediction_validation_errors = errors
+                                st.warning(
+                                    "Corrigez les colonnes signalées avant de lancer les prédictions."
+                                )
+                            else:
+                                st.session_state.manual_prediction_validation_errors = {}
+                                st.session_state.manual_prediction_df = cleaned_df
+                                ready_df = cleaned_df.dropna(how="all")
+
+                                if ready_df.empty:
+                                    st.warning(
+                                        "Ajoutez au moins une ligne avec des valeurs pour lancer les prédictions."
+                                    )
+                                else:
+                                    with st.spinner("Prédictions en cours..."):
+                                        time.sleep(2)
+
+                                    results_df = self._simulate_predictions(ready_df)
+                                    st.session_state.manual_prediction_results = results_df
+
+                                    st.success("✅ Prédictions simulées prêtes à être examinées")
+                                    st.dataframe(results_df, use_container_width=True)
+                                    st.download_button(
+                                        "📥 Télécharger les résultats",
+                                        data=results_df.to_csv(index=False).encode("utf-8"),
+                                        file_name="predictions_manuel.csv",
+                                        mime="text/csv"
+                                    )
+
+                if st.session_state.manual_prediction_results is not None:
+                    with st.expander("Derniers résultats générés", expanded=False):
+                        st.dataframe(
+                            st.session_state.manual_prediction_results,
+                            use_container_width=True
+                        )
         
         with tabs[3]:
             st.subheader("Export du modèle")
@@ -511,6 +1063,10 @@ class AutoMLWizard:
                 st.session_state.uploaded_data = None
                 st.session_state.selected_target = None
                 st.session_state.training_config = {}
+                st.session_state.selected_task_type = None
+                st.session_state.target_classes = []
+                st.session_state.target_stats = {}
+                self._reset_manual_prediction_state()
                 st.rerun()
         with col2:
             if st.button("🏠 Retour à l'accueil", use_container_width=True):
@@ -545,6 +1101,11 @@ def main():
             st.session_state.uploaded_data = None
             st.session_state.selected_target = None
             st.session_state.training_config = {}
+            st.session_state.selected_task_type = None
+            st.session_state.target_classes = []
+            st.session_state.target_stats = {}
+            wizard = AutoMLWizard()
+            wizard._reset_manual_prediction_state()
             st.rerun()
         
         st.divider()
