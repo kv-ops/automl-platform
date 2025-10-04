@@ -7,8 +7,17 @@ Compatible with Python 3.9+ using conditional import
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List
 import argparse
+
+from dependency_manifest import (
+    AGGREGATED_EXTRAS,
+    CORE_DEPENDENCY_GROUPS,
+    OPTIONAL_DEPENDENCY_CATEGORIES,
+    get_all_extras,
+    get_core_dependencies,
+    iter_extras_in_order,
+)
 
 # Conditional import for Python 3.9/3.10 compatibility
 try:
@@ -79,36 +88,121 @@ def generate_requirements_gpu(deps: Dict[str, List[str]]) -> str:
             content += f"{dep}\n"
         content += "\n"
     
-    # Optional advanced features
-    content += """# ==============================================================================
-# OPTIONAL: Advanced GPU Features
-# Uncomment the sections you need
-# ==============================================================================
-
-"""
-    
-    # Distributed GPU
-    if "distributed-gpu" in deps:
-        content += "# ---------- Distributed GPU Training ----------\n"
-        for dep in deps["distributed-gpu"]:
-            content += f"# {dep}\n"
-        content += "\n"
-    
-    # AutoML GPU
-    if "automl-gpu" in deps:
-        content += "# ---------- AutoML with GPU ----------\n"
-        for dep in deps["automl-gpu"]:
-            content += f"# {dep}\n"
-        content += "\n"
-    
-    # Serving GPU
-    if "serving-gpu" in deps:
-        content += "# ---------- GPU Inference Serving ----------\n"
-        for dep in deps["serving-gpu"]:
-            content += f"# {dep}\n"
-        content += "\n"
-    
     return content
+
+
+def build_manifest_dependencies() -> Dict[str, List[str]]:
+    """Return the dependency mapping derived from dependency_manifest."""
+
+    deps: Dict[str, List[str]] = {"core": get_core_dependencies()}
+    for name, packages in get_all_extras().items():
+        deps[name] = packages
+    return deps
+
+
+def _compare_pyproject_to_manifest(
+    pyproject_deps: Dict[str, List[str]], manifest_deps: Dict[str, List[str]]
+) -> None:
+    """Emit diagnostics comparing pyproject.toml with the manifest."""
+
+    print("\npyproject.toml alignment with dependency_manifest:")
+    for name, expected in manifest_deps.items():
+        actual = pyproject_deps.get(name)
+        if actual is None:
+            print(f"⚠️  {name}: missing from pyproject.toml")
+            continue
+
+        if actual == expected:
+            print(f"✅ {name}: {len(expected)} packages")
+            continue
+
+        missing = [pkg for pkg in expected if pkg not in actual]
+        extra = [pkg for pkg in actual if pkg not in expected]
+        if missing:
+            print(f"⚠️  {name}: missing packages {', '.join(missing)}")
+        if extra:
+            print(f"⚠️  {name}: unexpected packages {', '.join(extra)}")
+        if not missing and not extra:
+            print(f"⚠️  {name}: package order differs from manifest definition")
+
+    for name in pyproject_deps.keys():
+        if name not in manifest_deps:
+            print(f"⚠️  {name}: present in pyproject.toml but not in dependency_manifest")
+
+
+PYPROJECT_DEPS_BEGIN = "# --- BEGIN AUTO-GENERATED CORE DEPENDENCIES ---"
+PYPROJECT_DEPS_END = "# --- END AUTO-GENERATED CORE DEPENDENCIES ---"
+PYPROJECT_OPTIONAL_BEGIN = "# --- BEGIN AUTO-GENERATED OPTIONAL DEPENDENCIES ---"
+PYPROJECT_OPTIONAL_END = "# --- END AUTO-GENERATED OPTIONAL DEPENDENCIES ---"
+
+
+def _render_core_dependencies_block() -> str:
+    lines: List[str] = ["dependencies = ["]
+    for title, packages in CORE_DEPENDENCY_GROUPS.items():
+        lines.append(f"  # {title}")
+        for pkg in packages:
+            lines.append(f'  "{pkg}",')
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    lines.append("]")
+    return "\n".join(lines)
+
+
+def _render_optional_dependencies_block() -> str:
+    lines: List[str] = ["[project.optional-dependencies]"]
+
+    for name, packages in iter_extras_in_order():
+        includes = AGGREGATED_EXTRAS.get(name)
+        if includes:
+            lines.append(f"# includes extras: {', '.join(includes)}")
+        lines.append(f"{name} = [")
+        for pkg in packages:
+            lines.append(f'  "{pkg}",')
+        lines.append("]")
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _replace_block(content: str, begin: str, end: str, block: str) -> str:
+    try:
+        start = content.index(begin) + len(begin)
+        finish = content.index(end, start)
+    except ValueError as exc:
+        raise RuntimeError(f"Markers {begin!r} / {end!r} not found in pyproject.toml") from exc
+
+    block_text = "\n" + block.strip("\n") + "\n"
+    return content[:start] + block_text + content[finish:]
+
+
+def sync_pyproject(pyproject_path: Path) -> bool:
+    """Rewrite pyproject dependency sections from dependency_manifest."""
+
+    original = pyproject_path.read_text()
+    updated = _replace_block(
+        original,
+        PYPROJECT_DEPS_BEGIN,
+        PYPROJECT_DEPS_END,
+        _render_core_dependencies_block(),
+    )
+    updated = _replace_block(
+        updated,
+        PYPROJECT_OPTIONAL_BEGIN,
+        PYPROJECT_OPTIONAL_END,
+        _render_optional_dependencies_block(),
+    )
+
+    if updated != original:
+        pyproject_path.write_text(updated)
+        print(f"Updated {pyproject_path}")
+        return True
+
+    print("pyproject.toml already up to date")
+    return False
 
 
 def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
@@ -127,25 +221,8 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
     
     content = header
     
-    # Group by category with agents first, INCLUDING META-EXTRAS
-    categories = {
-        "Intelligent Agents (NEW)": ["agents"],
-        "Authentication & Security": ["auth", "sso"],
-        "GPU & Deep Learning": ["gpu", "deep", "distributed-gpu", "automl-gpu", "serving-gpu", "gpu-alt"],
-        "Cloud & Storage": ["cloud", "storage", "connectors"],
-        "ML & Data Science": ["explain", "timeseries", "nlp", "vision", "hpo"],
-        "Infrastructure": ["distributed", "streaming", "orchestration", "mlops"],
-        "API & Serving": ["api", "export", "feature-store"],
-        "Monitoring & Observability": ["monitoring"],
-        "Development": ["dev", "docs"],
-        "Visualization & UI": ["viz", "ui_advanced", "reporting"],
-        "LLM Integration": ["llm"],
-        "Production": ["production"],
-        # AJOUT DES META-EXTRAS
-        "Bundled Configurations": ["nocode", "enterprise", "gpu-complete", "all"],
-    }
-    
-    for category, extras in categories.items():
+    # Group extras by capability to generate a readable guide
+    for category, extras in OPTIONAL_DEPENDENCY_CATEGORIES.items():
         available_extras = [e for e in extras if e in deps]
         if not available_extras:
             continue
@@ -155,23 +232,15 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
         content += f"# {'='*70}\n\n"
         
         for extra in available_extras:
-            # Special handling for meta-extras
-            if extra in ["nocode", "enterprise", "gpu-complete", "all"]:
-                content += f"# [{extra}] - Meta-bundle\n"
-                if extra == "nocode":
-                    content += "# Complete no-code experience with UI, connectors, and reporting\n"
-                elif extra == "enterprise":
-                    content += "# Production-ready enterprise deployment bundle\n"
-                elif extra == "gpu-complete":
-                    content += "# All GPU-related features and frameworks\n"
-                elif extra == "all":
-                    content += "# Complete installation with all available features\n"
-                content += f"# Includes multiple extras - see pyproject.toml for details\n"
-                content += f"# Install with: pip install automl-platform[{extra}]\n"
-            else:
-                content += f"# [{extra}]\n"
-                for dep in deps[extra]:
-                    content += f"# {dep}\n"
+            content += f"# [{extra}]\n"
+
+            references = AGGREGATED_EXTRAS.get(extra, [])
+            if references:
+                content += "# includes extras: " + ", ".join(references) + "\n"
+
+            resolved_packages = sorted(deps.get(extra, []))
+            for dep in resolved_packages:
+                content += f"# {dep}\n"
             content += "\n"
     
     # Add installation examples at the end
@@ -186,17 +255,14 @@ def generate_requirements_optional(deps: Dict[str, List[str]]) -> str:
 # No-code user experience
 # pip install automl-platform[nocode]
 
-# Enterprise deployment
+# Enterprise deployment bundle
 # pip install automl-platform[enterprise]
 
-# GPU-accelerated ML
-# pip install automl-platform[gpu-complete]
-
-# Complete installation
-# pip install automl-platform[all]
+# Distributed training and GPU
+# pip install automl-platform[distributed,gpu,deep]
 
 # Custom combination
-# pip install automl-platform[gpu,monitoring,llm]
+# pip install automl-platform[connectors,monitoring,llm]
 """
     
     return content
@@ -215,62 +281,72 @@ def main():
     parser.add_argument("--optional", action="store_true", help="Generate requirements-optional.txt")
     parser.add_argument("--all", action="store_true", help="Generate all requirements files")
     parser.add_argument("--check", action="store_true", help="Check consistency without writing files")
+    parser.add_argument(
+        "--sync-pyproject",
+        action="store_true",
+        help="Rewrite pyproject dependency sections from dependency_manifest",
+    )
     
     args = parser.parse_args()
     
-    if not any([args.gpu, args.optional, args.all, args.check]):
+    if not any([args.gpu, args.optional, args.all, args.check, args.sync_pyproject]):
         parser.print_help()
         return
-    
+
     # Load dependencies
     pyproject = load_pyproject()
     deps = extract_dependencies(pyproject)
-    
+    manifest_deps = build_manifest_dependencies()
+
+    if args.sync_pyproject:
+        changed = sync_pyproject(Path("pyproject.toml"))
+        if changed:
+            pyproject = load_pyproject()
+            deps = extract_dependencies(pyproject)
+
     if args.check:
         print("Dependencies found in pyproject.toml:")
         for extra, packages in sorted(deps.items()):
             print(f"  [{extra}]: {len(packages)} packages")
-        
+
+        _compare_pyproject_to_manifest(deps, manifest_deps)
+
         # Check for agents extra
-        if "agents" in deps:
+        if "agents" in manifest_deps:
             print("\n✅ Intelligent agents extra found:")
-            for pkg in deps["agents"]:
+            for pkg in manifest_deps["agents"]:
                 print(f"    - {pkg}")
         else:
             print("\n⚠️  Warning: 'agents' extra not found in pyproject.toml")
-        
-        # Check for meta-extras
-        meta_extras = ["nocode", "enterprise", "gpu-complete", "all"]
-        found_meta = [e for e in meta_extras if e in deps]
-        if found_meta:
-            print(f"\n✅ Meta-extras found: {', '.join(found_meta)}")
-        else:
-            print("\n⚠️  Warning: No meta-extras found")
-        
+
         # Check Python version
         if "project" in pyproject:
             requires_python = pyproject["project"].get("requires-python", "Not specified")
             version = pyproject["project"].get("version", "Not specified")
             print(f"\nProject version: {version}")
             print(f"Python requirement: {requires_python}")
-        
-        # Check for pycuda in GPU extras
-        if "gpu" in deps:
-            has_pycuda = any("pycuda" in pkg.lower() for pkg in deps["gpu"])
-            if has_pycuda:
-                print("\n✅ PyCUDA found in GPU dependencies")
+
+        # Check for core GPU dependency
+        if "gpu" in manifest_deps:
+            has_cupy = any("cupy" in pkg.lower() for pkg in manifest_deps["gpu"])
+            if has_cupy:
+                print("\n✅ CuPy found in GPU dependencies")
             else:
-                print("\n⚠️  Warning: PyCUDA not found in GPU dependencies")
-        
+                print("\n⚠️  Warning: CuPy not found in GPU dependencies")
+
         return
-    
+
+    target_deps = manifest_deps
+    if deps != manifest_deps:
+        print("⚠️  Warning: pyproject.toml differs from dependency_manifest. Run --check or --sync-pyproject to reconcile.")
+
     # Generate files
     if args.gpu or args.all:
-        content = generate_requirements_gpu(deps)
+        content = generate_requirements_gpu(target_deps)
         write_file(Path("requirements-gpu.txt"), content)
-    
+
     if args.optional or args.all:
-        content = generate_requirements_optional(deps)
+        content = generate_requirements_optional(target_deps)
         write_file(Path("requirements-optional.txt"), content)
     
     print("\nDone! Remember to:")
