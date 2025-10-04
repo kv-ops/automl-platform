@@ -1,171 +1,61 @@
 # ==============================================================================
-# AutoML Platform - Core Requirements (FINAL VERSION WITH NO-CODE UI)
+# AutoML Platform - Core Runtime Requirements
 # Version: 3.2.1
 # Python: >= 3.9, < 3.13
-# 
-# This file contains essential dependencies for core functionality including
-# the no-code dashboard interface.
-# 
-# For optional features, use pip extras:
-#   pip install automl-platform[agents]      # Intelligent agents
-#   pip install automl-platform[nocode]      # Complete no-code bundle
-#   pip install automl-platform[enterprise]  # All production features
-#   pip install automl-platform[gpu]         # GPU acceleration
-#   pip install automl-platform[cloud]       # Cloud connectors
-#   pip install automl-platform[llm]         # LLM integration
-# ==============================================================================
+#
+# This list contains only the dependencies needed to run the AutoML engine,
+# REST API and background workers. Optional capabilities such as the no-code UI,
+# connectors, GPU acceleration, documentation, and developer tooling are
+# provided through pip extras defined in pyproject.toml.
+# ============================================================================
 
-# ---------- Core ML Dependencies ----------
-pandas>=2.0.0,<3.0.0              # DataFrame operations
-numpy>=1.24.0,<2.0.0              # Numerical computing
-scikit-learn>=1.3.0,<2.0.0        # Core ML algorithms
-scipy>=1.11.0,<2.0.0              # Scientific computing
-joblib>=1.3.0                     # Parallel computing & caching
+# ---------- Core ML & AutoML ----------
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+scikit-learn>=1.3.0,<2.0.0
+scipy>=1.11.0,<2.0.0
+joblib>=1.3.0
+optuna>=3.4.0,<4.0.0
+xgboost>=2.0.0,<3.0.0
+lightgbm>=4.0.0,<5.0.0
+catboost>=1.2.0,<2.0.0
+imbalanced-learn>=0.10.0,<1.0.0
 
-# ---------- Configuration & Data Validation ----------
-pyyaml>=6.0.1                     # YAML configuration files
-pydantic>=2.5.0,<3.0.0            # Data validation
-python-dotenv>=1.0.0              # Environment variables
+# ---------- Configuration & Validation ----------
+pyyaml>=6.0.1
+pydantic>=2.5.0,<3.0.0
+python-dotenv>=1.0.0
 
-# ---------- AutoML & Hyperparameter Optimization ----------
-optuna>=3.4.0,<4.0.0              # Hyperparameter optimization
+# ---------- API & Backend ----------
+fastapi>=0.104.0,<1.0.0
+uvicorn[standard]>=0.24.0,<1.0.0
+starlette>=0.27.0
+aiofiles>=23.2.0
+python-multipart>=0.0.6
+slowapi>=0.1.9
 
-# ---------- Core Boosting Algorithms ----------
-xgboost>=2.0.0,<3.0.0             # Gradient boosting
-lightgbm>=4.0.0,<5.0.0            # Light gradient boosting  
-catboost>=1.2.0,<2.0.0            # Categorical boosting
+# ---------- HTTP Clients & Auth ----------
+requests>=2.31.0
+httpx>=0.25.0
+aiohttp>=3.9.0
+authlib>=1.2.0
 
-# ---------- Imbalanced Learning ----------
-imbalanced-learn>=0.10.0,<1.0.0   # SMOTE and resampling techniques
+# ---------- Persistence & Tracking ----------
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+redis>=5.0.0
+alembic>=1.13.0
+mlflow>=2.9.0,<3.0.0
+pyarrow>=14.0.0
 
-# ---------- API Framework (Core) ----------
-fastapi>=0.104.0,<1.0.0           # REST API framework
-uvicorn[standard]>=0.24.0,<1.0.0  # ASGI server
-python-multipart>=0.0.6           # Form data parsing
-aiofiles>=23.2.0                  # Async file operations
-starlette>=0.27.0                 # ASGI framework
+# ---------- Background Workers ----------
+celery[redis]>=5.3.0
 
-# ---------- HTTP & Authentication (Core) ----------
-httpx>=0.25.0                     # Async HTTP client
-authlib>=1.2.0                    # OAuth/OIDC library
-requests>=2.31.0                  # HTTP library
-aiohttp>=3.9.0                    # Async HTTP
+# ---------- Security ----------
+cryptography>=41.0.0
+pyjwt>=2.8.0
+passlib[bcrypt]>=1.7.4
 
-# ---------- Database & Storage ----------
-sqlalchemy>=2.0.0                 # ORM for databases
-psycopg2-binary>=2.9.0            # PostgreSQL driver
-redis>=5.0.0                      # Cache and message broker
-alembic>=1.13.0                   # Database migrations
-
-# ---------- Model Export & Serving ----------
-onnx>=1.15.0,<2.0.0               # Open Neural Network Exchange
-onnxruntime>=1.16.0,<2.0.0        # ONNX runtime for inference
-skl2onnx>=1.16.0,<2.0.0           # Sklearn to ONNX converter
-
-# ---------- MLOps & Experiment Tracking ----------
-mlflow>=2.9.0,<3.0.0              # Experiment tracking & model registry
-
-# ---------- Data Quality & Validation ----------
-deepchecks>=0.17.0                # Data validation
-evidently>=0.4.0                  # Drift detection
-
-# ---------- Security (Essential) ----------
-cryptography>=41.0.0              # Encryption
-pyjwt>=2.8.0                      # JWT tokens
-passlib[bcrypt]>=1.7.4            # Password hashing
-
-# ---------- Monitoring & Metrics ----------
-prometheus-client>=0.19.0         # Metrics export
-
-# ---------- UI Framework (Core for No-Code) ----------
-streamlit>=1.30.0                 # Interactive dashboards
-streamlit-option-menu>=0.3.6      # Navigation menu
-plotly>=5.18.0                    # Interactive plots
-altair>=4.2.1,<5.0.0              # Declarative visualization (compatible version)
-matplotlib>=3.8.0                 # Static plotting
-seaborn>=0.13.0                   # Statistical visualization
-
-# ---------- UI Components (No-Code Features) ----------
-streamlit-extras>=0.3.6           # Additional UI components
-streamlit-aggrid>=0.3.4           # Interactive data tables
-streamlit-authenticator>=0.2.3    # Authentication
-streamlit-chat>=0.1.1             # Chat interface
-streamlit-elements>=0.1.0         # Advanced elements
-streamlit-lottie>=0.0.5           # Animations
-streamlit-drawable-canvas>=0.9.3  # Drawing canvas
-streamlit-autorefresh>=1.0.1      # Auto-refresh
-streamlit-folium>=0.15.0          # Maps integration
-streamlit-ace>=0.1.1              # Code editor
-streamlit-tags>=1.2.8             # Tag input
-streamlit-tree-select>=0.0.5      # Tree selection
-
-# ---------- Report Generation ----------
-reportlab>=4.0.0                  # PDF generation
-python-docx>=1.1.0                # Word documents
-xlsxwriter>=3.1.0                 # Excel reports
-fpdf2>=2.7.0                      # Simple PDF creation
-jinja2>=3.1.0                     # Template engine
-
-# ---------- Visualization Libraries ----------
-bokeh>=3.3.0                      # Interactive visualization
-holoviews>=1.18.0                 # Data visualization
-panel>=1.3.0                      # Dashboard framework
-
-# ---------- Data Connectors & Formats ----------
-openpyxl>=3.1.0                   # Excel support
-pyarrow>=14.0.0                   # Parquet support
-fastparquet>=2023.10.0            # Alternative Parquet
-xlrd>=2.0.0                       # Legacy Excel
-gspread>=5.7.2                    # Google Sheets integration
-google-auth>=2.14.1               # Google authentication
-google-auth-oauthlib>=1.0.0       # OAuth for Google
-
-# ---------- Task Queue & Background Jobs ----------
-celery[redis]>=5.3.0              # Distributed task queue
-flower>=2.0.0                     # Celery monitoring
-
-# ---------- Template Support ----------
-chevron>=0.14.0                   # Mustache templates
-jsonschema>=4.20.0                # JSON schema validation
-
-# ---------- Utilities ----------
-tqdm>=4.66.0                      # Progress bars
-click>=8.1.0                      # CLI framework
-tabulate>=0.9.0                   # Table formatting
-tenacity>=8.2.0                   # Retry logic
-psutil>=5.9.6                     # System monitoring
-python-dateutil>=2.8.0            # Date utilities
-humanize>=4.9.0                   # Human-readable output
-
-# ---------- File Processing ----------
-python-magic>=0.4.27              # File type detection
-chardet>=5.2.0                    # Character encoding detection
-pypdf>=3.17.0                     # PDF processing
-
-# ---------- Testing (Essential) ----------
-pytest>=8.0.0                     # Testing framework
-pytest-cov>=4.1.0                 # Coverage reporting
-pytest-asyncio>=0.23.0            # Async testing
-hypothesis>=6.98.0                # Property-based testing
-
-# ---------- Code Quality ----------
-black>=24.0.0                     # Code formatting
-ruff>=0.2.0                       # Fast linting
-mypy>=1.8.0                       # Type checking
-isort>=5.13.0                     # Import sorting
-
-# ---------- Documentation ----------
-sphinx>=7.2.0                     # Documentation generator
-sphinx-rtd-theme>=2.0.0           # ReadTheDocs theme
-myst-parser>=2.0.0                # Markdown support
-
-# ---------- Development Tools ----------
-ipython>=8.12.0                   # Enhanced Python shell (works on 3.9+)
-jupyter>=1.0.0                    # Notebook interface
-notebook>=7.0.0                   # Jupyter notebook
-jupyterlab>=4.0.0                 # JupyterLab
-tomli>=2.0.1;python_version<"3.11" # TOML parser for Python 3.9/3.10
-
-# ---------- Production Deployment ----------
-gunicorn>=21.2.0                  # WSGI HTTP Server
-supervisor>=4.2.0                 # Process management
+# ---------- Observability & Ops ----------
+prometheus-client>=0.19.0
+psutil>=5.9.6

@@ -39,8 +39,16 @@ import uvicorn
 
 # Distributed computing
 from celery import Celery
-import ray
-from dask.distributed import Client as DaskClient
+
+try:
+    import ray
+except ImportError:  # pragma: no cover - optional dependency
+    ray = None  # type: ignore[assignment]
+
+try:
+    from dask.distributed import Client as DaskClient
+except ImportError:  # pragma: no cover - optional dependency
+    DaskClient = None  # type: ignore[assignment]
 
 # AutoML Platform imports
 from automl_platform.config import AutoMLConfig, load_config
@@ -139,12 +147,18 @@ celery_app.conf.update(
 # ============================================================================
 
 if hasattr(config, 'distributed') and config.distributed.enabled:
-    ray.init(
-        address=config.distributed.ray_address,
-        num_cpus=config.distributed.num_cpus,
-        num_gpus=config.distributed.num_gpus,
-        object_store_memory=config.distributed.object_store_memory_gb * 1024 * 1024 * 1024
-    )
+    if ray is None:
+        logger.warning(
+            "Ray distributed runtime requested but 'ray' is not installed. "
+            "Install the 'distributed' extra to enable Ray support."
+        )
+    else:
+        ray.init(
+            address=config.distributed.ray_address,
+            num_cpus=config.distributed.num_cpus,
+            num_gpus=config.distributed.num_gpus,
+            object_store_memory=config.distributed.object_store_memory_gb * 1024 * 1024 * 1024
+        )
 
 # ============================================================================
 # Metrics with Custom Registry
@@ -321,7 +335,14 @@ async def lifespan(app: FastAPI):
     
     # Initialize Dask client for distributed processing
     if hasattr(config, 'distributed') and config.distributed.dask_enabled:
-        app.state.dask_client = DaskClient(config.distributed.dask_scheduler_address)
+        if DaskClient is None:
+            logger.warning(
+                "Dask distributed scheduler requested but 'dask.distributed' is not installed. "
+                "Install the 'distributed' extra to enable Dask integration."
+            )
+            app.state.dask_client = None
+        else:
+            app.state.dask_client = DaskClient(config.distributed.dask_scheduler_address)
     else:
         app.state.dask_client = None
     
@@ -357,7 +378,7 @@ async def lifespan(app: FastAPI):
         orchestrator.stop()
     
     # Shutdown distributed computing
-    if hasattr(config, 'distributed') and config.distributed.enabled:
+    if hasattr(config, 'distributed') and config.distributed.enabled and ray is not None:
         ray.shutdown()
     
     if app.state.dask_client:
