@@ -14,12 +14,29 @@ from sqlalchemy import create_engine
 from datetime import datetime
 from io import BytesIO
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import importlib.util
 import re
 import time
 import math
 from typing import Optional, Dict, List, Any, Tuple
 import numpy as np
 import requests
+
+from ..utils.data_sources import coerce_data_source_identifier
+
+
+_crm_connectors_spec = importlib.util.find_spec("automl_platform.api.connectors")
+if _crm_connectors_spec is None:
+    CRM_CONNECTORS_AVAILABLE = False
+    fetch_crm_data = None
+else:
+    try:
+        from ...api.connectors import fetch_crm_data
+    except ImportError:  # pragma: no cover - optional dependency missing
+        CRM_CONNECTORS_AVAILABLE = False
+        fetch_crm_data = None
+    else:
+        CRM_CONNECTORS_AVAILABLE = True
 
 # Configuration de la page
 st.set_page_config(
@@ -51,7 +68,16 @@ class SessionState:
             'manual_prediction_validation_errors': {},
             'selected_task_type': None,
             'target_classes': [],
-            'target_stats': {}
+            'target_stats': {},
+            'selected_data_source_id': 'file',
+            'data_source_selector_id': 'file',
+            'crm_config': {
+                'crm_type': 'hubspot',
+                'entity': 'contacts',
+                'api_key': '',
+                'api_endpoint': '',
+                'limit': 200
+            }
         }
         
         for key, value in defaults.items():
@@ -428,12 +454,60 @@ class AutoMLWizard:
         st.write("Commencez par charger vos données pour l'entraînement du modèle.")
 
         # Sélection de la source de données
+        data_source_definitions: List[Tuple[str, str]] = [
+            ("file", "📁 Fichier local"),
+            ("excel", "📊 Excel"),
+            ("google_sheets", "📋 Google Sheets"),
+            ("crm", "🤝 CRM"),
+            ("database", "🗄️ Base de données"),
+        ]
+
+        label_by_identifier = {identifier: label for identifier, label in data_source_definitions}
+        data_source_options = [identifier for identifier, _ in data_source_definitions]
+
+        default_identifier = coerce_data_source_identifier(
+            st.session_state.get('selected_data_source_id'),
+            data_source_definitions[0][0],
+            label_by_identifier
+        )
+        legacy_selected_value = coerce_data_source_identifier(
+            st.session_state.get('selected_data_source'),
+            default_identifier,
+            label_by_identifier
+        )
+        if 'selected_data_source' in st.session_state:
+            del st.session_state['selected_data_source']
+        default_identifier = legacy_selected_value
+        st.session_state.selected_data_source_id = default_identifier
+
+        legacy_selector_value = coerce_data_source_identifier(
+            st.session_state.get('data_source_selector'),
+            default_identifier,
+            label_by_identifier
+        )
+        if 'data_source_selector' in st.session_state:
+            del st.session_state['data_source_selector']
+
+        selectbox_key = "data_source_selector_id"
+        current_widget_value = coerce_data_source_identifier(
+            st.session_state.get(selectbox_key, legacy_selector_value),
+            default_identifier,
+            label_by_identifier
+        )
+        st.session_state[selectbox_key] = current_widget_value
+
         data_source = st.selectbox(
             "Source de données",
-            ["📁 Fichier local", "📊 Excel", "📋 Google Sheets", "🤝 CRM", "🗄️ Base de données"]
+            data_source_options,
+            index=data_source_options.index(st.session_state[selectbox_key]),
+            format_func=lambda identifier: label_by_identifier[identifier],
+            key=selectbox_key
         )
-        
-        if data_source == "📁 Fichier local":
+        st.session_state.selected_data_source_id = data_source
+
+        data_source_label = label_by_identifier[data_source]
+
+        if data_source == "file":
             uploaded_file = st.file_uploader(
                 "Choisir un fichier",
                 type=['csv', 'xlsx', 'xls', 'parquet', 'json'],
@@ -445,7 +519,7 @@ class AutoMLWizard:
                     if df is not None:
                         self._display_loaded_data(df, "le fichier local")
 
-        elif data_source == "📊 Excel":
+        elif data_source == "excel":
             uploaded_excel = st.file_uploader(
                 "Importer un classeur Excel",
                 type=['xlsx', 'xls'],
@@ -469,7 +543,7 @@ class AutoMLWizard:
                 except Exception as exc:
                     st.error(f"Erreur lors de la lecture du fichier Excel : {exc}")
 
-        elif data_source == "📋 Google Sheets":
+        elif data_source == "google_sheets":
             st.write("Connectez une feuille Google Sheets en fournissant un lien de partage public.")
             raw_url = st.text_input(
                 "URL Google Sheets",
@@ -508,7 +582,117 @@ class AutoMLWizard:
                                     f"Détail : {exc}"
                                 )
 
-        elif data_source == "🗄️ Base de données":
+        elif data_source == "crm":
+            st.write("Connectez votre CRM pour importer automatiquement vos contacts, deals ou autres entités.")
+
+            if not CRM_CONNECTORS_AVAILABLE:
+                st.warning(
+                    "Les connecteurs CRM ne sont pas disponibles dans cet environnement. "
+                    "Installez les dépendances optionnelles pour activer cette fonctionnalité."
+                )
+            else:
+                crm_state = dict(st.session_state.get('crm_config', {}))
+
+                crm_type_options = {
+                    "HubSpot": "hubspot",
+                    "Salesforce": "salesforce",
+                    "Pipedrive": "pipedrive"
+                }
+
+                default_label = next(
+                    (label for label, value in crm_type_options.items() if value == crm_state.get('crm_type')),
+                    "HubSpot"
+                )
+                crm_label = st.selectbox("Type de CRM", list(crm_type_options.keys()), index=list(crm_type_options.keys()).index(default_label))
+                crm_type = crm_type_options[crm_label]
+
+                api_key = st.text_input(
+                    "Clé API",
+                    value=crm_state.get('api_key', ''),
+                    type="password",
+                    help="La clé API ou le token d'accès de votre CRM."
+                )
+
+                endpoint_placeholders = {
+                    'hubspot': 'https://api.hubapi.com/crm/v3',
+                    'pipedrive': 'https://api.pipedrive.com/v1',
+                    'salesforce': 'https://votre-instance.salesforce.com/services/data/v55.0'
+                }
+
+                endpoint_help = (
+                    "Optionnel. Laissez vide pour utiliser l'endpoint par défaut. "
+                    "Pour Salesforce, renseignez l'URL de votre instance."
+                )
+
+                api_endpoint = st.text_input(
+                    "Endpoint API (optionnel)",
+                    value=crm_state.get('api_endpoint', ''),
+                    placeholder=endpoint_placeholders.get(crm_type, ''),
+                    help=endpoint_help
+                )
+
+                entity_options = [
+                    ("contacts", "Contacts"),
+                    ("companies", "Entreprises"),
+                    ("deals", "Opportunités"),
+                    ("tickets", "Tickets"),
+                    ("leads", "Leads"),
+                    ("accounts", "Comptes"),
+                    ("activities", "Activités"),
+                    ("notes", "Notes"),
+                    ("tasks", "Tâches")
+                ]
+
+                entity_labels = [label for _, label in entity_options]
+                current_entity_key = crm_state.get('entity', 'contacts')
+                current_entity_label = next(
+                    (label for key, label in entity_options if key == current_entity_key),
+                    entity_options[0][1]
+                )
+                entity_label = st.selectbox("Entité à importer", entity_labels, index=entity_labels.index(current_entity_label))
+                entity_key = next(key for key, label in entity_options if label == entity_label)
+
+                limit = st.number_input(
+                    "Nombre maximum d'enregistrements",
+                    min_value=10,
+                    max_value=1000,
+                    value=int(crm_state.get('limit', 200)),
+                    step=10,
+                    help="Limite les enregistrements importés pour accélérer l'aperçu."
+                )
+
+                crm_state.update({
+                    'crm_type': crm_type,
+                    'entity': entity_key,
+                    'api_key': api_key,
+                    'api_endpoint': api_endpoint,
+                    'limit': int(limit)
+                })
+                st.session_state.crm_config = crm_state
+
+                if st.button("🔄 Charger depuis le CRM", type="primary"):
+                    if crm_type != 'salesforce' and not api_key:
+                        st.warning("Veuillez renseigner une clé API valide pour ce CRM.")
+                    else:
+                        with st.spinner("Connexion au CRM et récupération des données..."):
+                            try:
+                                df = fetch_crm_data(
+                                    crm_state['entity'],
+                                    crm_state['crm_type'],
+                                    api_key=crm_state['api_key'] or None,
+                                    api_endpoint=crm_state['api_endpoint'] or None,
+                                    limit=crm_state.get('limit')
+                                )
+                            except Exception as exc:
+                                st.error(f"Erreur lors de la connexion au CRM : {exc}")
+                            else:
+                                if df is not None and not df.empty:
+                                    source_label = f"{crm_label} - {entity_label}"
+                                    self._display_loaded_data(df, source_label)
+                                else:
+                                    st.info("Aucune donnée n'a été trouvée pour cette entité.")
+
+        elif data_source == "database":
             st.write("Interrogez une base SQL en utilisant une chaîne de connexion SQLAlchemy.")
             mask_connection = st.checkbox(
                 "Masquer la chaîne de connexion",
@@ -547,7 +731,7 @@ class AutoMLWizard:
                             )
 
         else:
-            st.info(f"{data_source} - Fonctionnalité en développement")
+            st.info(f"{data_source_label} - Fonctionnalité en développement")
         
         # Navigation
         st.markdown("---")
