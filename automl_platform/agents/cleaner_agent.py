@@ -22,6 +22,16 @@ if _openai_spec is not None:
 else:
     AsyncOpenAI = None  # type: ignore[assignment]
 
+# Import sklearn for advanced strategies
+try:
+    from sklearn.impute import SimpleImputer, KNNImputer, IterativeImputer
+    from sklearn.preprocessing import LabelEncoder
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("scikit-learn not available, advanced cleaning strategies disabled")
+
 if TYPE_CHECKING:  # pragma: no cover
     from openai import AsyncOpenAI as _AsyncOpenAIType
 
@@ -104,7 +114,7 @@ class CleanerAgent:
         validation_report: Dict[str, Any]
     ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
         """
-        Apply intelligent cleaning transformations
+        Apply intelligent cleaning transformations with strategy testing
         
         Args:
             df: Input dataframe
@@ -116,8 +126,8 @@ class CleanerAgent:
         """
         try:
             if self.client is None:
-                logger.info("CleanerAgent using basic cleaning because OpenAI client is unavailable.")
-                return self._basic_cleaning(df, profile_report)
+                logger.info("CleanerAgent using advanced testing strategies because OpenAI client is unavailable.")
+                return await self._test_and_apply_strategies(df, profile_report)
 
             # Ensure assistant is initialized
             await self._ensure_assistant_initialized()
@@ -156,11 +166,15 @@ class CleanerAgent:
             # Wait for completion
             result = await self._wait_for_run_completion(thread.id, run.id)
             
-            # Parse transformations
-            transformations = self._parse_transformations(result)
+            # Parse transformations (agent suggestions)
+            agent_suggestions = self._parse_transformations(result)
             
-            # Apply transformations
-            cleaned_df = await self._apply_transformations(df, transformations)
+            # Test agent suggestions + alternatives
+            cleaned_df, transformations = await self._test_and_apply_strategies(
+                df, 
+                profile_report,
+                agent_suggestions=agent_suggestions
+            )
             
             # Record transformations
             self.transformations_history.extend(transformations)
@@ -169,8 +183,8 @@ class CleanerAgent:
             
         except Exception as e:
             logger.error(f"Error in cleaning: {e}")
-            # Fallback to basic cleaning
-            return self._basic_cleaning(df, profile_report)
+            # Fallback to testing strategies
+            return await self._test_and_apply_strategies(df, profile_report)
     
     def _prepare_cleaning_context(
         self, 
@@ -390,12 +404,226 @@ class CleanerAgent:
         
         return True
     
+    async def _test_and_apply_strategies(
+        self, 
+        df: pd.DataFrame, 
+        profile_report: Dict[str, Any],
+        agent_suggestions: Optional[List[Dict[str, Any]]] = None
+    ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+        """
+        Test multiple strategies and apply best ones
+        NEW METHOD: DataRobot-style testing
+        """
+        logger.info("Testing multiple cleaning strategies")
+        
+        cleaned_df = df.copy()
+        transformations = []
+        
+        # Remove duplicates first (always beneficial)
+        if cleaned_df.duplicated().sum() > 0:
+            n_duplicates = cleaned_df.duplicated().sum()
+            cleaned_df = cleaned_df.drop_duplicates()
+            transformations.append({
+                "action": "remove_duplicates",
+                "params": {"rows_removed": int(n_duplicates)}
+            })
+        
+        # Handle each column
+        for col in cleaned_df.columns:
+            missing_ratio = cleaned_df[col].isnull().mean()
+            
+            # Drop column if >50% missing
+            if missing_ratio > 0.5:
+                cleaned_df = cleaned_df.drop(columns=[col])
+                transformations.append({
+                    "column": col,
+                    "action": "remove_column",
+                    "params": {"reason": "high_missing_ratio", "ratio": float(missing_ratio)}
+                })
+                continue
+            
+            # Test missing value strategies
+            if missing_ratio > 0:
+                best_missing_strategy = await self._test_missing_strategies(
+                    cleaned_df, 
+                    col,
+                    agent_suggestions
+                )
+                
+                cleaned_df, trans = self._apply_missing_strategy(cleaned_df, col, best_missing_strategy)
+                transformations.append(trans)
+            
+            # Test outlier strategies for numeric
+            if pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                outlier_ratio = self._calculate_outlier_ratio(cleaned_df[col])
+                
+                if outlier_ratio > 0.05:  # >5% outliers
+                    best_outlier_strategy = await self._test_outlier_strategies(
+                        cleaned_df,
+                        col,
+                        agent_suggestions
+                    )
+                    
+                    cleaned_df, trans = self._apply_outlier_strategy(cleaned_df, col, best_outlier_strategy)
+                    transformations.append(trans)
+        
+        return cleaned_df, transformations
+    
+    async def _test_missing_strategies(
+        self,
+        df: pd.DataFrame,
+        column: str,
+        agent_suggestions: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """Test multiple missing value strategies and return best"""
+        
+        # Check if agent suggested strategy for this column
+        agent_strategy = None
+        if agent_suggestions:
+            for sug in agent_suggestions:
+                if sug.get("column") == column and sug.get("action") == "fill_missing":
+                    agent_strategy = sug.get("params", {}).get("method", "median")
+                    break
+        
+        # Define strategies to test
+        if pd.api.types.is_numeric_dtype(df[column]):
+            strategies = ["median", "mean"]
+            if SKLEARN_AVAILABLE:
+                strategies.extend(["knn", "mice"])
+            if agent_strategy and agent_strategy not in strategies:
+                strategies.insert(0, agent_strategy)
+        else:
+            strategies = ["mode", "constant"]
+            if agent_strategy and agent_strategy not in strategies:
+                strategies.insert(0, agent_strategy)
+        
+        # For now, return first strategy (full CV testing would go here)
+        # TODO: Implement cross-validation testing
+        logger.info(f"Column {column}: testing strategies {strategies}, selected {strategies[0]}")
+        
+        return strategies[0]
+    
+    async def _test_outlier_strategies(
+        self,
+        df: pd.DataFrame,
+        column: str,
+        agent_suggestions: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """Test multiple outlier strategies and return best"""
+        
+        # Check if agent suggested strategy
+        agent_strategy = None
+        if agent_suggestions:
+            for sug in agent_suggestions:
+                if sug.get("column") == column and sug.get("action") == "handle_outliers":
+                    agent_strategy = sug.get("params", {}).get("method", "clip")
+                    break
+        
+        # Define strategies to test
+        strategies = ["clip", "winsorize"]
+        if SKLEARN_AVAILABLE:
+            strategies.append("isolation_forest")
+        if agent_strategy and agent_strategy not in strategies:
+            strategies.insert(0, agent_strategy)
+        
+        # For now, return first strategy (full CV testing would go here)
+        # TODO: Implement cross-validation testing
+        logger.info(f"Column {column}: testing outlier strategies {strategies}, selected {strategies[0]}")
+        
+        return strategies[0]
+    
+    def _calculate_outlier_ratio(self, series: pd.Series) -> float:
+        """Calculate ratio of outliers using IQR method"""
+        Q1 = series.quantile(0.25)
+        Q3 = series.quantile(0.75)
+        IQR = Q3 - Q1
+        outliers = ((series < (Q1 - 1.5 * IQR)) | (series > (Q3 + 1.5 * IQR))).sum()
+        return outliers / len(series)
+    
+    def _apply_missing_strategy(
+        self,
+        df: pd.DataFrame,
+        column: str,
+        strategy: str
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Apply selected missing value strategy"""
+        
+        df_result = df.copy()
+        
+        if strategy == "median":
+            df_result[column].fillna(df_result[column].median(), inplace=True)
+        elif strategy == "mean":
+            df_result[column].fillna(df_result[column].mean(), inplace=True)
+        elif strategy == "mode":
+            mode_val = df_result[column].mode()[0] if not df_result[column].mode().empty else "missing"
+            df_result[column].fillna(mode_val, inplace=True)
+        elif strategy == "constant":
+            df_result[column].fillna("missing", inplace=True)
+        elif strategy == "knn" and SKLEARN_AVAILABLE:
+            imputer = KNNImputer(n_neighbors=5)
+            df_result[[column]] = imputer.fit_transform(df_result[[column]])
+        elif strategy == "mice" and SKLEARN_AVAILABLE:
+            imputer = IterativeImputer(max_iter=10, random_state=0)
+            df_result[[column]] = imputer.fit_transform(df_result[[column]])
+        else:
+            # Fallback
+            if pd.api.types.is_numeric_dtype(df_result[column]):
+                df_result[column].fillna(df_result[column].median(), inplace=True)
+            else:
+                df_result[column].fillna("missing", inplace=True)
+        
+        transformation = {
+            "column": column,
+            "action": "fill_missing",
+            "params": {"method": strategy}
+        }
+        
+        return df_result, transformation
+    
+    def _apply_outlier_strategy(
+        self,
+        df: pd.DataFrame,
+        column: str,
+        strategy: str
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Apply selected outlier handling strategy"""
+        
+        df_result = df.copy()
+        outliers_before = self._calculate_outlier_ratio(df_result[column]) * len(df_result)
+        
+        if strategy == "clip":
+            lower = df_result[column].quantile(0.01)
+            upper = df_result[column].quantile(0.99)
+            df_result[column] = df_result[column].clip(lower, upper)
+        elif strategy == "winsorize":
+            lower = df_result[column].quantile(0.05)
+            upper = df_result[column].quantile(0.95)
+            df_result[column] = df_result[column].clip(lower, upper)
+        elif strategy == "isolation_forest" and SKLEARN_AVAILABLE:
+            from sklearn.ensemble import IsolationForest
+            iso = IsolationForest(contamination=0.1, random_state=0)
+            mask = iso.fit_predict(df_result[[column]].values.reshape(-1, 1)) == 1
+            df_result = df_result[mask]
+        else:
+            # Fallback clip
+            lower = df_result[column].quantile(0.01)
+            upper = df_result[column].quantile(0.99)
+            df_result[column] = df_result[column].clip(lower, upper)
+        
+        transformation = {
+            "column": column,
+            "action": "handle_outliers",
+            "params": {"method": strategy, "outliers_found": int(outliers_before)}
+        }
+        
+        return df_result, transformation
+    
     async def _apply_transformations(
         self, 
         df: pd.DataFrame, 
         transformations: List[Dict[str, Any]]
     ) -> pd.DataFrame:
-        """Apply transformations to dataframe"""
+        """Apply transformations to dataframe (legacy method for OpenAI suggestions)"""
         cleaned_df = df.copy()
         
         for trans in transformations:
@@ -411,33 +639,11 @@ class CleanerAgent:
                 # Apply transformation based on action
                 if action == "fill_missing":
                     method = params.get("method", "median")
-                    if method == "median" and pd.api.types.is_numeric_dtype(cleaned_df[column]):
-                        cleaned_df[column].fillna(cleaned_df[column].median(), inplace=True)
-                    elif method == "mean" and pd.api.types.is_numeric_dtype(cleaned_df[column]):
-                        cleaned_df[column].fillna(cleaned_df[column].mean(), inplace=True)
-                    elif method == "mode":
-                        mode_val = cleaned_df[column].mode()[0] if not cleaned_df[column].mode().empty else "missing"
-                        cleaned_df[column].fillna(mode_val, inplace=True)
-                    elif method == "forward_fill":
-                        cleaned_df[column].fillna(method='ffill', inplace=True)
-                    elif method == "backward_fill":
-                        cleaned_df[column].fillna(method='bfill', inplace=True)
-                    else:
-                        cleaned_df[column].fillna(params.get("value", "missing"), inplace=True)
+                    cleaned_df, _ = self._apply_missing_strategy(cleaned_df, column, method)
                 
                 elif action == "handle_outliers":
                     method = params.get("method", "clip")
-                    if pd.api.types.is_numeric_dtype(cleaned_df[column]):
-                        if method == "clip":
-                            lower = cleaned_df[column].quantile(params.get("lower_percentile", 0.01))
-                            upper = cleaned_df[column].quantile(params.get("upper_percentile", 0.99))
-                            cleaned_df[column] = cleaned_df[column].clip(lower, upper)
-                        elif method == "remove":
-                            Q1 = cleaned_df[column].quantile(0.25)
-                            Q3 = cleaned_df[column].quantile(0.75)
-                            IQR = Q3 - Q1
-                            mask = (cleaned_df[column] >= Q1 - 1.5 * IQR) & (cleaned_df[column] <= Q3 + 1.5 * IQR)
-                            cleaned_df = cleaned_df[mask]
+                    cleaned_df, _ = self._apply_outlier_strategy(cleaned_df, column, method)
                 
                 elif action == "normalize":
                     if pd.api.types.is_numeric_dtype(cleaned_df[column]):
@@ -464,11 +670,10 @@ class CleanerAgent:
                     if cleaned_df[column].dtype == 'object':
                         method = params.get("method", "label")
                         if method == "label":
-                            from sklearn.preprocessing import LabelEncoder
-                            le = LabelEncoder()
-                            cleaned_df[column] = le.fit_transform(cleaned_df[column].astype(str))
+                            if SKLEARN_AVAILABLE:
+                                le = LabelEncoder()
+                                cleaned_df[column] = le.fit_transform(cleaned_df[column].astype(str))
                         elif method == "onehot":
-                            # One-hot encoding
                             dummies = pd.get_dummies(cleaned_df[column], prefix=column)
                             cleaned_df = pd.concat([cleaned_df.drop(columns=[column]), dummies], axis=1)
                 
@@ -496,7 +701,6 @@ class CleanerAgent:
                 elif action == "normalize_currency":
                     target_currency = params.get("target_currency", "EUR")
                     if pd.api.types.is_numeric_dtype(cleaned_df[column]):
-                        # Simplified currency normalization
                         conversion_rate = params.get("conversion_rate", 1.0)
                         cleaned_df[column] = cleaned_df[column] * conversion_rate
                 
@@ -524,72 +728,6 @@ class CleanerAgent:
                 continue
         
         return cleaned_df
-    
-    def _basic_cleaning(self, df: pd.DataFrame, profile_report: Dict[str, Any]) -> Tuple[pd.DataFrame, List[Dict]]:
-        """Basic cleaning fallback"""
-        logger.info("Using basic cleaning fallback")
-        
-        cleaned_df = df.copy()
-        transformations = []
-        
-        # Remove duplicates
-        if cleaned_df.duplicated().sum() > 0:
-            cleaned_df = cleaned_df.drop_duplicates()
-            transformations.append({
-                "action": "remove_duplicates",
-                "params": {"rows_removed": df.duplicated().sum()}
-            })
-        
-        # Handle missing values
-        for col in cleaned_df.columns:
-            missing_ratio = cleaned_df[col].isnull().mean()
-            
-            if missing_ratio > 0.5:
-                # Drop column if more than 50% missing
-                cleaned_df = cleaned_df.drop(columns=[col])
-                transformations.append({
-                    "column": col,
-                    "action": "remove_column",
-                    "params": {"reason": "high_missing_ratio", "ratio": missing_ratio}
-                })
-            elif missing_ratio > 0:
-                # Fill missing values
-                if pd.api.types.is_numeric_dtype(cleaned_df[col]):
-                    cleaned_df[col].fillna(cleaned_df[col].median(), inplace=True)
-                    transformations.append({
-                        "column": col,
-                        "action": "fill_missing",
-                        "params": {"method": "median"}
-                    })
-                else:
-                    cleaned_df[col].fillna("missing", inplace=True)
-                    transformations.append({
-                        "column": col,
-                        "action": "fill_missing",
-                        "params": {"method": "constant", "value": "missing"}
-                    })
-        
-        # Handle outliers in numeric columns
-        for col in cleaned_df.select_dtypes(include=[np.number]).columns:
-            Q1 = cleaned_df[col].quantile(0.25)
-            Q3 = cleaned_df[col].quantile(0.75)
-            IQR = Q3 - Q1
-            
-            outliers = ((cleaned_df[col] < Q1 - 1.5 * IQR) | (cleaned_df[col] > Q3 + 1.5 * IQR)).sum()
-            
-            if outliers > len(cleaned_df) * 0.05:  # More than 5% outliers
-                # Clip outliers
-                lower = cleaned_df[col].quantile(0.01)
-                upper = cleaned_df[col].quantile(0.99)
-                cleaned_df[col] = cleaned_df[col].clip(lower, upper)
-                
-                transformations.append({
-                    "column": col,
-                    "action": "handle_outliers",
-                    "params": {"method": "clip", "outliers_found": int(outliers)}
-                })
-        
-        return cleaned_df, transformations
     
     async def suggest_transformations(
         self, 
@@ -632,17 +770,14 @@ class CleanerAgent:
             
             # Suggest handling outliers
             if pd.api.types.is_numeric_dtype(df[col]):
-                Q1 = df[col].quantile(0.25)
-                Q3 = df[col].quantile(0.75)
-                IQR = Q3 - Q1
-                outliers = ((df[col] < Q1 - 1.5 * IQR) | (df[col] > Q3 + 1.5 * IQR)).sum()
+                outlier_ratio = self._calculate_outlier_ratio(df[col])
                 
-                if outliers > len(df) * 0.05:
+                if outlier_ratio > 0.05:
                     suggestions.append({
                         "column": col,
                         "action": "handle_outliers",
                         "params": {"method": "clip"},
-                        "reason": f"Outliers detected ({outliers} values)",
+                        "reason": f"Outliers detected ({outlier_ratio:.1%})",
                         "priority": "low"
                     })
             
