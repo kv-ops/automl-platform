@@ -70,6 +70,9 @@ class IntelligentDataCleaner:
         """
         self.config = config or AgentConfig()
         self.use_claude = use_claude
+        self.hybrid_mode = config.enable_hybrid_mode if config else False
+        self.local_stats = {}
+        self.hybrid_decisions = []
 
         # Initialize both systems
         self.orchestrator = DataCleaningOrchestrator(
@@ -138,6 +141,27 @@ class IntelligentDataCleaner:
         # Step 1: Always start with quality assessment
         assessment = self.quality_agent.assess(df, user_context.get("target_variable"))
         self.quality_scores["before"] = assessment.quality_score
+
+        # Step 1.5: Check if local cleaning is sufficient (hybrid mode)
+        if self.hybrid_mode and self.orchestrator and hasattr(self.orchestrator.config, 'should_use_agent'):
+            local_context = {
+                "missing_ratio": df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+                "quality_score": assessment.quality_score,
+                "complexity_score": 0.5 if df.shape[1] > 50 else 0.2
+            }
+            use_agent, reason = self.orchestrator.config.should_use_agent(local_context)
+            
+            if not use_agent:
+                logger.info(f"Hybrid mode: Using local cleaning - {reason}")
+                # Track decision
+                self.hybrid_decisions.append({
+                    "timestamp": datetime.now(),
+                    "use_agent": False,
+                    "reason": reason
+                })
+                # Use orchestrator's local cleaning
+                cleaned_df, report = await self.orchestrator._apply_local_cleaning(df, user_context)
+                return cleaned_df, report
         
         # Step 2: Choose cleaning strategy with Claude if available
         if mode == "auto":
@@ -580,6 +604,13 @@ Respond with JSON:
             },
             "strategy": strategy.get("summary", "Rule-based") if strategy else "Rule-based"
         }
+        
+        if self.hybrid_mode and self.hybrid_decisions:
+            report["hybrid_stats"] = {
+                "total_decisions": len(self.hybrid_decisions),
+                "agent_decisions": sum(1 for d in self.hybrid_decisions if d.get("use_agent", True)),
+                "local_decisions": sum(1 for d in self.hybrid_decisions if not d.get("use_agent", True))
+            }
         
         if mode == "agents" and "execution_history" in cleaning_report:
             report["performance"] = {
