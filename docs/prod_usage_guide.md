@@ -316,6 +316,24 @@ services:
       - AUTOML_MEMORY_CRITICAL_MB=1500
 ```
 
+### Paramétrage du mode hybride retail
+
+Activez l'arbitrage local/agents directement depuis `config.yaml` pour les jeux de données retail :
+
+```yaml
+agent_first:
+  enable_hybrid_mode: true
+  hybrid_mode_thresholds:
+    missing_threshold: 0.35
+    quality_score_threshold: 70.0
+  retail_rules:
+    gs1_compliance_target: 0.98
+  hybrid_cost_limits:
+    max_total: 5.0
+```
+
+> 💡 **Bonnes pratiques QA** : lancer `pytest tests/test_agents.py -k should_use_agent_for_retail_risks` et `pytest tests/test_data_quality_agent.py -k retail_specific` avant toute mise en production pour vérifier les règles retail et le rapport final.
+
 ### Kubernetes Configuration
 
 ```yaml

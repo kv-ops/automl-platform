@@ -25,6 +25,7 @@ from automl_platform.data_quality_agent import (
     IntelligentDataQualityAgent,
     RiskLevel,
 )
+from automl_platform.agents.agent_config import AgentConfig
 
 
 class TestRiskLevel:
@@ -332,7 +333,7 @@ class TestDataRobotStyleQualityMonitor:
     def test_assess_duplicates(self, monitor, problematic_data):
         """Test duplicate detection"""
         report = monitor._assess_duplicates(problematic_data)
-        
+
         assert 'count' in report
         assert 'percentage' in report
         assert 'penalty' in report
@@ -352,11 +353,35 @@ class TestDataRobotStyleQualityMonitor:
         # Should detect severe class imbalance (95:5 ratio)
         alert_types = [alert['type'] for alert in report['alerts']]
         assert 'class_imbalance' in alert_types
-        
+
         # Check the alert message mentions the ratio
         imbalance_alerts = [a for a in report['alerts'] if a['type'] == 'class_imbalance']
         assert len(imbalance_alerts) > 0
         assert 'ratio' in imbalance_alerts[0]['message'].lower()
+
+    def test_retail_specific_metrics_and_recommendations(self):
+        """Retail datasets should surface sentinel, price and GS1 issues."""
+        config = AgentConfig()
+        config.user_context["secteur_activite"] = "retail"
+
+        monitor = DataRobotStyleQualityMonitor(config=config)
+
+        df = pd.DataFrame({
+            "sku_code": ["12345678", "invalid", "00000000"],  # One non-compliant value
+            "price": [25.0, -5.0, 19.0],  # Contains negative price
+            "stock_qty": [0, -999, 15],  # Includes sentinel value but preserves legitimate zero
+            "category": ["chemises", "chemises", "pantalons"],
+            "target": [1, 0, 1]
+        })
+
+        assessment = monitor.assess_quality(df, target_column="target")
+
+        retail_categories = {rec["category"] for rec in assessment.retail_recommendations}
+        assert "price_correction" in retail_categories
+        assert "sentinel_handling" in retail_categories
+
+        assert assessment.retail_metrics["negative_price_columns"], "Negative price columns should be tracked"
+        assert assessment.retail_metrics["gs1_compliance"] < 100.0, "Non compliant SKUs must lower GS1 score"
     
     def test_assess_target_missing(self, monitor):
         """Test detection of missing target values"""

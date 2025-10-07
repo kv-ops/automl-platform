@@ -99,7 +99,7 @@ monitoring:
 # ---------- LLM Configuration ----------
 llm:
   enabled: false  # Set to true when you have API keys
-  
+
   # Provider settings
   provider: openai  # Options: openai, anthropic
   # api_key: sk-your-api-key  # Use environment variable OPENAI_API_KEY instead
@@ -120,6 +120,36 @@ llm:
   
   # Caching
   cache_responses: true
+
+# ---------- Agent-First & Hybrid Cleaning ----------
+agent_first:
+  enabled: true
+  enable_hybrid_mode: true
+  hybrid_mode_thresholds:
+    missing_threshold: 0.35
+    outlier_threshold: 0.10
+    quality_score_threshold: 70.0
+    complexity_threshold: 0.8
+    cost_threshold: 1.0
+  retail_rules:
+    sentinel_values: [-999, -1, 9999]
+    stock_zero_acceptable: true
+    price_negative_critical: true
+    sku_format_strict: true
+    gs1_compliance_required: true
+    gs1_compliance_target: 0.98
+    category_imputation: by_category
+    price_imputation: median_by_category
+  hybrid_cost_limits:
+    max_openai: 3.0
+    max_claude: 2.0
+    max_total: 5.0
+    max_per_decision: 0.1
+  sector_keywords:
+    retail: ["SKU", "UPC", "GS1", "inventory", "merchandising"]
+    finance: ["IFRS", "Basel", "risk management"]
+    sante: ["HL7", "ICD-10", "patient data"]
+    industrie: ["ISO", "manufacturing", "supply chain"]
 
 # ---------- Worker Configuration ----------
 worker:

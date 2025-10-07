@@ -196,11 +196,31 @@ class TestOrchestrator:
         # Get top N
         top_2 = orchestrator.get_leaderboard(top_n=2)
         assert len(top_2) <= 2
-        
+
         # Check sorting (best first)
         if len(leaderboard) > 1:
             assert leaderboard['cv_score'].iloc[0] >= leaderboard['cv_score'].iloc[1]
-    
+
+    def test_training_metadata_is_populated(self):
+        """After fit the orchestrator should expose structured training metadata."""
+        X, y = make_classification(
+            n_samples=60, n_features=5, n_classes=2, random_state=123
+        )
+        X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(5)])
+        y = pd.Series(y)
+
+        orchestrator = AutoMLOrchestrator(self.config)
+        orchestrator.fit(X, y)
+
+        metadata = orchestrator.training_metadata
+
+        assert metadata["training_id"] == orchestrator.training_id
+        assert metadata["task"] == "classification"
+        assert metadata["n_samples"] == len(X)
+        assert metadata["n_features"] == X.shape[1]
+        assert "start_time" in metadata
+        assert "end_time" in metadata
+
     def test_no_data_leakage_in_cv(self):
         """Test that CV doesn't have data leakage."""
         # Create data with a moderately correlated feature
