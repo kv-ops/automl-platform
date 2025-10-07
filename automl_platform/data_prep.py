@@ -4,6 +4,7 @@ Enhanced Data Preparation Module with Full Agent-First Integration
 Includes data quality checks, drift detection, advanced preprocessing,
 integration with connectors, feature store, OpenAI agents, and Universal ML Agent.
 Complete implementation with all Agent-First components.
+ENHANCED: Hybrid mode support with local statistics calculation for efficient processing
 """
 
 import pandas as pd
@@ -41,6 +42,7 @@ class EnhancedDataPreprocessor:
     No data leakage guaranteed through proper pipeline usage.
     Integrated with data connectors, feature store, OpenAI agents, and Universal ML Agent.
     Full Agent-First support for template-free AutoML.
+    ENHANCED: Hybrid local/agent mode for optimal performance vs quality trade-off
     """
     
     def __init__(self, config: Union[Dict[str, Any], 'AutoMLConfig']):
@@ -55,10 +57,12 @@ class EnhancedDataPreprocessor:
             self.config = config
             self.enable_intelligent_cleaning = config.get('enable_intelligent_cleaning', False)
             self.enable_agent_first = config.get('enable_agent_first', False)
+            self.enable_hybrid_mode = config.get('enable_hybrid_mode', False)  # NEW: Hybrid mode support
         else:  # AutoMLConfig instance
             self.config = config.to_dict() if hasattr(config, 'to_dict') else asdict(config)
             self.enable_intelligent_cleaning = getattr(config, 'enable_intelligent_cleaning', False)
             self.enable_agent_first = getattr(config, 'enable_agent_first', False)
+            self.enable_hybrid_mode = getattr(config, 'enable_hybrid_mode', False)  # NEW: Hybrid mode support
             # Get Agent-First config if available
             if hasattr(config, 'agent_first'):
                 self.agent_first_config = config.agent_first
@@ -79,6 +83,7 @@ class EnhancedDataPreprocessor:
         self.drift_report = {}
         self.cleaning_report = {}  # For intelligent cleaning results
         self.ml_context = None  # For Agent-First ML context
+        self.local_stats = {}  # NEW: Store local statistics for hybrid mode
         
         # Advanced options
         self.handle_outliers = self.config.get('handle_outliers', True)
@@ -124,12 +129,13 @@ class EnhancedDataPreprocessor:
                 AgentConfig
             )
             
-            # Create agent configuration
+            # Create agent configuration with hybrid mode support
             agent_config = AgentConfig(
                 openai_api_key=os.getenv("OPENAI_API_KEY") or self.config.get('openai_api_key'),
                 model=self.config.get('openai_model', 'gpt-4-1106-preview'),
                 enable_web_search=True,
-                enable_file_operations=True
+                enable_file_operations=True,
+                enable_hybrid_mode=self.enable_hybrid_mode  # Pass hybrid mode flag
             )
             
             # Initialize all Agent-First components
@@ -140,6 +146,8 @@ class EnhancedDataPreprocessor:
             self.orchestrator = DataCleaningOrchestrator(agent_config, self.config)
             
             logger.info("✅ Agent-First components initialized successfully")
+            if self.enable_hybrid_mode:
+                logger.info("🔄 Hybrid mode enabled for intelligent decision making")
             
         except ImportError as e:
             logger.warning(f"Agent-First components not available: {e}")
@@ -174,6 +182,96 @@ class EnhancedDataPreprocessor:
         except Exception as e:
             logger.warning(f"Failed to initialize feature store: {e}")
             self.feature_store = None
+    
+    def _calculate_local_stats(self, df: pd.DataFrame, user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculate local statistics for hybrid mode decision making.
+        These stats are used to decide whether to use agents or local cleaning.
+        
+        Args:
+            df: Input dataframe
+            user_context: User context with sector information
+            
+        Returns:
+            Dictionary of local statistics
+        """
+        logger.info("📊 Calculating local statistics for hybrid mode")
+        
+        stats = {
+            'missing_ratio': df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+            'duplicate_ratio': df.duplicated().mean(),
+            'quality_score': 100.0,
+            'complexity_score': 0.0,
+            'has_sentinel_values': False,
+            'has_negative_prices': False,
+            'outlier_ratio': 0.0,
+            'high_cardinality_count': 0,
+            'constant_columns': [],
+            'shape': df.shape,
+            'numeric_columns': len(df.select_dtypes(include=[np.number]).columns),
+            'categorical_columns': len(df.select_dtypes(include=['object']).columns)
+        }
+        
+        # Check for sentinel values in retail context
+        if user_context.get('secteur_activite') == 'retail':
+            sentinel_values = self.config.get('sentinel_values', [-999, -1, 0, 9999])
+            for col in df.select_dtypes(include=[np.number]).columns:
+                if df[col].isin(sentinel_values).any():
+                    stats['has_sentinel_values'] = True
+                    break
+        
+        # Check for negative prices
+        price_columns = [col for col in df.columns if 'price' in col.lower() or 'prix' in col.lower()]
+        for col in price_columns:
+            if pd.api.types.is_numeric_dtype(df[col]) and (df[col] < 0).any():
+                stats['has_negative_prices'] = True
+                break
+        
+        # Calculate quality score based on various factors
+        missing_penalty = min(30, stats['missing_ratio'] * 100)
+        duplicate_penalty = min(20, stats['duplicate_ratio'] * 100)
+        stats['quality_score'] -= (missing_penalty + duplicate_penalty)
+        
+        # Calculate complexity score
+        if df.shape[1] > 50:
+            stats['complexity_score'] += 0.3
+        if stats['missing_ratio'] > 0.3:
+            stats['complexity_score'] += 0.3
+        if stats['has_sentinel_values']:
+            stats['complexity_score'] += 0.2
+        if stats['has_negative_prices']:
+            stats['complexity_score'] += 0.2
+        
+        # Check for high cardinality
+        for col in df.select_dtypes(include=['object']).columns:
+            if df[col].nunique() > self.max_cardinality:
+                stats['high_cardinality_count'] += 1
+        
+        # Check for constant columns
+        for col in df.columns:
+            if df[col].nunique() == 1:
+                stats['constant_columns'].append(col)
+        
+        # Calculate outlier ratio for numeric columns
+        outlier_counts = []
+        for col in df.select_dtypes(include=[np.number]).columns:
+            Q1 = df[col].quantile(0.25)
+            Q3 = df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            outliers = ((df[col] < Q1 - 1.5 * IQR) | (df[col] > Q3 + 1.5 * IQR)).sum()
+            outlier_counts.append(outliers)
+        
+        if outlier_counts:
+            stats['outlier_ratio'] = sum(outlier_counts) / (len(df) * len(outlier_counts))
+        
+        # Store for later use
+        self.local_stats = stats
+        
+        logger.info(f"📊 Local stats: Quality={stats['quality_score']:.1f}, "
+                   f"Missing={stats['missing_ratio']:.1%}, "
+                   f"Complexity={stats['complexity_score']:.2f}")
+        
+        return stats
     
     async def agent_first_automl(
         self, 
@@ -279,11 +377,12 @@ class EnhancedDataPreprocessor:
     async def intelligent_clean(self, df: pd.DataFrame, user_context: Dict[str, Any]) -> pd.DataFrame:
         """
         API finale pour le nettoyage intelligent avec agents OpenAI.
+        ENHANCED: Support for hybrid mode with local statistics calculation
         
         Args:
             df: DataFrame à nettoyer
             user_context: Contexte utilisateur avec:
-                - secteur_activite: secteur d'activité (ex: "finance")
+                - secteur_activite: secteur d'activité (ex: "finance", "retail")
                 - target_variable: nom de la variable cible (ex: "churn")  
                 - contexte_metier: description métier (ex: "Prédiction attrition clients B2B")
                 
@@ -294,6 +393,23 @@ class EnhancedDataPreprocessor:
             logger.info("Intelligent cleaning disabled, using standard preprocessing")
             return self.fit_transform(df)
         
+        # Calculate local statistics for hybrid mode if enabled
+        if self.enable_hybrid_mode:
+            logger.info("🔄 Hybrid mode enabled - calculating local statistics")
+            local_stats = self._calculate_local_stats(df, user_context)
+            
+            # Add local stats to user context for orchestrator
+            user_context['local_stats'] = local_stats
+            user_context['enable_hybrid_mode'] = True
+            
+            # Log hybrid decision factors
+            logger.info(f"📊 Hybrid decision factors:")
+            logger.info(f"   - Quality Score: {local_stats['quality_score']:.1f}/100")
+            logger.info(f"   - Complexity: {local_stats['complexity_score']:.2f}")
+            logger.info(f"   - Missing Ratio: {local_stats['missing_ratio']:.1%}")
+            logger.info(f"   - Has Sentinel Values: {local_stats['has_sentinel_values']}")
+            logger.info(f"   - Has Negative Prices: {local_stats['has_negative_prices']}")
+        
         # If Agent-First is enabled, use Universal Agent
         if self.enable_agent_first and self.universal_agent:
             logger.info("Using Agent-First for intelligent cleaning")
@@ -302,7 +418,8 @@ class EnhancedDataPreprocessor:
             user_hints = {
                 'sector': user_context.get('secteur_activite', 'general'),
                 'keywords': [user_context.get('contexte_metier', '')],
-                'target': user_context.get('target_variable')
+                'target': user_context.get('target_variable'),
+                'local_stats': user_context.get('local_stats', {})  # Include local stats
             }
             
             # Use Universal Agent for complete pipeline
@@ -318,6 +435,9 @@ class EnhancedDataPreprocessor:
         if self.orchestrator:
             try:
                 logger.info(f"Starting intelligent cleaning for sector: {user_context.get('secteur_activite')}")
+                
+                # The orchestrator will use local_stats if present in user_context
+                # to make hybrid decisions about using agents vs local cleaning
                 cleaned_df, report = await self.orchestrator.clean_dataset(
                     df=df,
                     user_context=user_context,
@@ -325,7 +445,23 @@ class EnhancedDataPreprocessor:
                 )
                 
                 self.cleaning_report = report
-                logger.info(f"Intelligent cleaning completed. Quality improved by: {report.get('quality_metrics', {}).get('improvement', 0):.1f} points")
+                
+                # Log results based on mode used
+                if report.get('mode') == 'local_enhanced':
+                    logger.info(f"✅ Cleaning completed using LOCAL mode (quality sufficient)")
+                    logger.info(f"   Quality: {report.get('quality_before', 0):.1f} → {report.get('quality_after', 0):.1f}")
+                else:
+                    quality_improvement = report.get('summary', {}).get('quality_improvement', 0)
+                    logger.info(f"✅ Intelligent cleaning completed with AGENTS")
+                    logger.info(f"   Quality improved by: {quality_improvement:.1f} points")
+                
+                # Log hybrid statistics if available
+                if self.enable_hybrid_mode and 'performance' in report:
+                    hybrid_stats = report.get('performance', {}).get('hybrid_decisions', {})
+                    if hybrid_stats:
+                        logger.info(f"🔄 Hybrid decisions made:")
+                        logger.info(f"   - Agent calls: {hybrid_stats.get('agent', 0)}")
+                        logger.info(f"   - Local calls: {hybrid_stats.get('local', 0)}")
                 
                 return cleaned_df
                 
@@ -499,6 +635,10 @@ class EnhancedDataPreprocessor:
         # Add ML context if available (from Agent-First)
         if self.ml_context:
             quality_report['ml_context'] = self.ml_context
+        
+        # Add local stats if available (from hybrid mode)
+        if self.local_stats:
+            quality_report['local_stats'] = self.local_stats
         
         # Check for empty dataframe
         if df.empty:
@@ -1086,6 +1226,43 @@ Reasoning:
 {self.ml_context.get('reasoning', 'N/A')}
 """
         return summary
+    
+    def get_hybrid_mode_summary(self) -> str:
+        """Get summary of hybrid mode statistics and decisions."""
+        if not self.enable_hybrid_mode:
+            return "Hybrid mode is not enabled."
+        
+        if not self.local_stats:
+            return "No local statistics calculated yet. Run intelligent_clean() first."
+        
+        summary = f"""
+🔄 Hybrid Mode Summary
+======================
+Status: {'Enabled' if self.enable_hybrid_mode else 'Disabled'}
+
+Local Statistics:
+- Quality Score: {self.local_stats.get('quality_score', 0):.1f}/100
+- Complexity Score: {self.local_stats.get('complexity_score', 0):.2f}
+- Missing Ratio: {self.local_stats.get('missing_ratio', 0):.1%}
+- Duplicate Ratio: {self.local_stats.get('duplicate_ratio', 0):.1%}
+- Has Sentinel Values: {self.local_stats.get('has_sentinel_values', False)}
+- Has Negative Prices: {self.local_stats.get('has_negative_prices', False)}
+- Outlier Ratio: {self.local_stats.get('outlier_ratio', 0):.1%}
+- High Cardinality Count: {self.local_stats.get('high_cardinality_count', 0)}
+- Constant Columns: {len(self.local_stats.get('constant_columns', []))}
+
+Cleaning Report:
+- Mode Used: {self.cleaning_report.get('mode', 'N/A')}
+"""
+        
+        if 'performance' in self.cleaning_report:
+            hybrid_stats = self.cleaning_report.get('performance', {}).get('hybrid_decisions', {})
+            if hybrid_stats:
+                summary += f"""- Agent Decisions: {hybrid_stats.get('agent', 0)}
+- Local Decisions: {hybrid_stats.get('local', 0)}
+"""
+        
+        return summary
 
 
 # Convenience functions
@@ -1250,17 +1427,24 @@ async def automl_without_templates(
 
 async def detect_and_clean(
     df: pd.DataFrame,
-    target_col: Optional[str] = None
+    target_col: Optional[str] = None,
+    enable_hybrid: bool = False
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Detect ML context and clean data automatically using Agent-First.
+    
+    Args:
+        df: Input dataframe
+        target_col: Target column name
+        enable_hybrid: Enable hybrid local/agent mode
     
     Returns:
         Tuple of (cleaned_dataframe, ml_context)
     """
     config = {
         'enable_agent_first': True,
-        'enable_intelligent_cleaning': True
+        'enable_intelligent_cleaning': True,
+        'enable_hybrid_mode': enable_hybrid
     }
     
     preprocessor = EnhancedDataPreprocessor(config)
@@ -1296,7 +1480,7 @@ if __name__ == "__main__":
     df['text_1'] = ['sample text ' * np.random.randint(1, 5) for _ in range(1000)]
     df['target'] = y
     
-    # Create preprocessor with Agent-First enabled
+    # Create preprocessor with Agent-First and Hybrid mode enabled
     config = {
         'handle_outliers': True,
         'outlier_method': 'iqr',
@@ -1304,7 +1488,8 @@ if __name__ == "__main__":
         'enable_quality_checks': True,
         'enable_drift_detection': True,
         'enable_intelligent_cleaning': True,
-        'enable_agent_first': True  # Enable Agent-First
+        'enable_agent_first': True,  # Enable Agent-First
+        'enable_hybrid_mode': True   # Enable Hybrid mode
     }
     
     preprocessor = EnhancedDataPreprocessor(config)
@@ -1330,27 +1515,30 @@ if __name__ == "__main__":
         # Get ML context summary
         print(preprocessor.get_ml_context_summary())
     
-    # Example of intelligent cleaning
-    async def test_intelligent_cleaning():
+    # Example of intelligent cleaning with hybrid mode
+    async def test_hybrid_cleaning():
         user_context = {
-            "secteur_activite": "finance",
+            "secteur_activite": "retail",  # Retail sector for testing hybrid mode
             "target_variable": "target",
-            "contexte_metier": "Fraud detection for credit card transactions"
+            "contexte_metier": "Customer churn prediction for retail"
         }
         
         cleaned_df = await preprocessor.intelligent_clean(df, user_context)
         print(f"Intelligent cleaning completed: {cleaned_df.shape}")
         print(f"Cleaning report: {preprocessor.cleaning_report}")
+        
+        # Get hybrid mode summary
+        print(preprocessor.get_hybrid_mode_summary())
     
     # Run if OpenAI API key is available
     if os.getenv('OPENAI_API_KEY'):
         import asyncio
         
         # Test Agent-First AutoML
-        asyncio.run(test_agent_first())
+        # asyncio.run(test_agent_first())
         
-        # Test intelligent cleaning
-        # asyncio.run(test_intelligent_cleaning())
+        # Test hybrid intelligent cleaning
+        asyncio.run(test_hybrid_cleaning())
     else:
         # Standard cleaning without agents
         X_transformed = preprocessor.fit_transform(df.drop('target', axis=1), df['target'])
