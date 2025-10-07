@@ -3343,6 +3343,73 @@ class TestProductionKnowledgeBase:
 
 
 # ============================================================================
+# HYBRID CONFIGURATION DECISION TESTS
+# ============================================================================
+
+
+def test_agent_config_should_use_agent_for_retail_risks():
+    """Hybrid arbitration should escalate to agents when retail issues stack up."""
+    config = AgentConfig()
+    config.enable_hybrid_mode = True
+    config.user_context["secteur_activite"] = "retail"
+
+    context = {
+        "missing_ratio": 0.20,
+        "quality_score": 65.0,
+        "complexity_score": 0.85,
+        "has_sentinel_values": True,
+        "has_negative_prices": False
+    }
+
+    use_agent, reason = config.should_use_agent(context)
+
+    assert use_agent is True
+    assert "Low quality score" in reason or "High complexity" in reason
+
+
+def test_agent_config_prefers_local_when_metrics_are_clean():
+    """When thresholds are respected the hybrid mode should remain local."""
+    config = AgentConfig()
+    config.enable_hybrid_mode = True
+    config.user_context["secteur_activite"] = "retail"
+
+    context = {
+        "missing_ratio": 0.05,
+        "quality_score": 95.0,
+        "complexity_score": 0.10,
+        "has_sentinel_values": False,
+        "has_negative_prices": False
+    }
+
+    use_agent, reason = config.should_use_agent(context)
+
+    assert use_agent is False
+    assert reason == "Normal conditions"
+
+
+def test_agent_config_blocks_agent_when_cost_limit_reached():
+    """Hybrid decisions must respect global spending caps."""
+    config = AgentConfig()
+    config.enable_hybrid_mode = True
+    config.cost_tracking["total"] = config.max_cost_total + 0.5
+
+    use_agent, reason = config.should_use_agent({"missing_ratio": 0.6})
+
+    assert use_agent is False
+    assert reason == "Cost limit exceeded"
+
+
+def test_agent_config_retail_sentinel_logic_excludes_stock_zero():
+    """Stock columns keep zero as valid while still flagging sentinel codes."""
+    config = AgentConfig()
+    config.user_context["secteur_activite"] = "retail"
+
+    assert config.is_sentinel_value(0, "stock_disponible") is False
+    assert config.is_sentinel_value(-999, "stock_disponible") is True
+    assert config.is_sentinel_value(-999, "price") is True
+
+
+# ============================================================================
 # TESTS YAML CONFIG HANDLER
 # ============================================================================
 

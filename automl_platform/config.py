@@ -88,7 +88,39 @@ class AgentFirstConfig:
     enable_validator_agent: bool = True
     enable_cleaner_agent: bool = True
     enable_controller_agent: bool = True
-    
+
+    # Hybrid cleaning configuration (mirrors AgentConfig defaults)
+    enable_hybrid_mode: bool = True
+    hybrid_mode_thresholds: Dict[str, float] = field(default_factory=lambda: {
+        "missing_threshold": 0.35,
+        "outlier_threshold": 0.10,
+        "quality_score_threshold": 70.0,
+        "complexity_threshold": 0.8,
+        "cost_threshold": 1.0,
+    })
+    retail_rules: Dict[str, Any] = field(default_factory=lambda: {
+        "sentinel_values": [-999, -1, 9999],
+        "stock_zero_acceptable": True,
+        "price_negative_critical": True,
+        "sku_format_strict": True,
+        "gs1_compliance_required": True,
+        "gs1_compliance_target": 0.98,
+        "category_imputation": "by_category",
+        "price_imputation": "median_by_category",
+    })
+    hybrid_cost_limits: Dict[str, float] = field(default_factory=lambda: {
+        "max_openai": 3.0,
+        "max_claude": 2.0,
+        "max_total": 5.0,
+        "max_per_decision": 0.10,
+    })
+    sector_keywords: Dict[str, List[str]] = field(default_factory=lambda: {
+        "retail": ["SKU", "UPC", "GS1", "inventory", "merchandising"],
+        "finance": ["IFRS", "Basel", "risk management"],
+        "sante": ["HL7", "ICD-10", "patient data"],
+        "industrie": ["ISO", "manufacturing", "supply chain"],
+    })
+
     # YAML configuration export
     export_yaml_configs: bool = True
     yaml_output_dir: str = "./agent_outputs"

@@ -186,6 +186,30 @@ cleaned_df, report = await orchestrator.clean_dataset(
 recommendations = await orchestrator.recommend_cleaning_approach(df, user_context)
 ```
 
+#### Hybrid Retail Controls
+
+Retail datasets combine local heuristics (sentinels, negative prices, GS1 checks) with LLM reasoning. Tune the arbitration directly from `config.yaml`:
+
+```yaml
+agent_first:
+  enable_hybrid_mode: true
+  hybrid_mode_thresholds:
+    missing_threshold: 0.35   # Escalate to agents beyond 35% missing
+    quality_score_threshold: 70.0
+  retail_rules:
+    sentinel_values: [-999, -1, 9999]
+    gs1_compliance_target: 0.98
+  hybrid_cost_limits:
+    max_total: 5.0            # USD cap per cleaning run
+```
+
+Run the fast regression tests to confirm the hybrid logic before shipping:
+
+```bash
+pytest tests/test_agents.py -k should_use_agent_for_retail_risks
+pytest tests/test_data_quality_agent.py -k retail_specific
+```
+
 #### Chunking for Large Datasets
 
 Automatically handles large datasets by chunking:

@@ -23,14 +23,6 @@ from .risk import RiskLevel
 logger = logging.getLogger(__name__)
 
 
-class RiskLevel(str, Enum):
-    """Risk severity levels for data quality assessment."""
-    NONE = 'none'
-    LOW = 'low'
-    MEDIUM = 'medium'
-    HIGH = 'high'
-
-
 @dataclass
 class DataQualityAssessment:
     """DataRobot-style quality assessment with visual alerts."""
