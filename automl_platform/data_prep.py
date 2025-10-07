@@ -133,9 +133,9 @@ class EnhancedDataPreprocessor:
             agent_config = AgentConfig(
                 openai_api_key=os.getenv("OPENAI_API_KEY") or self.config.get('openai_api_key'),
                 model=self.config.get('openai_model', 'gpt-4-1106-preview'),
-                enable_web_search=True,
-                enable_file_operations=True,
-                enable_hybrid_mode=self.enable_hybrid_mode  # Pass hybrid mode flag
+                openai_model=self.config.get('openai_model', 'gpt-4-1106-preview'),
+                openai_enable_web_search=True,
+                openai_enable_file_operations=True,
             )
             
             # Initialize all Agent-First components
