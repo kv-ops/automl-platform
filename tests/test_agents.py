@@ -25,7 +25,15 @@ import os
 # Import des modules à tester
 from automl_platform.agents.profiler_agent import ProfilerAgent
 from automl_platform.agents.validator_agent import ValidatorAgent
-from automl_platform.agents.cleaner_agent import CleanerAgent
+try:
+    from automl_platform.agents.cleaner_agent import (
+        CleanerAgent,
+        SKLEARN_AVAILABLE as CLEANER_SKLEARN_AVAILABLE,
+    )
+except ImportError:  # pragma: no cover - dépendances optionnelles
+    CleanerAgent = None  # type: ignore[assignment]
+    CLEANER_SKLEARN_AVAILABLE = False
+
 from automl_platform.agents.controller_agent import ControllerAgent
 from automl_platform.agents.intelligent_context_detector import IntelligentContextDetector, MLContext
 from automl_platform.agents.intelligent_config_generator import IntelligentConfigGenerator, OptimalConfig
@@ -33,6 +41,15 @@ from automl_platform.agents.adaptive_template_system import AdaptiveTemplateSyst
 from automl_platform.agents.data_cleaning_orchestrator import DataCleaningOrchestrator
 from automl_platform.agents.intelligent_data_cleaning import IntelligentDataCleaner
 from automl_platform.agents.agent_config import AgentConfig, AgentType
+
+try:
+    from automl_platform.agents.yaml_config_handler import (
+        YAMLConfigHandler,
+        SKLEARN_AVAILABLE as YAML_SKLEARN_AVAILABLE,
+    )
+except ImportError:  # pragma: no cover - dépendances optionnelles
+    YAMLConfigHandler = None  # type: ignore[assignment]
+    YAML_SKLEARN_AVAILABLE = False
 from automl_platform.data_quality_agent import (
     DataQualityAssessment,
     IntelligentDataQualityAgent,
@@ -59,6 +76,13 @@ from automl_platform.agents.universal_ml_agent import (
     LRUMemoryCache,
     memory_safe,
     dataframe_batch_processor
+)
+
+SKLEARN_AVAILABLE = (
+    bool(CLEANER_SKLEARN_AVAILABLE)
+    and bool(YAML_SKLEARN_AVAILABLE)
+    and CleanerAgent is not None
+    and YAMLConfigHandler is not None
 )
 
 # Mock des prompts si les fichiers n'existent pas
