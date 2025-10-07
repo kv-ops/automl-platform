@@ -29,6 +29,7 @@ from .config import AutoMLConfig
 
 # Import optimization components
 from .distributed_training import DistributedTrainer
+from .distributed_training import DistributedConfig
 from .incremental_learning import IncrementalLearner
 from .pipeline_cache import PipelineCache, CacheConfig
 
@@ -64,10 +65,11 @@ class AutoMLOrchestrator:
         
         # Setup distributed training if enabled
         if hasattr(config, 'distributed_training') and config.distributed_training:
-            self.distributed_trainer = DistributedTrainer(
+            dist_config = DistributedConfig(
                 backend=getattr(config, 'distributed_backend', 'ray'),
-                n_workers=getattr(config, 'n_workers', 4)
+                num_workers=getattr(config, 'n_workers', 4)
             )
+            self.distributed_trainer = DistributedTrainer(dist_config)
             logger.info(f"Distributed training enabled with {config.distributed_backend}")
         
         # Setup incremental learning if enabled
@@ -245,23 +247,73 @@ class AutoMLOrchestrator:
         if use_distributed and self.distributed_trainer:
             logger.info("Starting distributed training")
             
-            # Prepare parameter grids for all models
-            param_grids = {}
-            for model_name_str in models.keys():
+            # Prepare pipelines and parameter grids for all models
+            distributed_models = {}
+            distributed_param_grids = {}
+            for model_name_str, base_model in models.items():
+                distributed_models[model_name_str] = Pipeline([
+                    ('preprocessor', DataPreprocessor(self.config.to_dict())),
+                    ('model', base_model)
+                ])
+
                 grid = get_param_grid(model_name_str)
                 if grid:
-                    param_grids[model_name_str] = {f'model__{k}': v for k, v in grid.items()}
-            
+                    distributed_param_grids[model_name_str] = {
+                        f'model__{k}': v for k, v in grid.items()
+                    }
+
             # Train models in parallel
             distributed_results = self.distributed_trainer.train_distributed(
-                X, y, models, param_grids=param_grids
+                X,
+                y,
+                distributed_models,
+                param_grids=distributed_param_grids,
+                cv=cv,
+                scoring=scoring
             )
-            
+
             # Add results to leaderboard
-            for result in distributed_results:
-                result['distributed'] = True
-                self.leaderboard.append(result)
-                logger.info(f"Distributed {result['model']}: CV Score = {result['cv_score']:.4f}")
+            for model_name_str, result in distributed_results.items():
+                if result.get('status') != 'success':
+                    logger.error(
+                        f"Distributed training failed for {model_name_str}: "
+                        f"{result.get('error', 'Unknown error')}"
+                    )
+                    continue
+
+                pipeline = result.get('best_model')
+                if not isinstance(pipeline, Pipeline):
+                    pipeline = Pipeline([
+                        ('preprocessor', DataPreprocessor(self.config.to_dict())),
+                        ('model', pipeline)
+                    ])
+
+                y_pred = pipeline.predict(X)
+                if self.task == 'classification' and hasattr(pipeline, 'predict_proba'):
+                    y_proba = pipeline.predict_proba(X)
+                else:
+                    y_proba = None
+
+                metrics = calculate_metrics(y, y_pred, y_proba, self.task)
+                params = result.get('best_params', {})
+                params = {k.replace('model__', ''): v for k, v in params.items()}
+
+                leaderboard_entry = {
+                    'model': model_name_str,
+                    'cv_score': result.get('best_score'),
+                    'cv_std': 0.0,
+                    'metrics': metrics,
+                    'params': params,
+                    'training_time': result.get('training_time', 0.0),
+                    'pipeline': pipeline,
+                    'distributed': True
+                }
+
+                self.leaderboard.append(leaderboard_entry)
+                logger.info(
+                    f"Distributed {model_name_str}: CV Score = "
+                    f"{leaderboard_entry['cv_score']:.4f}"
+                )
         else:
             # Standard sequential training
             for model_name_str, base_model in models.items():
