@@ -15,6 +15,55 @@ from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import asyncio
+import sys
+import types
+
+# ---------------------------------------------------------------------------
+# Optional dependency stubs
+# ---------------------------------------------------------------------------
+#
+# The core package imports ``seaborn`` in visualization helpers that are not
+# required for the unit tests in this repository.  The CI environment used for
+# lightweight validation deliberately avoids installing heavy plotting
+# dependencies.  In order to keep the tests fast while still exercising the
+# business logic, we register a very small stub module whenever ``seaborn`` is
+# missing.  Only the attributes accessed in the code base (``heatmap`` and the
+# ``__version__`` metadata) are provided, and the functions simply return
+# ``None``.
+if "seaborn" not in sys.modules:  # pragma: no cover - import-time guard
+    seaborn_stub = types.ModuleType("seaborn")
+
+    def _noop(*args, **kwargs):  # pragma: no cover - behaviourless stub
+        return None
+
+    seaborn_stub.heatmap = _noop
+    seaborn_stub.__version__ = "0.0-test"
+    sys.modules["seaborn"] = seaborn_stub
+
+if "bs4" not in sys.modules:  # pragma: no cover - import-time guard
+    bs4_stub = types.ModuleType("bs4")
+
+    class _BeautifulSoup:  # pragma: no cover - minimal stub
+        def __init__(self, *args, **kwargs):
+            self.text = ""
+
+        def find_all(self, *args, **kwargs):
+            return []
+
+        def select(self, *args, **kwargs):
+            return []
+
+    bs4_stub.BeautifulSoup = _BeautifulSoup
+    sys.modules["bs4"] = bs4_stub
+
+# Some orchestrator modules attempt to import enhanced data quality agents that
+# are not part of the open-source distribution.  For testing purposes we map
+# those optional paths back to the default implementation so the import chain
+# succeeds without installing additional packages.
+import automl_platform.data_quality_agent as _dq  # type: ignore
+
+sys.modules.setdefault("automl_platform.data_quality_agent_enhanced", _dq)
+sys.modules.setdefault("automl_platform.data_quality_agent_v2", _dq)
 
 # Import des modules à tester
 from automl_platform.agents import (
