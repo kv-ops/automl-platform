@@ -25,7 +25,7 @@ import os
 # Import des modules à tester
 from automl_platform.agents.profiler_agent import ProfilerAgent
 from automl_platform.agents.validator_agent import ValidatorAgent
-from automl_platform.agents.cleaner_agent import CleanerAgent
+from automl_platform.agents.cleaner_agent import CleanerAgent, SKLEARN_AVAILABLE as CLEANER_SKLEARN_AVAILABLE
 from automl_platform.agents.controller_agent import ControllerAgent
 from automl_platform.agents.intelligent_context_detector import IntelligentContextDetector, MLContext
 from automl_platform.agents.intelligent_config_generator import IntelligentConfigGenerator, OptimalConfig
@@ -33,6 +33,10 @@ from automl_platform.agents.adaptive_template_system import AdaptiveTemplateSyst
 from automl_platform.agents.data_cleaning_orchestrator import DataCleaningOrchestrator
 from automl_platform.agents.intelligent_data_cleaning import IntelligentDataCleaner
 from automl_platform.agents.agent_config import AgentConfig, AgentType
+from automl_platform.agents.yaml_config_handler import (
+    YAMLConfigHandler,
+    SKLEARN_AVAILABLE as YAML_SKLEARN_AVAILABLE,
+)
 from automl_platform.data_quality_agent import (
     DataQualityAssessment,
     IntelligentDataQualityAgent,
@@ -60,6 +64,8 @@ from automl_platform.agents.universal_ml_agent import (
     memory_safe,
     dataframe_batch_processor
 )
+
+SKLEARN_AVAILABLE = CLEANER_SKLEARN_AVAILABLE and YAML_SKLEARN_AVAILABLE
 
 # Mock des prompts si les fichiers n'existent pas
 try:
