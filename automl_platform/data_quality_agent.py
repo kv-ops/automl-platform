@@ -2,6 +2,7 @@
 Data Quality Agent - Enhanced with Agent-First Integration
 Conversational data cleaning inspired by Akkio's GPT-4 approach
 Integrated with Universal ML Agent for intelligent context detection
+Enhanced with retail-specific recommendations
 """
 
 import pandas as pd
@@ -38,11 +39,13 @@ class DataQualityAssessment:
     alerts: List[Dict[str, Any]] = field(default_factory=list)  # Critical issues requiring attention
     warnings: List[Dict[str, Any]] = field(default_factory=list)  # Non-critical issues
     recommendations: List[Dict[str, Any]] = field(default_factory=list)  # Suggested improvements
+    retail_recommendations: List[Dict[str, Any]] = field(default_factory=list)  # NEW: Retail-specific recommendations
     statistics: Dict[str, Any] = field(default_factory=dict)  # Statistical summary
     drift_risk: str = "low"  # "low", "medium", "high"
     target_leakage_risk: str = "low"  # Align with tests expecting string levels
     visualization_data: Dict[str, Any] = field(default_factory=dict)  # Data for visual quality assessment
     ml_context: Optional[Dict[str, Any]] = None  # Agent-First ML context
+    retail_metrics: Optional[Dict[str, Any]] = None  # Retail-specific metrics
 
     def __post_init__(self) -> None:
         self.drift_risk = RiskLevel.normalize(self.drift_risk, field_name="drift_risk")
@@ -65,7 +68,7 @@ class AkkioStyleCleaningAgent:
     Enhanced with Agent-First context awareness.
     """
     
-    def __init__(self, llm_provider, enable_agent_first: bool = False):
+    def __init__(self, llm_provider, enable_agent_first: bool = False, config=None):
         self.llm = llm_provider
         self.conversation_history = []
         self.cleaning_actions = []
@@ -73,6 +76,7 @@ class AkkioStyleCleaningAgent:
         self.enable_agent_first = enable_agent_first
         self.ml_context = None
         self.context_detector = None
+        self.config = config  # AgentConfig for thresholds
         
         if enable_agent_first:
             self._init_agent_first()
@@ -96,6 +100,7 @@ class AkkioStyleCleaningAgent:
         - "Combine first_name and last_name columns"
         - "Format dates to YYYY-MM-DD"
         - "Prepare this for fraud detection" (Agent-First)
+        - "Replace sentinel values and fix negative prices" (Retail)
         """
         
         # Add to conversation history
@@ -194,6 +199,10 @@ ML Context:
 Consider this context when analyzing the cleaning request.
 """
         
+        # Check for retail-specific keywords
+        retail_keywords = ["sentinel", "negative price", "stock", "category median"]
+        is_retail_request = any(keyword in message.lower() for keyword in retail_keywords)
+        
         prompt = f"""
 Analyze this data cleaning request:
 User message: "{message}"
@@ -202,15 +211,17 @@ Dataset info:
 - Columns: {list(df.columns)}
 - Shape: {df.shape}
 - Types: {df.dtypes.to_dict()}
+{'- Retail context detected' if is_retail_request else ''}
 
 {context_prompt}
 
 Extract:
-1. Action type (remove, fill, transform, combine, format, filter, prepare_for_ml)
+1. Action type (remove, fill, transform, combine, format, filter, prepare_for_ml, handle_sentinels, fix_prices)
 2. Target columns
 3. Specific parameters
 4. Safety concerns
 5. ML-specific preparations if applicable
+6. Retail-specific handling if needed
 
 Return as JSON.
 """
@@ -223,6 +234,10 @@ Return as JSON.
             # Add ML-specific intents if context detected
             if self.ml_context and intent.get("action") == "prepare_for_ml":
                 intent["ml_preparations"] = self._get_ml_preparations(self.ml_context)
+            
+            # Add retail-specific intents
+            if is_retail_request:
+                intent["retail_handling"] = self._get_retail_preparations()
                 
         except:
             intent = {
@@ -245,7 +260,8 @@ Return as JSON.
                 "Create velocity features",
                 "Handle class imbalance with SMOTE",
                 "Engineer time-based features",
-                "Normalize monetary amounts"
+                "Normalize monetary amounts",
+                "Replace sentinel values with NaN"
             ]
         elif problem_type == 'churn_prediction':
             preparations = [
@@ -259,10 +275,21 @@ Return as JSON.
                 "Create lag features",
                 "Add seasonal indicators",
                 "Handle missing time periods",
-                "Engineer trend features"
+                "Engineer trend features",
+                "Fix negative prices using category median"
             ]
         
         return preparations
+    
+    def _get_retail_preparations(self) -> List[str]:
+        """Get retail-specific data preparations."""
+        return [
+            "Replace sentinel values (-999, -1, 9999) with NaN",
+            "Fix negative prices using median by category",
+            "Preserve zero values in stock/quantity columns",
+            "Impute missing values using category-based statistics",
+            "Handle high cardinality SKU columns"
+        ]
     
     async def _generate_cleaning_code(self, intent: Dict, df: pd.DataFrame) -> str:
         """Generate Python code for the cleaning action with ML awareness."""
@@ -274,11 +301,19 @@ Include these ML-specific preparations:
 {json.dumps(intent['ml_preparations'])}
 """
         
+        retail_context_prompt = ""
+        if intent.get("retail_handling"):
+            retail_context_prompt = f"""
+Include these retail-specific preparations:
+{json.dumps(intent['retail_handling'])}
+"""
+        
         prompt = f"""
 Generate pandas code for this data cleaning task:
 Intent: {json.dumps(intent)}
 
 {ml_context_prompt}
+{retail_context_prompt}
 
 Requirements:
 - Use df as the dataframe variable
@@ -287,6 +322,7 @@ Requirements:
 - Add error handling
 - Make it efficient
 - Include ML-specific preprocessing if applicable
+- Include retail-specific handling (sentinels, negative prices) if applicable
 
 Return only executable Python code.
 """
@@ -369,15 +405,39 @@ Return only executable Python code.
         return df
     
     def get_cleaning_suggestions(self, df: pd.DataFrame) -> List[str]:
-        """Get cleaning suggestions based on ML context."""
+        """Get cleaning suggestions based on ML context and retail indicators."""
         suggestions = []
         
+        # ML context suggestions
         if self.ml_context:
             problem_type = self.ml_context.get('problem_type', '')
             
             if problem_type:
                 suggestions.append(f"Detected {problem_type} problem. Consider:")
                 suggestions.extend(self._get_ml_preparations(self.ml_context))
+        
+        # Retail-specific suggestions
+        sentinel_values = self.config.get_retail_rules('sentinel_values') if self.config else [-999, -1, 9999]
+        for col in df.select_dtypes(include=[np.number]).columns:
+            # Check if it's a stock column
+            stock_keywords = ['stock', 'quantity', 'qty', 'inventory', 'count', 'units']
+            is_stock = any(keyword in col.lower() for keyword in stock_keywords)
+            
+            # Don't treat 0 as sentinel for stock columns
+            effective_sentinels = sentinel_values.copy()
+            if is_stock and 0 in effective_sentinels:
+                effective_sentinels.remove(0)
+            
+            if df[col].isin(effective_sentinels).any():
+                suggestions.append(f"Replace sentinel values in '{col}' with NaN and impute by category median")
+                break
+        
+        # Check for negative prices
+        price_columns = [col for col in df.columns if 'price' in col.lower() or 'prix' in col.lower()]
+        for col in price_columns:
+            if pd.api.types.is_numeric_dtype(df[col]) and (df[col] < 0).any():
+                suggestions.append(f"Fix negative prices in '{col}' using median by category")
+                break
         
         # General suggestions
         missing_cols = df.columns[df.isnull().any()].tolist()
@@ -394,18 +454,36 @@ Return only executable Python code.
 class DataRobotStyleQualityMonitor:
     """
     DataRobot-style Data Quality Assessment with visual indicators.
-    Enhanced with Agent-First ML context awareness.
+    Enhanced with Agent-First ML context awareness and retail-specific checks.
     """
     
-    def __init__(self, enable_agent_first: bool = False):
-        self.quality_thresholds = {
-            "missing_critical": 0.5,  # >50% missing is critical
-            "missing_warning": 0.2,   # >20% missing is warning
-            "outlier_critical": 0.15, # >15% outliers is critical
-            "cardinality_high": 0.9,  # >90% unique is too high
-            "correlation_high": 0.95, # >0.95 correlation suggests redundancy
-            "imbalance_severe": 20    # >20:1 class ratio is severe
-        }
+    def __init__(self, enable_agent_first: bool = False, config=None):
+        self.config = config  # AgentConfig for thresholds
+        
+        # Use thresholds from config if available, otherwise defaults
+        if config:
+            self.quality_thresholds = {
+                "missing_critical": config.get_quality_threshold("missing_critical_threshold") or 0.5,
+                "missing_warning": config.get_quality_threshold("missing_warning_threshold") or 0.35,
+                "outlier_critical": config.get_quality_threshold("outlier_critical_threshold") or 0.15,
+                "outlier_warning": config.get_quality_threshold("outlier_warning_threshold") or 0.05,
+                "cardinality_high": config.get_quality_threshold("high_cardinality_threshold") or 0.9,
+                "correlation_high": config.get_quality_threshold("correlation_high_threshold") or 0.95,
+                "imbalance_severe": config.get_quality_threshold("imbalance_severe_threshold") or 20
+            }
+            self.sentinel_values = config.get_retail_rules("sentinel_values") or [-999, -1, 9999]
+        else:
+            self.quality_thresholds = {
+                "missing_critical": 0.5,
+                "missing_warning": 0.35,
+                "outlier_critical": 0.15,
+                "outlier_warning": 0.05,
+                "cardinality_high": 0.9,
+                "correlation_high": 0.95,
+                "imbalance_severe": 20
+            }
+            self.sentinel_values = [-999, -1, 9999]
+        
         self.enable_agent_first = enable_agent_first
         self.context_detector = None
         
@@ -421,6 +499,89 @@ class DataRobotStyleQualityMonitor:
         except ImportError:
             logger.warning("Agent-First components not available for quality monitor")
             self.enable_agent_first = False
+    
+    def _is_stock_column(self, col_name: str) -> bool:
+        """Check if column is likely a stock/quantity column."""
+        stock_keywords = ['stock', 'quantity', 'qty', 'inventory', 'count', 'units']
+        col_lower = col_name.lower()
+        return any(keyword in col_lower for keyword in stock_keywords)
+    
+    def _get_effective_sentinel_values(self, col_name: str) -> list:
+        """Get sentinel values for a column, excluding 0 for stock columns."""
+        sentinels = self.sentinel_values.copy()
+        
+        # Exclude 0 from sentinels for stock/quantity columns
+        if self._is_stock_column(col_name):
+            if 0 in sentinels:
+                sentinels.remove(0)
+        
+        return sentinels
+    
+    def _calculate_gs1_compliance(self, df: pd.DataFrame) -> float:
+        """
+        Calculate GS1 compliance for retail data.
+        Based on percentage of SKU conformity rather than sentinel columns.
+        """
+        # Look for SKU/product code columns
+        sku_columns = [col for col in df.columns if any(
+            keyword in col.lower() for keyword in ['sku', 'upc', 'ean', 'gtin', 'barcode', 'product_code']
+        )]
+        
+        if not sku_columns:
+            # No SKU columns found, assume compliance
+            return 100.0
+        
+        total_skus = 0
+        compliant_skus = 0
+        
+        for col in sku_columns:
+            if df[col].dtype == 'object':
+                column_values = df[col].dropna()
+                total_skus += len(column_values)
+                
+                # Check GS1 format compliance (simplified)
+                # GS1 formats: EAN-13 (13 digits), UPC-A (12 digits), EAN-8 (8 digits), GTIN-14 (14 digits)
+                for value in column_values:
+                    value_str = str(value).strip()
+                    # Check if it's a valid GS1 format (digits only, correct length)
+                    if value_str.isdigit() and len(value_str) in [8, 12, 13, 14]:
+                        compliant_skus += 1
+        
+        if total_skus == 0:
+            return 100.0
+        
+        return (compliant_skus / total_skus) * 100
+    
+    def _calculate_local_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Calculate local statistics for hybrid decision making."""
+        stats = {
+            'missing_ratio': df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+            'quality_score': 100.0,
+            'has_sentinel_values': False,
+            'has_negative_prices': False,
+            'sentinel_columns': [],
+            'negative_price_columns': []
+        }
+        
+        # Check for sentinel values
+        for col in df.select_dtypes(include=[np.number]).columns:
+            effective_sentinels = self._get_effective_sentinel_values(col)
+            if df[col].isin(effective_sentinels).any():
+                stats['has_sentinel_values'] = True
+                stats['sentinel_columns'].append(col)
+        
+        # Check for negative prices
+        price_columns = [col for col in df.columns if 'price' in col.lower() or 'prix' in col.lower()]
+        for col in price_columns:
+            if pd.api.types.is_numeric_dtype(df[col]) and (df[col] < 0).any():
+                stats['has_negative_prices'] = True
+                stats['negative_price_columns'].append(col)
+        
+        # Calculate quality score
+        missing_penalty = min(30, stats['missing_ratio'] * 100)
+        stats['quality_score'] -= missing_penalty
+        
+        return stats
     
     async def assess_quality_with_context(self, df: pd.DataFrame, target_column: Optional[str] = None) -> DataQualityAssessment:
         """
@@ -454,18 +615,23 @@ class DataRobotStyleQualityMonitor:
     def assess_quality(self, df: pd.DataFrame, target_column: Optional[str] = None) -> DataQualityAssessment:
         """
         Comprehensive quality assessment following DataRobot's approach.
+        Enhanced with retail-specific checks and improved GS1 compliance calculation.
         
         Returns visual-ready quality metrics with alerts and recommendations.
         """
         
+        # Calculate local stats for potential hybrid decision and retail checks
+        local_stats = self._calculate_local_stats(df)
+        
         alerts = []
         warnings = []
         recommendations = []
+        retail_recommendations = []  # NEW: Separate retail recommendations
         
         # Calculate quality score (starts at 100)
         quality_score = 100.0
         
-        # 1. Missing values assessment
+        # 1. Missing values assessment with configurable threshold
         missing_report = self._assess_missing_values(df)
         quality_score -= missing_report["penalty"]
         alerts.extend(missing_report["alerts"])
@@ -492,7 +658,17 @@ class DataRobotStyleQualityMonitor:
                 "action": "Remove duplicates"
             })
         
-        # 5. Target-specific assessments
+        # 5. Sentinel values assessment (retail-specific)
+        sentinel_report = self._assess_sentinel_values(df)
+        quality_score -= sentinel_report["penalty"]
+        warnings.extend(sentinel_report["warnings"])
+        
+        # 6. Negative prices assessment (retail-specific)
+        price_report = self._assess_negative_prices(df)
+        quality_score -= price_report["penalty"]
+        alerts.extend(price_report["alerts"])
+        
+        # 7. Target-specific assessments
         if target_column and target_column in df.columns:
             target_report = self._assess_target(df, target_column)
             quality_score -= target_report["penalty"]
@@ -503,19 +679,27 @@ class DataRobotStyleQualityMonitor:
         else:
             leakage_risk = RiskLevel.NONE
         
-        # 6. Statistical anomalies
+        # 8. Statistical anomalies
         stat_report = self._assess_statistical_anomalies(df)
         warnings.extend(stat_report["warnings"])
         
-        # 7. Generate recommendations based on issues
+        # 9. Generate recommendations based on issues
         recommendations = self._generate_recommendations(
             alerts + warnings,
             missing_report,
             outlier_report,
-            dtype_report
+            dtype_report,
+            local_stats
         )
         
-        # 8. Calculate drift risk
+        # 10. Generate retail-specific recommendations
+        retail_recommendations = self._generate_retail_recommendations(
+            local_stats,
+            sentinel_report,
+            price_report
+        )
+        
+        # 11. Calculate drift risk
         drift_risk = self._calculate_drift_risk(df)
         
         # Ensure score is 0-100
@@ -530,8 +714,24 @@ class DataRobotStyleQualityMonitor:
                 "missing": missing_report["penalty"],
                 "outliers": outlier_report["penalty"],
                 "types": dtype_report["penalty"],
-                "duplicates": duplicate_report["penalty"]
+                "duplicates": duplicate_report["penalty"],
+                "sentinels": sentinel_report["penalty"],
+                "negative_prices": price_report["penalty"]
             }
+        }
+        
+        # Calculate GS1 compliance for retail
+        gs1_compliance = self._calculate_gs1_compliance(df) if self.config and self.config.user_context.get("secteur_activite") == "retail" else 100.0
+        
+        # Retail metrics with improved GS1 calculation
+        retail_metrics = {
+            "sentinel_columns": local_stats["sentinel_columns"],
+            "negative_price_columns": local_stats["negative_price_columns"],
+            "has_category_column": "category" in df.columns,
+            "gs1_compliance": gs1_compliance,  # Now based on SKU conformity
+            "sku_columns_found": [col for col in df.columns if any(
+                keyword in col.lower() for keyword in ['sku', 'upc', 'ean', 'gtin', 'barcode', 'product_code']
+            )]
         }
         
         return DataQualityAssessment(
@@ -539,25 +739,193 @@ class DataRobotStyleQualityMonitor:
             alerts=alerts,
             warnings=warnings,
             recommendations=recommendations,
+            retail_recommendations=retail_recommendations,  # NEW: Include retail recommendations
             statistics={
                 "rows": len(df),
                 "columns": len(df.columns),
                 "missing_cells": df.isnull().sum().sum(),
                 "duplicate_rows": duplicate_report["count"],
                 "numeric_columns": len(df.select_dtypes(include=[np.number]).columns),
-                "categorical_columns": len(df.select_dtypes(include=['object']).columns)
+                "categorical_columns": len(df.select_dtypes(include=['object']).columns),
+                "sentinel_values_found": len(local_stats["sentinel_columns"]),
+                "negative_prices_found": len(local_stats["negative_price_columns"])
             },
             drift_risk=drift_risk,
             target_leakage_risk=leakage_risk,
             visualization_data=viz_data,
+            retail_metrics=retail_metrics,
             ml_context=None  # Will be filled by assess_quality_with_context if Agent-First enabled
         )
+    
+    def _generate_retail_recommendations(
+        self,
+        local_stats: Dict[str, Any],
+        sentinel_report: Dict[str, Any],
+        price_report: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Generate retail-specific recommendations."""
+        retail_recs = []
+        
+        # Sentinel value recommendations
+        if local_stats.get("has_sentinel_values"):
+            retail_recs.append({
+                "priority": "high",
+                "category": "sentinel_handling",
+                "title": "Replace Sentinel Values",
+                "description": f"Sentinel values detected in {len(local_stats['sentinel_columns'])} columns",
+                "actions": [
+                    f"Replace sentinels in: {', '.join(local_stats['sentinel_columns'][:3])}",
+                    "Use category-based median imputation if category column exists",
+                    "Preserve legitimate zero values in stock/quantity columns"
+                ],
+                "columns_affected": local_stats['sentinel_columns']
+            })
+        
+        # Negative price recommendations
+        if local_stats.get("has_negative_prices"):
+            retail_recs.append({
+                "priority": "high",
+                "category": "price_correction",
+                "title": "Fix Negative Prices",
+                "description": f"Negative prices found in {len(local_stats['negative_price_columns'])} columns",
+                "actions": [
+                    f"Correct prices in: {', '.join(local_stats['negative_price_columns'])}",
+                    "Use median by category if category column available",
+                    "Otherwise use overall median for price correction"
+                ],
+                "columns_affected": local_stats['negative_price_columns']
+            })
+        
+        # Category-based imputation recommendation
+        if "category" in local_stats.get("columns", []):
+            retail_recs.append({
+                "priority": "medium",
+                "category": "imputation_strategy",
+                "title": "Use Category-Based Imputation",
+                "description": "Category column detected - leverage for better imputation",
+                "actions": [
+                    "Group by category for missing value imputation",
+                    "Use category-specific medians for numeric features",
+                    "Apply category-specific modes for categorical features"
+                ]
+            })
+        
+        return retail_recs
+    
+    def _assess_sentinel_values(self, df: pd.DataFrame) -> Dict:
+        """Assess sentinel values in the dataset (retail-specific)."""
+        warnings = []
+        penalty = 0
+        
+        for col in df.select_dtypes(include=[np.number]).columns:
+            effective_sentinels = self._get_effective_sentinel_values(col)
+            sentinel_count = df[col].isin(effective_sentinels).sum()
+            
+            if sentinel_count > 0:
+                sentinel_pct = (sentinel_count / len(df)) * 100
+                warnings.append({
+                    "type": "sentinel_values",
+                    "column": col,
+                    "message": f"Column '{col}' contains {sentinel_count} sentinel values {effective_sentinels}",
+                    "severity": "medium",
+                    "action": "Replace sentinels with NaN and impute by category median",
+                    "is_stock": self._is_stock_column(col)
+                })
+                penalty += 2  # Small penalty per column with sentinels
+        
+        return {
+            "warnings": warnings,
+            "penalty": min(10, penalty)  # Cap at 10 points
+        }
+    
+    def _assess_negative_prices(self, df: pd.DataFrame) -> Dict:
+        """Assess negative prices in the dataset (retail-specific)."""
+        alerts = []
+        penalty = 0
+        
+        price_columns = [col for col in df.columns if 'price' in col.lower() or 'prix' in col.lower()]
+        
+        for col in price_columns:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                negative_count = (df[col] < 0).sum()
+                
+                if negative_count > 0:
+                    negative_pct = (negative_count / len(df)) * 100
+                    alerts.append({
+                        "type": "negative_prices",
+                        "column": col,
+                        "message": f"Column '{col}' has {negative_count} negative prices ({negative_pct:.1f}%)",
+                        "severity": "high",
+                        "action": "Fix negative prices using median by category"
+                    })
+                    penalty += 5  # Higher penalty for price issues
+        
+        return {
+            "alerts": alerts,
+            "penalty": min(15, penalty)  # Cap at 15 points
+        }
+    
+    def _assess_missing_values(self, df: pd.DataFrame) -> Dict:
+        """Assess missing values with DataRobot-style alerts and configurable threshold."""
+        
+        alerts = []
+        warnings = []
+        penalty = 0
+        
+        column_missing_pct = {}
+        
+        for col in df.columns:
+            missing_pct = (df[col].isnull().sum() / len(df)) * 100
+            column_missing_pct[col] = missing_pct
+            
+            if missing_pct > self.quality_thresholds["missing_critical"] * 100:
+                alerts.append({
+                    "type": "missing_critical",
+                    "column": col,
+                    "message": f"Column '{col}' has {missing_pct:.1f}% missing values (exceeds {self.quality_thresholds['missing_critical']*100:.0f}% critical threshold)",
+                    "severity": "critical",
+                    "action": "Consider dropping or advanced imputation"
+                })
+                penalty += 15
+                
+            elif missing_pct > self.quality_thresholds["missing_warning"] * 100:
+                warnings.append({
+                    "type": "missing_warning",
+                    "column": col,
+                    "message": f"Column '{col}' has {missing_pct:.1f}% missing values (exceeds {self.quality_thresholds['missing_warning']*100:.0f}% warning threshold)",
+                    "severity": "medium",
+                    "action": "Recommend imputation strategy (median by category for retail)"
+                })
+                penalty += 5
+        
+        return {
+            "alerts": alerts,
+            "warnings": warnings,
+            "penalty": penalty,
+            "column_missing_pct": column_missing_pct
+        }
     
     def _get_context_recommendations(self, ml_context: Dict[str, Any]) -> List[Dict]:
         """Generate recommendations based on detected ML context."""
         recommendations = []
         
         problem_type = ml_context.get('problem_type', '')
+        business_sector = ml_context.get('business_sector', '')
+        
+        # Retail-specific recommendations
+        if business_sector == 'retail':
+            recommendations.append({
+                "priority": "high",
+                "category": "retail_preparation",
+                "title": "Retail Data Preparation",
+                "description": "Detected retail sector. Special data quality checks recommended.",
+                "actions": [
+                    "Replace sentinel values (-999, -1, 9999) with NaN and impute by median of category",
+                    "Verify and correct negative prices using category-based medians",
+                    "Preserve zero values in stock/quantity columns as they are legitimate",
+                    "Check SKU validity and aim for 98% GS1 compliance"
+                ]
+            })
         
         if problem_type == 'fraud_detection':
             recommendations.append({
@@ -601,48 +969,78 @@ class DataRobotStyleQualityMonitor:
         
         return recommendations
     
-    def _assess_missing_values(self, df: pd.DataFrame) -> Dict:
-        """Assess missing values with DataRobot-style alerts."""
+    def _generate_recommendations(self, issues: List[Dict], 
+                                 missing_report: Dict,
+                                 outlier_report: Dict,
+                                 dtype_report: Dict,
+                                 local_stats: Dict) -> List[Dict]:
+        """Generate actionable recommendations based on issues found."""
         
-        alerts = []
-        warnings = []
-        penalty = 0
+        recommendations = []
         
-        column_missing_pct = {}
+        # Missing data recommendations
+        if missing_report["penalty"] > 10:
+            recommendations.append({
+                "priority": "high",
+                "category": "missing_data",
+                "title": "Address Missing Data",
+                "description": f"Significant missing data detected (>{self.quality_thresholds['missing_warning']*100:.0f}% in some columns). Consider advanced imputation techniques.",
+                "actions": [
+                    "Use KNN or MICE imputation for numeric features",
+                    "Use mode or create 'Unknown' category for categorical features",
+                    "For retail: use median by category for numeric features",
+                    f"Drop columns with >{self.quality_thresholds['missing_critical']*100:.0f}% missing values"
+                ]
+            })
         
-        for col in df.columns:
-            missing_pct = (df[col].isnull().sum() / len(df)) * 100
-            column_missing_pct[col] = missing_pct
-            
-            if missing_pct > self.quality_thresholds["missing_critical"] * 100:
-                alerts.append({
-                    "type": "missing_critical",
-                    "column": col,
-                    "message": f"Column '{col}' has {missing_pct:.1f}% missing values",
-                    "severity": "critical",
-                    "action": "Consider dropping or advanced imputation"
-                })
-                penalty += 15
-                
-            elif missing_pct > self.quality_thresholds["missing_warning"] * 100:
-                warnings.append({
-                    "type": "missing_warning",
-                    "column": col,
-                    "message": f"Column '{col}' has {missing_pct:.1f}% missing values",
-                    "severity": "medium",
-                    "action": "Recommend imputation strategy"
-                })
-                penalty += 5
+        # Outlier recommendations
+        if outlier_report["penalty"] > 5:
+            recommendations.append({
+                "priority": "medium",
+                "category": "outliers",
+                "title": "Handle Outliers",
+                "description": "Multiple columns contain outliers that may affect model performance.",
+                "actions": [
+                    "Apply robust scaling or winsorization",
+                    "Use tree-based models that are robust to outliers",
+                    "Investigate outliers for data quality issues",
+                    "For prices: verify outliers are not data entry errors"
+                ]
+            })
         
-        return {
-            "alerts": alerts,
-            "warnings": warnings,
-            "penalty": penalty,
-            "column_missing_pct": column_missing_pct
-        }
+        # Data type recommendations
+        if dtype_report["penalty"] > 5:
+            recommendations.append({
+                "priority": "medium",
+                "category": "data_types",
+                "title": "Optimize Data Types",
+                "description": "Data type issues detected that may impact model performance.",
+                "actions": [
+                    "Encode high-cardinality categorical variables",
+                    "Convert date strings to datetime objects",
+                    "Use appropriate numeric types to reduce memory usage"
+                ]
+            })
+        
+        # General best practices
+        recommendations.append({
+            "priority": "low",
+            "category": "best_practices",
+            "title": "AutoML Best Practices",
+            "description": "General recommendations for optimal AutoML performance.",
+            "actions": [
+                "Ensure target variable is properly defined",
+                "Create train/validation/test splits before training",
+                "Document data preprocessing steps for reproducibility",
+                "Set up monitoring for production deployment"
+            ]
+        })
+        
+        return recommendations
     
+    # Keep all other methods unchanged...
     def _assess_outliers(self, df: pd.DataFrame) -> Dict:
-        """Assess outliers using IQR method."""
+        """Assess outliers using IQR method with configurable thresholds."""
         
         warnings = []
         penalty = 0
@@ -668,6 +1066,15 @@ class DataRobotStyleQualityMonitor:
                         "action": "Review outliers for data quality issues"
                     })
                     penalty += 5
+                elif outlier_pct > self.quality_thresholds["outlier_warning"] * 100:
+                    warnings.append({
+                        "type": "outliers",
+                        "column": col,
+                        "message": f"Column '{col}' has {outlier_pct:.1f}% outliers",
+                        "severity": "medium",
+                        "action": "Consider outlier handling strategy"
+                    })
+                    penalty += 2
         
         return {
             "warnings": warnings,
@@ -864,72 +1271,6 @@ class DataRobotStyleQualityMonitor:
             return RiskLevel.MEDIUM
         else:
             return RiskLevel.LOW
-    
-    def _generate_recommendations(self, issues: List[Dict], 
-                                 missing_report: Dict,
-                                 outlier_report: Dict,
-                                 dtype_report: Dict) -> List[Dict]:
-        """Generate actionable recommendations based on issues found."""
-        
-        recommendations = []
-        
-        # Missing data recommendations
-        if missing_report["penalty"] > 10:
-            recommendations.append({
-                "priority": "high",
-                "category": "missing_data",
-                "title": "Address Missing Data",
-                "description": "Significant missing data detected. Consider advanced imputation techniques or removing highly incomplete features.",
-                "actions": [
-                    "Use KNN or MICE imputation for numeric features",
-                    "Use mode or create 'Unknown' category for categorical features",
-                    "Drop columns with >50% missing values"
-                ]
-            })
-        
-        # Outlier recommendations
-        if outlier_report["penalty"] > 5:
-            recommendations.append({
-                "priority": "medium",
-                "category": "outliers",
-                "title": "Handle Outliers",
-                "description": "Multiple columns contain outliers that may affect model performance.",
-                "actions": [
-                    "Apply robust scaling or winsorization",
-                    "Use tree-based models that are robust to outliers",
-                    "Investigate outliers for data quality issues"
-                ]
-            })
-        
-        # Data type recommendations
-        if dtype_report["penalty"] > 5:
-            recommendations.append({
-                "priority": "medium",
-                "category": "data_types",
-                "title": "Optimize Data Types",
-                "description": "Data type issues detected that may impact model performance.",
-                "actions": [
-                    "Encode high-cardinality categorical variables",
-                    "Convert date strings to datetime objects",
-                    "Use appropriate numeric types to reduce memory usage"
-                ]
-            })
-        
-        # General best practices
-        recommendations.append({
-            "priority": "low",
-            "category": "best_practices",
-            "title": "AutoML Best Practices",
-            "description": "General recommendations for optimal AutoML performance.",
-            "actions": [
-                "Ensure target variable is properly defined",
-                "Create train/validation/test splits before training",
-                "Document data preprocessing steps for reproducibility",
-                "Set up monitoring for production deployment"
-            ]
-        })
-        
-        return recommendations
 
 
 # Convenience class combining both approaches
@@ -939,9 +1280,10 @@ class IntelligentDataQualityAgent:
     Enhanced with Agent-First capabilities for intelligent ML context detection.
     """
     
-    def __init__(self, llm_provider=None, enable_agent_first: bool = False):
-        self.cleaning_agent = AkkioStyleCleaningAgent(llm_provider, enable_agent_first) if llm_provider else None
-        self.quality_monitor = DataRobotStyleQualityMonitor(enable_agent_first)
+    def __init__(self, llm_provider=None, enable_agent_first: bool = False, config=None):
+        self.config = config  # AgentConfig for thresholds
+        self.cleaning_agent = AkkioStyleCleaningAgent(llm_provider, enable_agent_first, config) if llm_provider else None
+        self.quality_monitor = DataRobotStyleQualityMonitor(enable_agent_first, config)
         self.enable_agent_first = enable_agent_first
         self.universal_agent = None
         
@@ -1025,15 +1367,36 @@ class IntelligentDataQualityAgent:
 - **Imbalance Detected:** {'Yes' if assessment.ml_context.get('imbalance_detected') else 'No'}
 """
         
+        # Add retail metrics if available
+        if hasattr(assessment, 'retail_metrics') and assessment.retail_metrics:
+            report += f"""
+## Retail Data Quality
+- **Sentinel Values Found:** {len(assessment.retail_metrics.get('sentinel_columns', []))} columns
+- **Negative Prices Found:** {len(assessment.retail_metrics.get('negative_price_columns', []))} columns
+- **Category Column Present:** {'Yes' if assessment.retail_metrics.get('has_category_column') else 'No'}
+- **GS1 Compliance:** {assessment.retail_metrics.get('gs1_compliance', 0):.1f}%
+- **SKU Columns:** {', '.join(assessment.retail_metrics.get('sku_columns_found', [])) or 'None'}
+"""
+        
         report += f"""
 ## Critical Alerts ({len(assessment.alerts)})
 """
         for alert in assessment.alerts:
-            report += f"- ⚠️ **{alert['message']}** - {alert['action']}\n"
+            report += f"- âš ï¸ **{alert['message']}** - {alert['action']}\n"
         
         report += f"\n## Warnings ({len(assessment.warnings)})\n"
         for warning in assessment.warnings[:5]:  # Limit to top 5
-            report += f"- ⚡ {warning['message']}\n"
+            report += f"- âš¡ {warning['message']}\n"
+        
+        # Add retail-specific recommendations if available
+        if hasattr(assessment, 'retail_recommendations') and assessment.retail_recommendations:
+            report += f"\n## Retail-Specific Recommendations ({len(assessment.retail_recommendations)})\n"
+            for rec in assessment.retail_recommendations:
+                report += f"\n### {rec['title']} (Priority: {rec['priority']})\n"
+                report += f"{rec['description']}\n"
+                report += "**Actions:**\n"
+                for action in rec.get('actions', []):
+                    report += f"- {action}\n"
         
         report += f"\n## Key Statistics\n"
         for key, value in assessment.statistics.items():
@@ -1068,14 +1431,18 @@ class IntelligentDataQualityAgent:
 
 # Example usage
 if __name__ == "__main__":
-    # Create sample data with quality issues
+    # Create sample data with quality issues including retail-specific problems
     np.random.seed(42)
     df = pd.DataFrame({
         'numeric_clean': np.random.randn(100),
         'numeric_outliers': np.concatenate([np.random.randn(95), [100, -100, 200, -200, 300]]),
-        'numeric_missing': np.concatenate([np.random.randn(70), [np.nan] * 30]),
+        'numeric_missing': np.concatenate([np.random.randn(60), [np.nan] * 40]),  # 40% missing
+        'price': np.concatenate([np.random.uniform(10, 100, 90), [-999] * 5, [-5, -10, -15, -20, -25]]),  # Sentinels and negatives
+        'stock_quantity': np.concatenate([np.random.randint(0, 100, 95), [0, 0, 0, -999, -999]]),  # Mix of legitimate zeros and sentinels
+        'category': np.random.choice(['Electronics', 'Clothing', 'Food'], 100),
         'categorical': np.random.choice(['A', 'B', 'C'], 100),
-        'high_cardinality': [f'ID_{i}' for i in range(100)],
+        'sku': [f'SKU{i:013d}' for i in range(100)],  # Valid GS1-13 format
+        'high_cardinality': [f'ID_{i:04d}' for i in range(100)],
         'constant': [1] * 100,
         'target': np.random.choice([0, 1], 100, p=[0.9, 0.1])  # Imbalanced
     })
@@ -1083,8 +1450,12 @@ if __name__ == "__main__":
     # Add some duplicates
     df = pd.concat([df, df.iloc[:5]], ignore_index=True)
     
-    # Initialize agent with Agent-First enabled
-    agent = IntelligentDataQualityAgent(enable_agent_first=True)
+    # Initialize agent with Agent-First enabled and config
+    from .agent_config import AgentConfig
+    config = AgentConfig()
+    config.user_context["secteur_activite"] = "retail"
+    
+    agent = IntelligentDataQualityAgent(enable_agent_first=True, config=config)
     
     # Perform assessment
     assessment = agent.assess(df, target_column='target')
@@ -1098,6 +1469,7 @@ if __name__ == "__main__":
     print(f"Alerts: {len(assessment.alerts)}")
     print(f"Warnings: {len(assessment.warnings)}")
     print(f"Recommendations: {len(assessment.recommendations)}")
+    print(f"Retail Recommendations: {len(assessment.retail_recommendations)}")
     
     # Test Agent-First context detection
     import asyncio
@@ -1113,4 +1485,3 @@ if __name__ == "__main__":
     # Run if OpenAI API key is available
     if os.getenv("OPENAI_API_KEY"):
         asyncio.run(test_agent_first())
-
