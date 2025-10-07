@@ -158,6 +158,18 @@ class ValidatorAgent:
         try:
             sector = self.config.user_context.get("secteur_activite", "general")
             
+            # Check if local validation is sufficient
+            if self.config.enable_hybrid_mode:
+                local_context = {
+                    "missing_ratio": df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+                    "quality_score": 100 - (df.isnull().sum().sum() / (df.shape[0] * df.shape[1]) * 100),
+                    "sector": sector
+                }
+                use_agent, reason = self.config.should_use_agent(local_context)
+                if not use_agent:
+                    logger.info(f"Using local validation: {reason}")
+                    return self._basic_validation(df, sector)
+            
             # Phase 1: Use OpenAI to search for sector standards (if available)
             if self.openai_client is not None:
                 await self._ensure_assistant_initialized()
@@ -506,7 +518,7 @@ Respond ONLY with valid JSON:
             })
             results["urls"].append("https://www.hl7.org/fhir/")
         
-        if "SKU" in query or "UPC" in query:
+        if "SKU" in query or "UPC" in query or "GS1" in query:
             results["results"].append({
                 "title": "GS1 Product Identification Standards",
                 "url": "https://www.gs1.org/standards/",
@@ -683,6 +695,39 @@ Respond ONLY with valid JSON:
                     "warning": "No date column found for medical records",
                     "recommendation": "Add date/timestamp columns"
                 })
+        
+        elif sector == "retail":
+            # Check for retail-specific columns
+            expected_cols = ["sku", "price", "quantity", "category"]
+            missing = [col for col in expected_cols if col not in [c.lower() for c in df.columns]]
+            if missing:
+                report["warnings"].append({
+                    "column": "general",
+                    "warning": f"Missing expected retail columns: {missing}",
+                    "recommendation": "Consider adding standard retail columns"
+                })
+            
+            # Check for negative prices
+            price_columns = [col for col in df.columns if 'price' in col.lower() or 'prix' in col.lower()]
+            for col in price_columns:
+                if pd.api.types.is_numeric_dtype(df[col]) and (df[col] < 0).any():
+                    report["issues"].append({
+                        "severity": "high",
+                        "column": col,
+                        "issue": "Negative prices detected",
+                        "impact": "Invalid pricing data"
+                    })
+                    report["valid"] = False
+            
+            # Check for sentinel values
+            sentinel_values = [-999, -1, 0, 9999]
+            for col in df.select_dtypes(include=[np.number]).columns:
+                if df[col].isin(sentinel_values).any():
+                    report["warnings"].append({
+                        "column": col,
+                        "warning": f"Sentinel values detected ({sentinel_values})",
+                        "recommendation": "Replace sentinel values with NaN for proper handling"
+                    })
         
         # General validations
         for col in df.columns:
