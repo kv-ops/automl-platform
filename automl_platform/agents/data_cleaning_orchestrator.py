@@ -38,8 +38,8 @@ from .adaptive_template_system import AdaptiveTemplateSystem
 try:
     from ..data_quality_agent_enhanced import IntelligentDataQualityAgent
 except ImportError:
-    # Fallback to v2 if enhanced not available
-    from ..data_quality_agent_v2 import IntelligentDataQualityAgent
+    # Fallback to open-source implementation when enhanced module isn't bundled
+    from ..data_quality_agent import IntelligentDataQualityAgent
 
 from .utils import (
     async_retry,
