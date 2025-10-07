@@ -73,13 +73,13 @@ async def example_intelligent_cleaning():
     # Create agent configuration
     agent_config = AgentConfig(
         openai_api_key=os.getenv('OPENAI_API_KEY'),
-        model="gpt-4-1106-preview",
-        enable_web_search=True,
-        enable_file_operations=True,
-        max_iterations=3,
-        timeout_seconds=300,
-        max_cost_per_dataset=5.00,
-        user_context=user_context
+        openai_model="gpt-4-1106-preview",
+        openai_enable_web_search=True,
+        openai_enable_file_operations=True,
+        openai_max_iterations=3,
+        openai_timeout_seconds=300,
+        max_cost_openai=5.00,
+        max_cost_total=5.00,
     )
     
     # 3. Run intelligent cleaning
