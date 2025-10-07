@@ -557,11 +557,38 @@ def train_distributed_pipeline(self, job_id: str, dataset_url: str, config_dict:
         models = get_available_models(detect_task(y))
         param_grids = {name: get_param_grid(name) for name in models.keys()}
         
-        results = trainer.train_distributed(X, y, models, param_grids)
-        
-        best_result = max(results, key=lambda x: x['cv_score'])
-        best_pipeline = best_result['pipeline']
-        
+        results = trainer.train(
+            X,
+            y,
+            models,
+            param_grids,
+        )
+
+        successful_results = [
+            result for result in results.values()
+            if result.get('status') == 'success'
+        ]
+        if not successful_results:
+            raise RuntimeError("Distributed training failed for all models")
+
+        best_result = max(
+            successful_results,
+            key=lambda res: res.get('best_score', float('-inf'))
+        )
+
+        best_pipeline = best_result.get('best_model')
+        if best_pipeline is None:
+            raise RuntimeError("Distributed trainer did not return a trained model")
+
+        task_type = detect_task(y)
+        y_pred = best_pipeline.predict(X)
+        if task_type == 'classification' and hasattr(best_pipeline, 'predict_proba'):
+            y_proba = best_pipeline.predict_proba(X)
+        else:
+            y_proba = None
+
+        metrics = calculate_metrics(y, y_pred, y_proba, task_type)
+
         self.update_state(
             state='PROGRESS',
             meta={'current': 80, 'total': 100, 'status': 'Saving distributed model...'}
@@ -574,23 +601,23 @@ def train_distributed_pipeline(self, job_id: str, dataset_url: str, config_dict:
                 'tenant_id': tenant_id,
                 'distributed_backend': backend,
                 'n_workers': kwargs.get('n_workers', 4),
-                'best_model': best_result['model'],
-                'metrics': best_result['metrics'],
+                'best_model': best_result.get('model_name'),
+                'metrics': metrics,
                 'created_at': datetime.now().isoformat()
             }
             
             model_url = storage_manager.save_model(best_pipeline, metadata)
-            
+
             if pipeline_cache:
                 pipeline_cache.set_pipeline(
                     f"distributed_{job_id}",
                     best_pipeline,
                     X.head(100),
-                    metrics=best_result['metrics']
+                    metrics=metrics
                 )
         else:
             model_url = f"/tmp/{job_id}_distributed_model.pkl"
-        
+
         trainer.shutdown()
         if backend == 'ray' and ray.is_initialized():
             ray.shutdown()
@@ -599,9 +626,9 @@ def train_distributed_pipeline(self, job_id: str, dataset_url: str, config_dict:
             'job_id': job_id,
             'model_url': model_url,
             'backend': backend,
-            'best_model': best_result['model'],
-            'cv_score': best_result['cv_score'],
-            'metrics': best_result['metrics'],
+            'best_model': best_result.get('model_name'),
+            'cv_score': best_result.get('best_score'),
+            'metrics': metrics,
             'completed_at': datetime.now().isoformat()
         }
         

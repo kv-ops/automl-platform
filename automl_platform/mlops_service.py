@@ -303,11 +303,26 @@ class RetrainingService:
             logger.info("Using distributed retraining")
             from .model_selection import get_available_models
             models = get_available_models(detect_task(y_train))
-            results = self.distributed_trainer.train_distributed(
-                X_train, y_train, models, {}
+            results = self.distributed_trainer.train(
+                X_train,
+                y_train,
+                models,
+                {}
             )
-            best_result = max(results, key=lambda x: x['cv_score'])
-            best_model = best_result['pipeline']
+            successful_results = [
+                result for result in results.values()
+                if result.get('status') == 'success'
+            ]
+            if not successful_results:
+                raise RuntimeError("Distributed retraining failed for all models")
+
+            best_result = max(
+                successful_results,
+                key=lambda res: res.get('best_score', float('-inf'))
+            )
+            best_model = best_result.get('best_model')
+            if best_model is None:
+                raise RuntimeError("Distributed trainer did not return a best model")
         else:
             # Standard retraining with orchestrator
             from .orchestrator import AutoMLOrchestrator

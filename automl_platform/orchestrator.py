@@ -263,7 +263,7 @@ class AutoMLOrchestrator:
                     }
 
             # Train models in parallel
-            distributed_results = self.distributed_trainer.train_distributed(
+            distributed_results = self.distributed_trainer.train(
                 X,
                 y,
                 distributed_models,
