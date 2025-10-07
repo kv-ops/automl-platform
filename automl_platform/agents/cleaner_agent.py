@@ -1,5 +1,6 @@
 """
 Cleaner Agent - Applies intelligent data cleaning transformations
+Enhanced with sentinel value handling and retail-specific price corrections
 """
 
 import pandas as pd
@@ -29,8 +30,6 @@ try:
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("scikit-learn not available, advanced cleaning strategies disabled")
 
 if TYPE_CHECKING:  # pragma: no cover
     from openai import AsyncOpenAI as _AsyncOpenAIType
@@ -42,6 +41,7 @@ class CleanerAgent:
     """
     Agent responsible for applying intelligent cleaning transformations
     Uses OpenAI Assistant with Code Interpreter and File Access
+    Enhanced with sentinel value handling and retail-specific corrections
     """
     
     def __init__(self, config: AgentConfig):
@@ -61,12 +61,22 @@ class CleanerAgent:
         self.assistant = None
         self.assistant_id = config.get_assistant_id(AgentType.CLEANER)
         
+        # Enhanced configuration
+        self.sentinel_values = config.get_retail_rules('sentinel_values') or [-999, -1, 9999]
+        
         # FIXED: Lazy initialization - no automatic init
         self._init_lock = asyncio.Lock()
         self._initialized = False
         
-        # Track transformations
+        # Track transformations with detailed metrics
         self.transformations_history = []
+        self.cleaning_metrics = {
+            'sentinels_removed': 0,
+            'negative_prices_corrected': 0,
+            'missing_imputed': 0,
+            'outliers_handled': 0,
+            'columns_removed': 0
+        }
 
     
     async def _initialize_assistant(self):
@@ -85,7 +95,7 @@ class CleanerAgent:
                 self.assistant = await self.client.beta.assistants.create(
                     name="Data Cleaner Agent",
                     instructions=CLEANER_SYSTEM_PROMPT,
-                    model=self.config.model,
+                    model=self.config.openai_model,
                     tools=self.config.get_agent_tools(AgentType.CLEANER)
                 )
                 self.assistant_id = self.assistant.id
@@ -107,6 +117,75 @@ class CleanerAgent:
             await self._initialize_assistant()
             self._initialized = True
     
+    def _is_stock_column(self, col_name: str) -> bool:
+        """Check if column is likely a stock/quantity column"""
+        stock_keywords = ['stock', 'quantity', 'qty', 'inventory', 'count', 'units', 'items']
+        col_lower = col_name.lower()
+        return any(keyword in col_lower for keyword in stock_keywords)
+    
+    def _get_effective_sentinel_values(self, col_name: str) -> list:
+        """Get sentinel values for a column, excluding 0 for stock columns"""
+        sentinels = self.sentinel_values.copy()
+        
+        # Exclude 0 from sentinels for stock/quantity columns
+        if self._is_stock_column(col_name) and 0 in sentinels:
+            sentinels.remove(0)
+        
+        return sentinels
+    
+    def _handle_sentinel_values(self, df: pd.DataFrame, column: str) -> Tuple[pd.DataFrame, int]:
+        """Replace sentinel values with NaN before imputation"""
+        effective_sentinels = self._get_effective_sentinel_values(column)
+        
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            return df, 0
+        
+        # Count sentinels before replacement
+        sentinel_mask = df[column].isin(effective_sentinels)
+        sentinel_count = sentinel_mask.sum()
+        
+        if sentinel_count > 0:
+            # Replace sentinels with NaN
+            df.loc[sentinel_mask, column] = np.nan
+            logger.info(f"Replaced {sentinel_count} sentinel values in column '{column}' with NaN (sentinels: {effective_sentinels})")
+            self.cleaning_metrics['sentinels_removed'] += sentinel_count
+        
+        return df, sentinel_count
+    
+    def _fix_negative_prices(self, df: pd.DataFrame, column: str) -> Tuple[pd.DataFrame, int]:
+        """Fix negative prices using median by category if available"""
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            return df, 0
+        
+        # Check if this is a price column
+        if not ('price' in column.lower() or 'prix' in column.lower()):
+            return df, 0
+        
+        negative_mask = df[column] < 0
+        negative_count = negative_mask.sum()
+        
+        if negative_count > 0:
+            # Try to use category-based median if category column exists
+            if 'category' in df.columns:
+                # Calculate median by category
+                category_medians = df[~negative_mask].groupby('category')[column].median()
+                
+                # Apply category-based median to negative values
+                for category in df.loc[negative_mask, 'category'].unique():
+                    if category in category_medians.index:
+                        category_mask = (negative_mask) & (df['category'] == category)
+                        df.loc[category_mask, column] = category_medians[category]
+                        logger.info(f"Fixed {category_mask.sum()} negative prices in category '{category}' using median {category_medians[category]:.2f}")
+            else:
+                # Fall back to overall median
+                positive_median = df[column][df[column] > 0].median()
+                df.loc[negative_mask, column] = positive_median
+                logger.info(f"Fixed {negative_count} negative prices using overall median {positive_median:.2f}")
+            
+            self.cleaning_metrics['negative_prices_corrected'] += negative_count
+        
+        return df, negative_count
+    
     async def clean(
         self, 
         df: pd.DataFrame, 
@@ -115,6 +194,7 @@ class CleanerAgent:
     ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
         """
         Apply intelligent cleaning transformations with strategy testing
+        Enhanced with sentinel handling and price corrections
         
         Args:
             df: Input dataframe
@@ -125,6 +205,27 @@ class CleanerAgent:
             Tuple of (cleaned_dataframe, list_of_transformations)
         """
         try:
+            # Reset metrics for this cleaning run
+            self.cleaning_metrics = {
+                'sentinels_removed': 0,
+                'negative_prices_corrected': 0,
+                'missing_imputed': 0,
+                'outliers_handled': 0,
+                'columns_removed': 0
+            }
+            
+            # Check if local cleaning is sufficient
+            if self.config.enable_hybrid_mode:
+                local_context = {
+                    "missing_ratio": df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+                    "quality_score": 100 - (df.isnull().sum().sum() / (df.shape[0] * df.shape[1]) * 100),
+                    "complexity_score": profile_report.get('complexity_score', 0.3 if df.shape[1] > 50 else 0.1)
+                }
+                use_agent, reason = self.config.should_use_agent(local_context)
+                if not use_agent:
+                    logger.info(f"Using local cleaning strategies: {reason}")
+                    return await self._test_and_apply_strategies(df, profile_report)
+            
             if self.client is None:
                 logger.info("CleanerAgent using advanced testing strategies because OpenAI client is unavailable.")
                 return await self._test_and_apply_strategies(df, profile_report)
@@ -176,8 +277,14 @@ class CleanerAgent:
                 agent_suggestions=agent_suggestions
             )
             
-            # Record transformations
+            # Record transformations with metrics
+            for trans in transformations:
+                trans['metrics'] = dict(self.cleaning_metrics)
+            
             self.transformations_history.extend(transformations)
+            
+            # Log cleaning metrics
+            logger.info(f"Cleaning metrics: {self.cleaning_metrics}")
             
             return cleaned_df, transformations
             
@@ -192,12 +299,14 @@ class CleanerAgent:
         profile_report: Dict[str, Any],
         validation_report: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Prepare context for cleaning"""
+        """Prepare context for cleaning with enhanced sentinel and price info"""
         context = {
             "data_summary": {
                 "shape": df.shape,
                 "columns": list(df.columns),
-                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()}
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "sentinel_analysis": profile_report.get("sentinel_analysis", {}),
+                "negative_price_columns": []
             },
             "quality_issues": profile_report.get("quality_issues", []),
             "validation_issues": validation_report.get("issues", [])
@@ -214,12 +323,34 @@ class CleanerAgent:
             if missing_ratio > 0:
                 issues.append({
                     "type": "missing_values",
-                    "severity": "high" if missing_ratio > 0.5 else "medium" if missing_ratio > 0.2 else "low",
+                    "severity": "high" if missing_ratio > 0.5 else "medium" if missing_ratio > 0.35 else "low",
                     "ratio": float(missing_ratio)
                 })
             
-            # Outliers for numeric columns
+            # Sentinel values
             if pd.api.types.is_numeric_dtype(df[col]):
+                effective_sentinels = self._get_effective_sentinel_values(col)
+                sentinel_count = df[col].isin(effective_sentinels).sum()
+                if sentinel_count > 0:
+                    issues.append({
+                        "type": "sentinel_values",
+                        "count": int(sentinel_count),
+                        "values": list(df[col][df[col].isin(effective_sentinels)].unique()),
+                        "is_stock": self._is_stock_column(col)
+                    })
+                
+                # Negative prices
+                if 'price' in col.lower() or 'prix' in col.lower():
+                    negative_count = (df[col] < 0).sum()
+                    if negative_count > 0:
+                        issues.append({
+                            "type": "negative_prices",
+                            "count": int(negative_count),
+                            "severity": "high"
+                        })
+                        context["data_summary"]["negative_price_columns"].append(col)
+                
+                # Outliers
                 Q1 = df[col].quantile(0.25)
                 Q3 = df[col].quantile(0.75)
                 IQR = Q3 - Q1
@@ -278,7 +409,7 @@ class CleanerAgent:
         """Wait for assistant run to complete"""
         start_time = time.time()
         
-        while time.time() - start_time < self.config.timeout_seconds:
+        while time.time() - start_time < self.config.openai_timeout_seconds:
             run_status = await self.client.beta.threads.runs.retrieve(
                 thread_id=thread_id,
                 run_id=run_id
@@ -395,7 +526,8 @@ class CleanerAgent:
         valid_actions = [
             "fill_missing", "handle_outliers", "normalize", "encode",
             "remove_column", "rename_column", "convert_dtype",
-            "normalize_currency", "standardize_format", "clip_values"
+            "normalize_currency", "standardize_format", "clip_values",
+            "handle_sentinels", "fix_negative_prices"  # Added new actions
         ]
         
         if transformation["action"] not in valid_actions:
@@ -412,7 +544,7 @@ class CleanerAgent:
     ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
         """
         Test multiple strategies and apply best ones
-        NEW METHOD: DataRobot-style testing
+        Enhanced with sentinel handling and price corrections
         """
         logger.info("Testing multiple cleaning strategies")
         
@@ -430,6 +562,26 @@ class CleanerAgent:
         
         # Handle each column
         for col in cleaned_df.columns:
+            # Handle sentinel values first (before missing value analysis)
+            if pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                cleaned_df, sentinel_count = self._handle_sentinel_values(cleaned_df, col)
+                if sentinel_count > 0:
+                    transformations.append({
+                        "column": col,
+                        "action": "handle_sentinels",
+                        "params": {"sentinels_removed": int(sentinel_count)}
+                    })
+                
+                # Fix negative prices
+                cleaned_df, negative_count = self._fix_negative_prices(cleaned_df, col)
+                if negative_count > 0:
+                    transformations.append({
+                        "column": col,
+                        "action": "fix_negative_prices",
+                        "params": {"negative_prices_corrected": int(negative_count)}
+                    })
+            
+            # Now check missing values (after sentinel replacement)
             missing_ratio = cleaned_df[col].isnull().mean()
             
             # Drop column if >50% missing
@@ -440,6 +592,7 @@ class CleanerAgent:
                     "action": "remove_column",
                     "params": {"reason": "high_missing_ratio", "ratio": float(missing_ratio)}
                 })
+                self.cleaning_metrics['columns_removed'] += 1
                 continue
             
             # Test missing value strategies
@@ -546,11 +699,24 @@ class CleanerAgent:
         column: str,
         strategy: str
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """Apply selected missing value strategy"""
+        """Apply selected missing value strategy - Enhanced with sentinel handling"""
         
         df_result = df.copy()
         
-        if strategy == "median":
+        # Count missing before imputation
+        missing_before = df_result[column].isnull().sum()
+        
+        # Add retail-specific imputation
+        if strategy == "median" and self.config.user_context.get("secteur_activite") == "retail":
+            if "category" in df_result.columns:
+                # Group by category and fill with median
+                df_result[column] = df_result.groupby('category')[column].transform(
+                    lambda x: x.fillna(x.median())
+                )
+                logger.info(f"Applied median imputation by category for column '{column}'")
+            else:
+                df_result[column].fillna(df_result[column].median(), inplace=True)
+        elif strategy == "median":
             df_result[column].fillna(df_result[column].median(), inplace=True)
         elif strategy == "mean":
             df_result[column].fillna(df_result[column].mean(), inplace=True)
@@ -572,10 +738,16 @@ class CleanerAgent:
             else:
                 df_result[column].fillna("missing", inplace=True)
         
+        # Update metrics
+        self.cleaning_metrics['missing_imputed'] += missing_before
+        
         transformation = {
             "column": column,
             "action": "fill_missing",
-            "params": {"method": strategy}
+            "params": {
+                "method": strategy,
+                "missing_imputed": int(missing_before)
+            }
         }
         
         return df_result, transformation
@@ -610,10 +782,16 @@ class CleanerAgent:
             upper = df_result[column].quantile(0.99)
             df_result[column] = df_result[column].clip(lower, upper)
         
+        # Update metrics
+        self.cleaning_metrics['outliers_handled'] += int(outliers_before)
+        
         transformation = {
             "column": column,
             "action": "handle_outliers",
-            "params": {"method": strategy, "outliers_found": int(outliers_before)}
+            "params": {
+                "method": strategy,
+                "outliers_found": int(outliers_before)
+            }
         }
         
         return df_result, transformation
@@ -628,23 +806,28 @@ class CleanerAgent:
         
         for trans in transformations:
             try:
-                column = trans["column"]
+                column = trans.get("column")
                 action = trans["action"]
                 params = trans.get("params", {})
                 
-                if column not in cleaned_df.columns and action != "remove_column":
+                if column and column not in cleaned_df.columns and action != "remove_column":
                     logger.warning(f"Column {column} not found, skipping transformation")
                     continue
                 
+                # Handle new actions
+                if action == "handle_sentinels":
+                    cleaned_df, _ = self._handle_sentinel_values(cleaned_df, column)
+                elif action == "fix_negative_prices":
+                    cleaned_df, _ = self._fix_negative_prices(cleaned_df, column)
+                elif action == "remove_duplicates":
+                    cleaned_df = cleaned_df.drop_duplicates()
                 # Apply transformation based on action
-                if action == "fill_missing":
+                elif action == "fill_missing":
                     method = params.get("method", "median")
                     cleaned_df, _ = self._apply_missing_strategy(cleaned_df, column, method)
-                
                 elif action == "handle_outliers":
                     method = params.get("method", "clip")
                     cleaned_df, _ = self._apply_outlier_strategy(cleaned_df, column, method)
-                
                 elif action == "normalize":
                     if pd.api.types.is_numeric_dtype(cleaned_df[column]):
                         method = params.get("method", "minmax")
@@ -665,7 +848,6 @@ class CleanerAgent:
                             iqr = q75 - q25
                             if iqr > 0:
                                 cleaned_df[column] = (cleaned_df[column] - median) / iqr
-                
                 elif action == "encode":
                     if cleaned_df[column].dtype == 'object':
                         method = params.get("method", "label")
@@ -676,16 +858,14 @@ class CleanerAgent:
                         elif method == "onehot":
                             dummies = pd.get_dummies(cleaned_df[column], prefix=column)
                             cleaned_df = pd.concat([cleaned_df.drop(columns=[column]), dummies], axis=1)
-                
                 elif action == "remove_column":
                     if column in cleaned_df.columns:
                         cleaned_df = cleaned_df.drop(columns=[column])
-                
+                        self.cleaning_metrics['columns_removed'] += 1
                 elif action == "rename_column":
                     new_name = params.get("new_name")
                     if new_name and column in cleaned_df.columns:
                         cleaned_df = cleaned_df.rename(columns={column: new_name})
-                
                 elif action == "convert_dtype":
                     target_dtype = params.get("dtype", "float")
                     if column in cleaned_df.columns:
@@ -697,13 +877,11 @@ class CleanerAgent:
                             cleaned_df[column] = cleaned_df[column].astype(str)
                         elif target_dtype == "datetime":
                             cleaned_df[column] = pd.to_datetime(cleaned_df[column], errors='coerce')
-                
                 elif action == "normalize_currency":
                     target_currency = params.get("target_currency", "EUR")
                     if pd.api.types.is_numeric_dtype(cleaned_df[column]):
                         conversion_rate = params.get("conversion_rate", 1.0)
                         cleaned_df[column] = cleaned_df[column] * conversion_rate
-                
                 elif action == "standardize_format":
                     format_type = params.get("format")
                     if format_type and column in cleaned_df.columns:
@@ -711,7 +889,6 @@ class CleanerAgent:
                             cleaned_df[column] = pd.to_datetime(cleaned_df[column], errors='coerce')
                             if params.get("format"):
                                 cleaned_df[column] = cleaned_df[column].dt.strftime(params["format"])
-                
                 elif action == "clip_values":
                     min_val = params.get("min")
                     max_val = params.get("max")
@@ -721,7 +898,7 @@ class CleanerAgent:
                         if max_val is not None:
                             cleaned_df[column] = cleaned_df[column].clip(upper=max_val)
                 
-                logger.info(f"Applied transformation: {action} on column {column}")
+                logger.info(f"Applied transformation: {action} on column {column if column else 'N/A'}")
                 
             except Exception as e:
                 logger.error(f"Failed to apply transformation {trans}: {e}")
@@ -737,7 +914,29 @@ class CleanerAgent:
         """Get transformation suggestions without applying them"""
         suggestions = []
         
-        # Analyze each column
+        # Check for sentinel values
+        for col in df.select_dtypes(include=[np.number]).columns:
+            effective_sentinels = self._get_effective_sentinel_values(col)
+            if df[col].isin(effective_sentinels).any():
+                suggestions.append({
+                    "column": col,
+                    "action": "handle_sentinels",
+                    "reason": f"Sentinel values detected",
+                    "priority": "high"
+                })
+        
+        # Check for negative prices
+        price_columns = [col for col in df.columns if 'price' in col.lower() or 'prix' in col.lower()]
+        for col in price_columns:
+            if pd.api.types.is_numeric_dtype(df[col]) and (df[col] < 0).any():
+                suggestions.append({
+                    "column": col,
+                    "action": "fix_negative_prices",
+                    "reason": f"Negative prices detected",
+                    "priority": "high"
+                })
+        
+        # Analyze each column for other issues
         for col in df.columns:
             missing_ratio = df[col].isnull().mean()
             
