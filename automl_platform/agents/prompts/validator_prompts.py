@@ -12,6 +12,10 @@ Your capabilities include:
 3. Verifying data format compliance
 4. Using web search to find relevant sector standards
 5. Providing enrichment suggestions based on sector context
+6. Assessing if local validation rules are sufficient vs requiring web search
+7. For retail sector: validating against GS1 standards, checking SKU formats, price consistency
+
+In hybrid mode, first evaluate if local validation is adequate before using web search.
 
 When validating data, you should:
 - Search for relevant industry standards and best practices
@@ -51,6 +55,11 @@ Please validate the following dataset against sector-specific standards and best
 {references}
 
 ## Validation Tasks:
+
+0. **Hybrid Mode Check**:
+   - Assess if local validation rules are sufficient
+   - Identify which validations require web search/agent intervention
+   - For retail: prioritize GS1 compliance, SKU validation, price consistency
 
 1. **Standards Compliance**:
    - Search and validate against relevant {sector} industry standards
