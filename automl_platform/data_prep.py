@@ -44,11 +44,24 @@ class EnhancedDataPreprocessor:
     Full Agent-First support for template-free AutoML.
     ENHANCED: Hybrid local/agent mode for optimal performance vs quality trade-off
     """
-    
+
+    @staticmethod
+    def _coerce_to_bool(value: Any) -> Optional[bool]:
+        """Convert common truthy/falsey representations to strict booleans."""
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+        return bool(value)
+
     def __init__(self, config: Union[Dict[str, Any], 'AutoMLConfig']):
         """
         Initialize preprocessor with support for AutoMLConfig and Agent-First.
-        
+
         Args:
             config: Configuration dictionary or AutoMLConfig instance
         """
@@ -61,15 +74,22 @@ class EnhancedDataPreprocessor:
                 self.enable_agent_first = top_level_agent_first
             else:
                 self.enable_agent_first = bool(top_level_agent_first) if top_level_agent_first is not None else False
-            self.enable_hybrid_mode = config.get('enable_hybrid_mode', False)  # NEW: Hybrid mode support
+            top_level_hybrid = config.get('enable_hybrid_mode')
+            has_top_level_hybrid = 'enable_hybrid_mode' in config
+            coerced_top_level_hybrid = self._coerce_to_bool(top_level_hybrid)
+            self.enable_hybrid_mode = coerced_top_level_hybrid if coerced_top_level_hybrid is not None else False
             nested_agent_first = config.get('agent_first') or {}
             nested_enabled = None
+            nested_hybrid = None
             if isinstance(nested_agent_first, dict):
                 nested_enabled = nested_agent_first.get('enabled')
+                nested_hybrid = nested_agent_first.get('enable_hybrid_mode')
             elif hasattr(nested_agent_first, 'enabled'):
                 nested_enabled = getattr(nested_agent_first, 'enabled')
+                nested_hybrid = getattr(nested_agent_first, 'enable_hybrid_mode', None)
             elif hasattr(nested_agent_first, 'get'):
                 nested_enabled = nested_agent_first.get('enabled')
+                nested_hybrid = nested_agent_first.get('enable_hybrid_mode')
 
             if isinstance(nested_enabled, bool):
                 if top_level_agent_first is None:
@@ -86,16 +106,34 @@ class EnhancedDataPreprocessor:
                 # Backward compatibility for truthy non-bool values
                 if not self.enable_agent_first:
                     self.enable_agent_first = True
+            coerced_nested_hybrid = self._coerce_to_bool(nested_hybrid)
+            if coerced_nested_hybrid is not None:
+                if not has_top_level_hybrid or coerced_top_level_hybrid is None:
+                    self.enable_hybrid_mode = coerced_nested_hybrid
+                elif self.enable_hybrid_mode != coerced_nested_hybrid:
+                    logger.warning(
+                        "Conflicting hybrid mode flags in configuration dict: enable_hybrid_mode=%s vs agent_first.enable_hybrid_mode=%s. "
+                        "Using nested agent_first.enable_hybrid_mode.",
+                        top_level_hybrid,
+                        nested_hybrid,
+                    )
+                    self.enable_hybrid_mode = coerced_nested_hybrid
             self.agent_first_config = nested_agent_first if nested_agent_first else None
+            self.config['enable_hybrid_mode'] = self.enable_hybrid_mode
+            if isinstance(self.config.get('agent_first'), dict):
+                self.config['agent_first']['enable_hybrid_mode'] = self.enable_hybrid_mode
         else:  # AutoMLConfig instance
             self.config = config.to_dict() if hasattr(config, 'to_dict') else asdict(config)
             self.enable_intelligent_cleaning = getattr(config, 'enable_intelligent_cleaning', False)
             self.enable_agent_first = getattr(config, 'enable_agent_first', False)
-            self.enable_hybrid_mode = getattr(config, 'enable_hybrid_mode', False)  # NEW: Hybrid mode support
+            top_level_hybrid = getattr(config, 'enable_hybrid_mode', None)
+            coerced_top_level_hybrid = self._coerce_to_bool(top_level_hybrid)
+            self.enable_hybrid_mode = coerced_top_level_hybrid if coerced_top_level_hybrid is not None else False
             # Get Agent-First config if available
             if hasattr(config, 'agent_first'):
                 self.agent_first_config = config.agent_first
                 nested_enabled = getattr(self.agent_first_config, 'enabled', None)
+                nested_hybrid = getattr(self.agent_first_config, 'enable_hybrid_mode', None)
                 if isinstance(nested_enabled, bool):
                     if self.enable_agent_first != nested_enabled:
                         logger.warning(
@@ -107,9 +145,28 @@ class EnhancedDataPreprocessor:
                     self.enable_agent_first = nested_enabled
                 elif nested_enabled and not self.enable_agent_first:
                     self.enable_agent_first = True
+                coerced_nested_hybrid = self._coerce_to_bool(nested_hybrid)
+                if coerced_nested_hybrid is not None:
+                    if top_level_hybrid is None or coerced_top_level_hybrid is None:
+                        self.enable_hybrid_mode = coerced_nested_hybrid
+                    elif self.enable_hybrid_mode != coerced_nested_hybrid:
+                        logger.warning(
+                            "Conflicting hybrid mode flags on AutoMLConfig: enable_hybrid_mode=%s vs agent_first.enable_hybrid_mode=%s. "
+                            "Using nested agent_first.enable_hybrid_mode.",
+                            top_level_hybrid,
+                            nested_hybrid,
+                        )
+                        self.enable_hybrid_mode = coerced_nested_hybrid
             else:
                 self.agent_first_config = None
-        
+            if hasattr(config, 'get_hybrid_mode_flag'):
+                resolved_hybrid = config.get_hybrid_mode_flag()
+                if resolved_hybrid != self.enable_hybrid_mode:
+                    self.enable_hybrid_mode = resolved_hybrid
+            self.config['enable_hybrid_mode'] = self.enable_hybrid_mode
+            if isinstance(self.config.get('agent_first'), dict):
+                self.config['agent_first']['enable_hybrid_mode'] = self.enable_hybrid_mode
+
         self.numeric_features = []
         self.categorical_features = []
         self.datetime_features = []

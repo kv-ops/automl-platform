@@ -7,6 +7,7 @@ from sklearn.pipeline import Pipeline
 from unittest.mock import patch
 import sys
 import os
+import types
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Try importing the module, skip tests if not available
@@ -20,6 +21,34 @@ except ImportError as e:
     validate_data = None
     handle_imbalance = None
     AutoMLConfig = None
+
+
+def _create_stub_agents_module():
+    """Create a lightweight stub for automl_platform.agents to test hybrid mode."""
+    module = types.ModuleType("automl_platform.agents")
+
+    class DummyAgentConfig:
+        def __init__(self, *args, **kwargs):
+            self.__dict__.update(kwargs)
+            # Ensure attribute exists for downstream checks
+            self.enable_hybrid_mode = kwargs.get('enable_hybrid_mode', True)
+
+    class DummyComponent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class DummyDataCleaningOrchestrator:
+        def __init__(self, agent_config, config):
+            self.agent_config = agent_config
+            self.config = config
+
+    module.UniversalMLAgent = DummyComponent
+    module.IntelligentContextDetector = DummyComponent
+    module.IntelligentConfigGenerator = DummyComponent
+    module.AdaptiveTemplateSystem = DummyComponent
+    module.DataCleaningOrchestrator = DummyDataCleaningOrchestrator
+    module.AgentConfig = DummyAgentConfig
+    return module
 
 
 @pytest.mark.skipif(not MODULE_AVAILABLE, reason="automl_platform.data_prep module not available")
@@ -120,6 +149,60 @@ class TestDataPreprocessor:
 
         assert preprocessor.enable_agent_first is False
         assert "Conflicting Agent-First flags on AutoMLConfig" in caplog.text
+
+    def test_hybrid_mode_enabled_from_nested_config(self, caplog):
+        """Nested hybrid flag should enable hybrid mode and trigger hybrid initialization branch."""
+        config = {
+            'agent_first': {
+                'enabled': True,
+                'enable_hybrid_mode': True,
+            }
+        }
+
+        stub_agents = _create_stub_agents_module()
+
+        with patch.dict(sys.modules, {'automl_platform.agents': stub_agents}):
+            with caplog.at_level("INFO"):
+                preprocessor = DataPreprocessor(config)
+
+        assert preprocessor.enable_hybrid_mode is True
+        assert config['enable_hybrid_mode'] is True
+        assert "Hybrid mode enabled for intelligent decision making" in caplog.text
+
+    def test_hybrid_mode_conflict_prefers_nested_config_object(self, caplog):
+        """AutoMLConfig should prefer nested hybrid flag and log conflict when values differ."""
+        automl_config = AutoMLConfig()
+        automl_config.enable_agent_first = True
+        automl_config.agent_first.enabled = True
+        automl_config.agent_first.enable_hybrid_mode = True
+        automl_config.enable_hybrid_mode = False
+
+        stub_agents = _create_stub_agents_module()
+
+        with patch.dict(sys.modules, {'automl_platform.agents': stub_agents}):
+            with caplog.at_level("INFO"):
+                preprocessor = DataPreprocessor(automl_config)
+
+        assert preprocessor.enable_hybrid_mode is True
+        assert "Conflicting hybrid mode flags on AutoMLConfig" in caplog.text
+        assert "Hybrid mode enabled for intelligent decision making" in caplog.text
+
+    def test_hybrid_mode_resolves_when_top_level_missing(self, caplog):
+        """Hybrid helper should allow nested flag to drive DataPreprocessor when top-level is None."""
+        automl_config = AutoMLConfig()
+        automl_config.enable_agent_first = True
+        automl_config.agent_first.enabled = True
+        automl_config.enable_hybrid_mode = None
+        automl_config.agent_first.enable_hybrid_mode = True
+
+        stub_agents = _create_stub_agents_module()
+
+        with patch.dict(sys.modules, {'automl_platform.agents': stub_agents}):
+            with caplog.at_level("INFO"):
+                preprocessor = DataPreprocessor(automl_config)
+
+        assert preprocessor.enable_hybrid_mode is True
+        assert "Hybrid mode enabled for intelligent decision making" in caplog.text
 
     def test_no_data_leakage(self):
         """Test that there's no data leakage in preprocessing."""
