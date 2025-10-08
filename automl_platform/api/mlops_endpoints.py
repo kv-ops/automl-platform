@@ -56,7 +56,7 @@ except Exception as exc:  # pragma: no cover - defensive fallback for optional d
     ab_testing = None
     storage = None
     monitor = None
-retraining_service = None
+    retraining_service = None
 
 
 # ============================================================================
