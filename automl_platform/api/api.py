@@ -67,8 +67,8 @@ except ImportError:
 
 # Billing imports
 try:
-    from ..billing import BillingManager, UsageTracker
-    from ..billing_middleware import BillingMiddleware, setup_billing_middleware
+    from .billing import BillingManager, UsageTracker
+    from .billing_middleware import BillingMiddleware, setup_billing_middleware
     BILLING_AVAILABLE = True
 except ImportError:
     BILLING_AVAILABLE = False
@@ -118,7 +118,7 @@ except ImportError:
 
 # Streaming imports
 try:
-    from ..streaming import StreamConfig, StreamingOrchestrator, MLStreamProcessor
+    from .streaming import StreamConfig, StreamingOrchestrator, MLStreamProcessor
     STREAMING_AVAILABLE = True
 except ImportError:
     STREAMING_AVAILABLE = False
@@ -145,7 +145,7 @@ except ImportError:
 
 # Auth endpoints imports
 try:
-    from ..auth_endpoints import create_auth_router
+    from .auth_endpoints import create_auth_router
     AUTH_ENDPOINTS_AVAILABLE = True
 except ImportError:
     AUTH_ENDPOINTS_AVAILABLE = False
@@ -153,7 +153,7 @@ except ImportError:
 
 # Connector router imports
 try:
-    from ..connectors import connector_router
+    from .connectors import connector_router
     CONNECTORS_AVAILABLE = True
 except ImportError:
     CONNECTORS_AVAILABLE = False
@@ -161,7 +161,7 @@ except ImportError:
 
 # Feature store router imports
 try:
-    from ..feature_store import feature_store_router
+    from .feature_store import feature_store_router
     FEATURE_STORE_AVAILABLE = True
 except ImportError:
     FEATURE_STORE_AVAILABLE = False
