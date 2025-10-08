@@ -254,7 +254,10 @@ async def lifespan(app: FastAPI):
         app.state.storage = StorageManager(
             backend="gcs",
             project_id=getattr(config.storage, 'project_id', None),
-            credentials_path=getattr(config.storage, 'credentials_path', None)
+            credentials_path=getattr(config.storage, 'credentials_path', None),
+            models_bucket=getattr(config.storage, 'models_bucket', 'models'),
+            datasets_bucket=getattr(config.storage, 'datasets_bucket', 'datasets'),
+            artifacts_bucket=getattr(config.storage, 'artifacts_bucket', 'artifacts')
         )
     else:
         app.state.storage = None
