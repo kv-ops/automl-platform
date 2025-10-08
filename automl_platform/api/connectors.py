@@ -618,6 +618,8 @@ class BigQueryConnector(BaseConnector):
         if not dataset:
             raise ValueError("dataset_id must be provided to list BigQuery tables")
 
+        self.connect()
+        
         project, dataset_id = self._split_dataset(dataset)
         dataset_ref = f"{project}.{dataset_id}" if project else dataset_id
         tables = self._run_with_retries(
@@ -631,6 +633,8 @@ class BigQueryConnector(BaseConnector):
         if not dataset:
             raise ValueError("dataset_id must be provided to describe BigQuery tables")
 
+        self.connect()
+        
         table_id = self._format_table_identifier(table_name, dataset)
         table = self._run_with_retries(
             "bigquery_get_table",
