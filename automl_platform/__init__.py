@@ -324,13 +324,14 @@ except ImportError:
 
 # Optimization imports
 try:
-    from .distributed_training import DistributedTrainer
+    from .distributed_training import DistributedTrainer, DistributedConfig
     from .incremental_learning import IncrementalLearner
     from .pipeline_cache import PipelineCache, CacheConfig
     OPTIMIZATIONS_AVAILABLE = True
 except ImportError:
     OPTIMIZATIONS_AVAILABLE = False
     DistributedTrainer = None
+    DistributedConfig = None
     IncrementalLearner = None
     PipelineCache = None
     CacheConfig = None
@@ -1019,10 +1020,26 @@ def initialize_platform(config_path: str = None, environment: str = "production"
         
         # Initialize distributed trainer
         if hasattr(config, 'distributed') and config.distributed.enabled:
-            services["distributed"] = DistributedTrainer(
+            dist_config = DistributedConfig(
                 backend=config.distributed.backend,
-                n_workers=config.distributed.n_workers
+                num_workers=config.distributed.n_workers,
+                num_cpus_per_worker=getattr(
+                    config.distributed,
+                    'num_cpus_per_worker',
+                    getattr(config.distributed, 'n_cpus', 2)
+                ),
+                num_gpus_per_worker=getattr(
+                    config.distributed,
+                    'num_gpus_per_worker',
+                    getattr(config.distributed, 'n_gpus', 0.0)
+                ),
+                memory_per_worker_gb=getattr(
+                    config.distributed,
+                    'memory_per_worker_gb',
+                    getattr(config.distributed, 'memory_gb', 4)
+                ),
             )
+            services["distributed"] = DistributedTrainer(dist_config)
         
         # Initialize incremental learner
         if hasattr(config, 'incremental') and config.incremental.enabled:

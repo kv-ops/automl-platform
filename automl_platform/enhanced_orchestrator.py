@@ -47,13 +47,18 @@ from .prompts import PromptTemplates
 
 # Optimization imports
 try:
-    from .distributed_training import DistributedTrainer
+    from .distributed_training import DistributedTrainer, DistributedConfig
     from .incremental_learning import IncrementalLearner
     from .pipeline_cache import PipelineCache, CacheConfig
     OPTIMIZATIONS_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Optimization components not available: {e}")
     OPTIMIZATIONS_AVAILABLE = False
+    DistributedTrainer = None
+    DistributedConfig = None
+    IncrementalLearner = None
+    PipelineCache = None
+    CacheConfig = None
 
 
 class EnhancedAutoMLOrchestrator:
@@ -113,10 +118,14 @@ class EnhancedAutoMLOrchestrator:
         if OPTIMIZATIONS_AVAILABLE:
             # Setup distributed training if enabled
             if hasattr(self.config, 'distributed_training') and self.config.distributed_training:
-                self.distributed_trainer = DistributedTrainer(
+                dist_config = DistributedConfig(
                     backend=getattr(self.config, 'distributed_backend', 'ray'),
-                    n_workers=getattr(self.config, 'n_workers', 4)
+                    num_workers=getattr(self.config, 'n_workers', 4),
+                    num_cpus_per_worker=getattr(self.config, 'num_cpus_per_worker', getattr(self.config, 'n_cpus', 2)),
+                    num_gpus_per_worker=getattr(self.config, 'num_gpus_per_worker', getattr(self.config, 'n_gpus', 0.0)),
+                    memory_per_worker_gb=getattr(self.config, 'memory_per_worker_gb', getattr(self.config, 'memory_gb', 4)),
                 )
+                self.distributed_trainer = DistributedTrainer(dist_config)
                 logger.info(f"Distributed training enabled with {self.config.distributed_backend}")
             
             # Setup incremental learning if enabled

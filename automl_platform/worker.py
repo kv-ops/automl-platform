@@ -28,13 +28,15 @@ logger = logging.getLogger(__name__)
 
 # Import optimization components
 try:
-    from .distributed_training import DistributedTrainer
+    from .distributed_training import DistributedTrainer, DistributedConfig
     from .incremental_learning import IncrementalLearner
     from .pipeline_cache import PipelineCache, CacheConfig, monitor_cache_health
     OPTIMIZATIONS_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Optimization components not available: {e}")
     OPTIMIZATIONS_AVAILABLE = False
+    DistributedTrainer = None
+    DistributedConfig = None
 
 # Ray/Dask availability check
 try:
@@ -154,10 +156,26 @@ if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'cache') and config.cache.enabled
 
 distributed_trainer = None
 if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'distributed') and config.distributed.enabled:
-    distributed_trainer = DistributedTrainer(
+    dist_config = DistributedConfig(
         backend=getattr(config.distributed, 'backend', 'ray'),
-        n_workers=getattr(config.distributed, 'n_workers', 4)
+        num_workers=getattr(config.distributed, 'n_workers', 4),
+        num_cpus_per_worker=getattr(
+            config.distributed,
+            'num_cpus_per_worker',
+            getattr(config.distributed, 'n_cpus', 2)
+        ),
+        num_gpus_per_worker=getattr(
+            config.distributed,
+            'num_gpus_per_worker',
+            getattr(config.distributed, 'n_gpus', 0.0)
+        ),
+        memory_per_worker_gb=getattr(
+            config.distributed,
+            'memory_per_worker_gb',
+            getattr(config.distributed, 'memory_gb', 4)
+        ),
     )
+    distributed_trainer = DistributedTrainer(dist_config)
     logger.info(f"Distributed trainer initialized with {config.distributed.backend}")
 
 incremental_learner = None
@@ -542,10 +560,15 @@ def train_distributed_pipeline(self, job_id: str, dataset_url: str, config_dict:
         from .config import AutoMLConfig
         job_config = AutoMLConfig(**config_dict)
         
-        trainer = DistributedTrainer(
+        dist_config = DistributedConfig(
             backend=backend,
-            n_workers=kwargs.get('n_workers', 4)
+            num_workers=kwargs.get('n_workers', 4),
+            num_cpus_per_worker=kwargs.get('n_cpus', 2),
+            num_gpus_per_worker=kwargs.get('n_gpus', 0.0),
+            memory_per_worker_gb=kwargs.get('memory_per_worker_gb', 4),
         )
+
+        trainer = DistributedTrainer(dist_config)
         
         self.update_state(
             state='PROGRESS',
