@@ -48,6 +48,9 @@ alembic>=1.13.0
 mlflow>=2.9.0,<3.0.0
 pyarrow>=14.0.0
 
+# ---------- Cloud Storage Backends ----------
+google-cloud-storage>=2.10.0
+
 # ---------- Background Workers ----------
 celery[redis]>=5.3.0
 

@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch, MagicMock, call, ANY
 from datetime import datetime
 import pickle
 import os
+from typing import Dict
 
 # Import storage components
 from automl_platform.storage import (
@@ -209,15 +210,15 @@ class TestLocalStorage:
         """Test deleting a model."""
         # Save model
         local_storage.save_model(sample_model, sample_metadata)
-        
+
         # Delete specific version
         success = local_storage.delete_model("test_model", "1.0.0", "test_tenant")
         assert success
-        
+
         # Verify deletion
         with pytest.raises(Exception):
             local_storage.load_model("test_model", "1.0.0", "test_tenant")
-    
+
     def test_get_latest_version(self, local_storage, sample_model, sample_metadata):
         """Test getting latest version."""
         # Save multiple versions
@@ -430,7 +431,111 @@ class TestStorageManager:
             assert (output_dir / "docker-compose.yml").exists()
             assert (output_dir / "k8s-deployment.yaml").exists()
             assert (output_dir / "deploy.sh").exists()
-    
+
+    def test_storage_manager_gcs_backend(self, monkeypatch):
+        """Ensure StorageManager can initialize the GCS backend."""
+
+        from automl_platform import storage as storage_module
+
+        class FakeBlob:
+            def __init__(self, name):
+                self.name = name
+                self.data = b""
+                self.bucket = None
+                self.updated = datetime.now()
+
+            def upload_from_file(self, file_obj, **kwargs):
+                file_obj.seek(0)
+                self.data = file_obj.read()
+                self.updated = datetime.now()
+
+            def upload_from_string(self, data, **kwargs):
+                if isinstance(data, str):
+                    data = data.encode()
+                self.data = data
+                self.updated = datetime.now()
+
+            def download_as_bytes(self):
+                return self.data
+
+            def delete(self):
+                if self.bucket:
+                    self.bucket.delete_blob(self.name)
+
+        class FakeBucket:
+            def __init__(self, name):
+                self.name = name
+                self._blobs: Dict[str, FakeBlob] = {}
+
+            def blob(self, name):
+                if name not in self._blobs:
+                    blob = FakeBlob(name)
+                    blob.bucket = self
+                    self._blobs[name] = blob
+                return self._blobs[name]
+
+            def list_blobs(self, prefix=None):
+                blobs = list(self._blobs.values())
+                if prefix:
+                    blobs = [blob for blob in blobs if blob.name.startswith(prefix)]
+                return blobs
+
+            def delete_blob(self, name):
+                self._blobs.pop(name, None)
+
+        class FakeClient:
+            def __init__(self):
+                self._buckets: Dict[str, FakeBucket] = {}
+
+            def lookup_bucket(self, name):
+                return self._buckets.get(name)
+
+            def create_bucket(self, name):
+                bucket = FakeBucket(name)
+                self._buckets[name] = bucket
+                return bucket
+
+            def bucket(self, name):
+                return self._buckets.setdefault(name, FakeBucket(name))
+
+        monkeypatch.setattr(storage_module, "GCS_AVAILABLE", True)
+        monkeypatch.setattr(StorageManager, "_init_connectors", lambda self: None)
+
+        fake_client = FakeClient()
+
+        manager = StorageManager(
+            backend="gcs",
+            client=fake_client,
+            models_bucket="models",
+            datasets_bucket="datasets",
+            artifacts_bucket="artifacts",
+        )
+
+        assert isinstance(manager.backend, storage_module.GCSStorage)
+
+        model = {"coef": [1, 2, 3]}
+        metadata = {
+            "model_id": "gcs_model",
+            "model_type": "test",
+            "algorithm": "dummy",
+            "metrics": {},
+            "parameters": {},
+            "feature_names": [],
+            "tenant_id": "tenant1",
+        }
+
+        manager.save_model(model, metadata, version="1.0.0")
+        loaded_model, loaded_metadata = manager.load_model("gcs_model", "1.0.0", "tenant1")
+
+        assert loaded_model == model
+        assert loaded_metadata["model_id"] == "gcs_model"
+
+        dataset = pd.DataFrame({"value": [1, 2, 3]})
+        manager.save_dataset(dataset, "dataset1", tenant_id="tenant1", format="parquet")
+        loaded_dataset = manager.load_dataset("dataset1", tenant_id="tenant1")
+
+        pd.testing.assert_frame_equal(dataset, loaded_dataset)
+
     @patch('automl_platform.storage.convert_sklearn')
     def test_export_model_to_onnx(self, mock_convert, storage_manager):
         """Test exporting model to ONNX format."""

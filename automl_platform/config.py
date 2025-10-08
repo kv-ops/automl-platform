@@ -554,7 +554,7 @@ class FeatureStoreConfig:
 @dataclass
 class StorageConfig:
     """Storage configuration for model versioning and datasets."""
-    backend: str = "local"  # "local", "minio", "s3"
+    backend: str = "local"  # "local", "minio", "s3", "gcs"
     
     # Local storage
     local_base_path: str = "./ml_storage"
@@ -565,6 +565,10 @@ class StorageConfig:
     secret_key: str = os.getenv("MINIO_SECRET_KEY", "minioadmin")
     secure: bool = False
     region: str = "us-east-1"
+
+    # GCS configuration
+    project_id: Optional[str] = os.getenv("GCP_PROJECT_ID")
+    credentials_path: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     
     # Bucket names - ISOLATED BY TENANT
     models_bucket: str = "models"
@@ -1257,7 +1261,12 @@ class AutoMLConfig:
             assert self.hpo_n_iter > 0, "hpo_n_iter must be positive"
             
             # Validate storage config
-            assert self.storage.backend in ["local", "minio", "s3"], f"Invalid storage backend: {self.storage.backend}"
+            assert self.storage.backend in ["local", "minio", "s3", "gcs"], f"Invalid storage backend: {self.storage.backend}"
+            if self.storage.backend == "gcs" and self.storage.credentials_path:
+                credentials_file = Path(self.storage.credentials_path).expanduser()
+                assert credentials_file.exists(), (
+                    f"GCS credentials_path does not exist: {credentials_file}"
+                )
             
             # Validate monitoring config
             if self.monitoring.enabled:

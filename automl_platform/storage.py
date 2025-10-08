@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass, asdict
 import pandas as pd
 import numpy as np
-from io import BytesIO
+from io import BytesIO, StringIO
 
 try:
     from minio import Minio
@@ -25,13 +25,22 @@ try:
     MINIO_AVAILABLE = True
 except ImportError:
     MINIO_AVAILABLE = False
-    
+
 try:
     import boto3
     from botocore.exceptions import ClientError
     S3_AVAILABLE = True
 except ImportError:
     S3_AVAILABLE = False
+
+try:
+    from google.cloud import storage as gcs_storage
+    from google.oauth2 import service_account
+    GCS_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    gcs_storage = None
+    service_account = None
+    GCS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -701,15 +710,324 @@ class LocalStorage(StorageBackend):
             return False
 
 
+class GCSStorage(StorageBackend):
+    """Google Cloud Storage backend."""
+
+    def __init__(
+        self,
+        project_id: Optional[str] = None,
+        credentials_path: Optional[str] = None,
+        models_bucket: str = "models",
+        datasets_bucket: str = "datasets",
+        artifacts_bucket: str = "artifacts",
+        encryption_key: Optional[bytes] = None,
+        client: Optional[Any] = None,
+    ) -> None:
+        if not GCS_AVAILABLE and client is None:
+            raise ImportError("google-cloud-storage is required for the GCS backend")
+
+        self.encryption_key = encryption_key
+
+        if client is not None:
+            self.client = client
+        else:  # pragma: no cover - requires external dependency
+            credentials = None
+            if credentials_path and service_account is not None:
+                credentials = service_account.Credentials.from_service_account_file(credentials_path)
+            self.client = gcs_storage.Client(project=project_id, credentials=credentials)
+
+        self.models_bucket = models_bucket
+        self.datasets_bucket = datasets_bucket
+        self.artifacts_bucket = artifacts_bucket
+
+        self._ensure_buckets()
+
+    def _get_bucket(self, bucket_name: str):
+        if hasattr(self.client, "lookup_bucket"):
+            bucket = self.client.lookup_bucket(bucket_name)
+        else:
+            bucket = None
+
+        if bucket is None and hasattr(self.client, "create_bucket"):
+            try:
+                bucket = self.client.create_bucket(bucket_name)
+                logger.info(f"Created GCS bucket: {bucket_name}")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(f"Could not create bucket {bucket_name}: {exc}")
+        if bucket is None and hasattr(self.client, "bucket"):
+            bucket = self.client.bucket(bucket_name)
+        return bucket
+
+    def _ensure_buckets(self) -> None:
+        for bucket_name in [self.models_bucket, self.datasets_bucket, self.artifacts_bucket]:
+            bucket = None
+            try:
+                bucket = self._get_bucket(bucket_name)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(f"Failed to initialize bucket {bucket_name}: {exc}")
+            if bucket is None:
+                logger.error(f"Bucket {bucket_name} could not be initialized for GCS backend")
+
+    def _encrypt_data(self, data: bytes) -> bytes:
+        if self.encryption_key:
+            from cryptography.fernet import Fernet
+            fernet = Fernet(self.encryption_key)
+            return fernet.encrypt(data)
+        return data
+
+    def _decrypt_data(self, data: bytes) -> bytes:
+        if self.encryption_key:
+            from cryptography.fernet import Fernet
+            fernet = Fernet(self.encryption_key)
+            return fernet.decrypt(data)
+        return data
+
+    def save_model(self, model: Any, metadata: ModelMetadata) -> str:
+        try:
+            bucket = self._get_bucket(self.models_bucket)
+            if bucket is None:
+                raise RuntimeError("Models bucket is not available for GCS backend")
+
+            model_bytes = pickle.dumps(model)
+            if metadata.encrypted and self.encryption_key:
+                model_bytes = self._encrypt_data(model_bytes)
+
+            if metadata.compression == "gzip":
+                import gzip
+                model_bytes = gzip.compress(model_bytes)
+            elif metadata.compression == "lz4":
+                import lz4.frame
+                model_bytes = lz4.frame.compress(model_bytes)
+
+            object_name = f"{metadata.tenant_id}/{metadata.model_id}/v{metadata.version}/model.pkl"
+            metadata_name = f"{metadata.tenant_id}/{metadata.model_id}/v{metadata.version}/metadata.json"
+
+            model_blob = bucket.blob(object_name)
+            model_buffer = BytesIO(model_bytes)
+            model_buffer.seek(0)
+            model_blob.upload_from_file(model_buffer, rewind=True)
+
+            metadata_blob = bucket.blob(metadata_name)
+            metadata_blob.upload_from_string(json.dumps(metadata.to_dict()), content_type="application/json")
+
+            logger.info(f"Model saved to GCS: {metadata.model_id} v{metadata.version}")
+            return object_name
+        except Exception as exc:
+            logger.error(f"Failed to save model to GCS: {exc}")
+            raise
+
+    def _get_latest_version(self, bucket, model_id: str, tenant_id: str) -> Optional[str]:
+        prefix = f"{tenant_id}/{model_id}/"
+        versions: List[str] = []
+        try:
+            for blob in bucket.list_blobs(prefix=prefix):
+                if blob.name.endswith("metadata.json"):
+                    parts = blob.name.split("/")
+                    if len(parts) >= 3 and parts[-2].startswith("v"):
+                        versions.append(parts[-2][1:])
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Failed to determine latest version for {model_id}: {exc}")
+
+        if versions:
+            return sorted(versions, key=lambda x: tuple(int(p) for p in x.split('.')))[-1]
+        return None
+
+    def load_model(self, model_id: str, version: str = None, tenant_id: str = "default") -> tuple:
+        bucket = self._get_bucket(self.models_bucket)
+        if bucket is None:
+            raise RuntimeError("Models bucket is not available for GCS backend")
+
+        if version is None:
+            version = self._get_latest_version(bucket, model_id, tenant_id)
+            if version is None:
+                raise FileNotFoundError(f"No versions found for model {model_id}")
+
+        metadata_name = f"{tenant_id}/{model_id}/v{version}/metadata.json"
+        model_name = f"{tenant_id}/{model_id}/v{version}/model.pkl"
+
+        metadata_blob = bucket.blob(metadata_name)
+        model_blob = bucket.blob(model_name)
+
+        metadata_bytes = metadata_blob.download_as_bytes()
+        metadata = json.loads(metadata_bytes.decode())
+
+        model_bytes = model_blob.download_as_bytes()
+
+        if metadata.get("compression") == "gzip":
+            import gzip
+            model_bytes = gzip.decompress(model_bytes)
+        elif metadata.get("compression") == "lz4":
+            import lz4.frame
+            model_bytes = lz4.frame.decompress(model_bytes)
+
+        if metadata.get("encrypted") and self.encryption_key:
+            model_bytes = self._decrypt_data(model_bytes)
+
+        model = pickle.loads(model_bytes)
+        logger.info(f"Model loaded from GCS: {model_id} v{version}")
+        return model, metadata
+
+    def save_dataset(
+        self,
+        data: pd.DataFrame,
+        dataset_id: str,
+        tenant_id: str = "default",
+        format: str = "parquet",
+        compression: str = "snappy",
+    ) -> str:
+        bucket = self._get_bucket(self.datasets_bucket)
+        if bucket is None:
+            raise RuntimeError("Datasets bucket is not available for GCS backend")
+
+        data_hash = hashlib.sha256(data.to_csv(index=False).encode()).hexdigest()[:16]
+        extension_map = {
+            "parquet": "parquet",
+            "csv": "csv",
+            "json": "json",
+            "feather": "feather",
+        }
+
+        if format not in extension_map:
+            raise ValueError(f"Unsupported format: {format}")
+
+        extension = extension_map[format]
+        object_name = f"{tenant_id}/{dataset_id}_{data_hash}.{extension}"
+        metadata_name = f"{tenant_id}/{dataset_id}_{data_hash}_metadata.json"
+
+        if format == "parquet":
+            buffer = BytesIO()
+            data.to_parquet(buffer, engine="pyarrow", compression=compression)
+        elif format == "csv":
+            text_buffer = StringIO()
+            data.to_csv(text_buffer, index=False)
+            buffer = BytesIO(text_buffer.getvalue().encode())
+        elif format == "json":
+            text_buffer = StringIO()
+            data.to_json(text_buffer, orient="records")
+            buffer = BytesIO(text_buffer.getvalue().encode())
+        elif format == "feather":
+            buffer = BytesIO()
+            data.to_feather(buffer)
+        else:  # pragma: no cover - guarded above
+            raise ValueError(f"Unsupported format: {format}")
+
+        buffer.seek(0)
+
+        dataset_blob = bucket.blob(object_name)
+        dataset_blob.upload_from_file(buffer, rewind=True)
+
+        metadata = {
+            "dataset_id": dataset_id,
+            "hash": data_hash,
+            "shape": list(data.shape),
+            "columns": list(data.columns),
+            "dtypes": {col: str(dtype) for col, dtype in data.dtypes.items()},
+            "format": format,
+            "compression": compression,
+            "created_at": datetime.now().isoformat(),
+            "tenant_id": tenant_id,
+        }
+
+        metadata_blob = bucket.blob(metadata_name)
+        metadata_blob.upload_from_string(json.dumps(metadata), content_type="application/json")
+
+        logger.info(f"Dataset saved to GCS: {dataset_id} (hash: {data_hash})")
+        return object_name
+
+    def load_dataset(self, dataset_id: str, tenant_id: str = "default") -> pd.DataFrame:
+        bucket = self._get_bucket(self.datasets_bucket)
+        if bucket is None:
+            raise RuntimeError("Datasets bucket is not available for GCS backend")
+
+        prefix = f"{tenant_id}/{dataset_id}_"
+        metadata_blobs = [blob for blob in bucket.list_blobs(prefix=prefix) if blob.name.endswith("_metadata.json")]
+        if not metadata_blobs:
+            raise FileNotFoundError(f"Dataset {dataset_id} not found in tenant {tenant_id}")
+
+        def _blob_updated(blob):
+            return getattr(blob, "updated", datetime.min)
+
+        metadata_blob = max(metadata_blobs, key=_blob_updated)
+        metadata = json.loads(metadata_blob.download_as_bytes().decode())
+
+        extension_map = {
+            "parquet": "parquet",
+            "csv": "csv",
+            "json": "json",
+            "feather": "feather",
+        }
+
+        extension = extension_map.get(metadata.get("format"))
+        if not extension:
+            raise ValueError(f"Unsupported dataset format: {metadata.get('format')}")
+
+        dataset_blob_name = f"{tenant_id}/{metadata['dataset_id']}_{metadata['hash']}.{extension}"
+        dataset_blob = bucket.blob(dataset_blob_name)
+        data_bytes = dataset_blob.download_as_bytes()
+        buffer = BytesIO(data_bytes)
+
+        if metadata["format"] == "parquet":
+            data = pd.read_parquet(buffer)
+        elif metadata["format"] == "csv":
+            data = pd.read_csv(buffer)
+        elif metadata["format"] == "json":
+            data = pd.read_json(buffer)
+        elif metadata["format"] == "feather":
+            data = pd.read_feather(buffer)
+        else:  # pragma: no cover - already validated
+            raise ValueError(f"Unsupported dataset format: {metadata['format']}")
+
+        logger.info(f"Dataset loaded from GCS: {dataset_id}")
+        return data
+
+    def list_models(self, tenant_id: str = None) -> List[Dict]:
+        bucket = self._get_bucket(self.models_bucket)
+        if bucket is None:
+            return []
+
+        prefix = f"{tenant_id}/" if tenant_id else ""
+        models = []
+        for blob in bucket.list_blobs(prefix=prefix):
+            if blob.name.endswith("metadata.json"):
+                try:
+                    metadata = json.loads(blob.download_as_bytes().decode())
+                    models.append(metadata)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(f"Failed to parse metadata from {blob.name}: {exc}")
+        return models
+
+    def delete_model(self, model_id: str, version: str = None, tenant_id: str = "default") -> bool:
+        bucket = self._get_bucket(self.models_bucket)
+        if bucket is None:
+            return False
+
+        if version:
+            prefix = f"{tenant_id}/{model_id}/v{version}/"
+        else:
+            prefix = f"{tenant_id}/{model_id}/"
+
+        deleted = False
+        for blob in list(bucket.list_blobs(prefix=prefix)):
+            try:
+                if hasattr(blob, "delete"):
+                    blob.delete()
+                elif hasattr(bucket, "delete_blob"):
+                    bucket.delete_blob(blob.name)
+                deleted = True
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(f"Failed to delete blob {blob.name}: {exc}")
+        return deleted
+
+
 class StorageManager:
     """Main storage manager that handles backend selection and connectors."""
-    
+
     def __init__(self, backend: str = "local", **kwargs):
         """
         Initialize storage manager
         
         Args:
-            backend: Storage backend type ('local', 'minio', 's3')
+            backend: Storage backend type ('local', 'minio', 's3', 'gcs')
             **kwargs: Backend-specific configuration
         """
         self.backend_type = backend
@@ -719,6 +1037,8 @@ class StorageManager:
         
         if backend == "minio" or backend == "s3":
             self.backend = MinIOStorage(encryption_key=encryption_key, **kwargs)
+        elif backend == "gcs":
+            self.backend = GCSStorage(encryption_key=encryption_key, **kwargs)
         else:
             self.backend = LocalStorage(encryption_key=encryption_key, **kwargs)
         
