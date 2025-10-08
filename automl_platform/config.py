@@ -9,6 +9,11 @@ import os
 from datetime import timedelta
 from enum import Enum
 
+try:
+    from automl_platform.api.billing import PlanType as BillingPlanType
+except ImportError:  # pragma: no cover - fallback when billing module unavailable
+    BillingPlanType = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,6 +24,9 @@ class PlanType(Enum):
     TRIAL = "trial"
     PRO = "pro"
     ENTERPRISE = "enterprise"
+    STARTER = "starter"
+    PROFESSIONAL = "professional"
+    CUSTOM = "custom"
 
 
 @dataclass
@@ -1080,7 +1088,26 @@ class AutoMLConfig:
             
             # Validate billing config
             if self.billing.enabled:
-                assert self.billing.plan_type in ["free", "trial", "pro", "enterprise"], f"Invalid plan type: {self.billing.plan_type}"
+                allowed_plan_types = set()
+
+                if getattr(self.billing, "quotas", None):
+                    allowed_plan_types.update(
+                        (plan_key.value if isinstance(plan_key, Enum) else str(plan_key)).lower()
+                        for plan_key in self.billing.quotas.keys()
+                    )
+
+                if BillingPlanType is not None:
+                    allowed_plan_types.update(plan.value.lower() for plan in BillingPlanType)
+
+                if not allowed_plan_types:
+                    allowed_plan_types.update(plan.value.lower() for plan in PlanType)
+
+                plan_value = self.billing.plan_type
+                if isinstance(plan_value, Enum):
+                    plan_value = plan_value.value
+                plan_value = str(plan_value).lower()
+
+                assert plan_value in allowed_plan_types, f"Invalid plan type: {self.billing.plan_type}"
             
             # Validate RGPD config
             if self.rgpd.enabled:

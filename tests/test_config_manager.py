@@ -166,7 +166,7 @@ class TestConfigManager:
     def test_validate_config_raises_exception(self):
         """Test that validation raises exception for invalid configuration."""
         manager = ConfigManager(config_path="non_existent.yaml")
-        
+
         # Create invalid configuration
         manager.config.streaming.enabled = True
         manager.config.streaming.platform = "kafka"
@@ -174,7 +174,26 @@ class TestConfigManager:
         
         with pytest.raises(ValueError):
             manager.validate_config()
-    
+
+    @pytest.mark.parametrize("plan_name", ["starter", "professional", "custom"])
+    def test_validate_accepts_extended_billing_plan_types(self, tmp_path, plan_name):
+        """Ensure AutoMLConfig validation supports extended billing plans."""
+        config = AutoMLConfig()
+        base_dir = tmp_path / "config"
+
+        config.output_dir = str(base_dir / "output")
+        config.monitoring.report_output_dir = str(base_dir / "monitoring")
+        config.storage.local_base_path = str(base_dir / "storage")
+        config.agent_first.knowledge_base_path = str(base_dir / "knowledge")
+        config.agent_first.yaml_output_dir = str(base_dir / "agent_yaml")
+
+        config.billing.enabled = True
+        config.billing.plan_type = plan_name
+        if plan_name not in config.billing.quotas:
+            config.billing.quotas[plan_name] = {}
+
+        assert config.validate()
+
     def test_get_service_config(self):
         """Test getting configuration for specific services."""
         manager = ConfigManager(config_path="non_existent.yaml")
