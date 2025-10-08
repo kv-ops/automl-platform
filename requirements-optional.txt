@@ -20,6 +20,65 @@
 
 
 # ======================================================================
+# Security & Access
+# ======================================================================
+
+# [auth]
+# itsdangerous>=2.1.0
+# msal>=1.25.0
+# okta-jwt-verifier>=0.2.3
+# python-jose[cryptography]>=3.3.0
+# python-keycloak>=3.0.0
+# requests-oauthlib>=1.3.1
+
+# [sso]
+# auth0-python>=4.5.0
+# google-auth-oauthlib>=1.0.0
+# msal>=1.25.0
+# okta-jwt-verifier>=0.2.3
+# python3-saml>=1.16.0
+# requests-oauthlib>=1.3.1
+
+
+# ======================================================================
+# API & Integration
+# ======================================================================
+
+# [api]
+# fastapi-pagination>=0.12.11
+# fastapi-versioning>=0.10.0
+# python-socketio>=5.9.0
+# slowapi>=0.1.9
+# starlette-exporter>=0.19.0
+
+# [streaming]
+# aiokafka>=0.8.1
+# faust-streaming>=0.10.8
+# kafka-python>=2.0.2
+# pulsar-client>=3.3.0
+# pyflink>=1.18.0
+# redis>=5.0.0
+
+# [orchestration]
+# apache-airflow>=2.8.0
+# dagster>=1.5.0
+# kedro>=0.18.0
+# luigi>=3.2.0
+# prefect>=2.14.0
+
+
+# ======================================================================
+# Feature Management
+# ======================================================================
+
+# [feature-store]
+# deltalake>=0.12.0
+# feast>=0.35.0
+# great-expectations>=0.18.0
+# redis-om>=0.2.2
+
+
+# ======================================================================
 # User Experience
 # ======================================================================
 
@@ -76,6 +135,14 @@
 # reportlab>=4.0.0
 # xlsxwriter>=3.1.0
 
+# [export]
+# coremltools>=6.3.0
+# onnx>=1.15.0
+# onnxruntime>=1.16.0
+# skl2onnx>=1.16.0
+# sklearn2pmml>=0.100.2
+# tensorflow>=2.15.0,<3.0.0
+
 
 # ======================================================================
 # Connectors & Data Sources
@@ -124,6 +191,21 @@
 # deepchecks>=0.17.0
 # evidently>=0.4.0
 
+# [mlops]
+# bentoml>=1.1.0
+# dvc>=3.0.0
+# great-expectations>=0.18.0
+# mlflow>=2.9.0,<3.0.0
+# neptune-client>=1.7.0
+# wandb>=0.16.0
+
+# [production]
+# docker>=6.1.3
+# gunicorn>=21.2.0
+# kubernetes>=28.1.0
+# supervisor>=4.2.5
+# uvicorn[standard]>=0.24.0,<1.0.0
+
 
 # ======================================================================
 # LLM Integration
@@ -137,6 +219,50 @@
 # llama-index>=0.10.0
 # openai>=1.10.0
 # tiktoken>=0.6.0
+
+
+# ======================================================================
+# Advanced Analytics
+# ======================================================================
+
+# [explain]
+# alibi>=0.9.5
+# captum>=0.7.0
+# eli5>=0.13.0
+# interpret>=0.4.4
+# lime>=0.2.0
+# shap>=0.43.0
+
+# [timeseries]
+# darts>=0.27.0
+# neuralforecast>=1.7.0
+# pmdarima>=2.0.3
+# prophet>=1.1.4
+# sktime>=0.23.0
+# statsmodels>=0.14.0
+# tsfresh>=0.20.0
+
+# [nlp]
+# gensim>=4.3.0
+# langdetect>=1.0.9
+# nltk>=3.8.1
+# sentence-transformers>=2.2.0
+# spacy>=3.7.0
+# textblob>=0.17.1
+
+# [vision]
+# albumentations>=1.3.1
+# opencv-python>=4.8.0
+# pillow>=10.0.0
+# supervision>=0.17.0
+# ultralytics>=8.0.0
+
+# [hpo]
+# bayesian-optimization>=1.4.3
+# hyperopt>=0.2.7
+# nevergrad>=1.0.0
+# optuna>=3.4.0
+# scikit-optimize>=0.9.0
 
 
 # ======================================================================
@@ -162,6 +288,41 @@
 # torch>=2.1.0,<3.0.0
 # torchaudio>=2.1.0,<3.0.0
 # torchvision>=0.16.0,<1.0.0
+
+# [distributed-gpu]
+# deepspeed>=0.12.0
+# fairscale>=0.4.13
+# horovod[pytorch]>=0.28.0
+
+# [automl-gpu]
+# autogluon>=1.0.0
+# nni>=3.0.0
+
+# [serving-gpu]
+# tensorflow-serving-api>=2.15.0
+# tritonclient[grpc]>=2.38.0
+
+# [gpu-complete]
+# includes extras: gpu, deep, distributed-gpu, automl-gpu, serving-gpu
+# autogluon>=1.0.0
+# cupy-cuda11x>=12.0.0,<13.0.0
+# deepspeed>=0.12.0
+# fairscale>=0.4.13
+# gpustat>=1.1.1
+# gputil>=1.4.0
+# horovod[pytorch]>=0.28.0
+# nni>=3.0.0
+# numba[cuda]>=0.58.0
+# nvidia-ml-py3>=7.352.0
+# onnxruntime-gpu>=1.16.0,<2.0.0
+# pynvml>=11.5.0
+# pytorch-lightning>=2.1.0
+# tensorflow-serving-api>=2.15.0
+# tensorflow>=2.15.0,<3.0.0
+# torch>=2.1.0,<3.0.0
+# torchaudio>=2.1.0,<3.0.0
+# torchvision>=0.16.0,<1.0.0
+# tritonclient[grpc]>=2.38.0
 
 
 # ======================================================================
@@ -207,50 +368,80 @@
 # ======================================================================
 
 # [enterprise]
-# includes extras: nocode, cloud, monitoring, quality, distributed, llm, workers
+# includes extras: nocode, cloud, monitoring, quality, distributed, llm, workers, auth, sso, production, mlops, feature-store, streaming, orchestration
 # aioboto3>=12.0.0
+# aiokafka>=0.8.1
 # anthropic>=0.8.0
+# apache-airflow>=2.8.0
+# auth0-python>=4.5.0
 # azure-storage-blob>=12.19.0
+# bentoml>=1.1.0
 # boto3>=1.34.0
 # cassandra-driver>=3.29.0
 # chromadb>=0.4.22
 # cx_Oracle>=8.3.0
+# dagster>=1.5.0
 # dask[distributed]>=2023.12.0
 # databricks-connect>=14.1.0
 # datadog>=0.49.0
 # deepchecks>=0.17.0
+# deltalake>=0.12.0
+# docker>=6.1.3
+# dvc>=3.0.0
 # elasticsearch>=8.12.0
 # evidently>=0.4.0
 # fastparquet>=2023.10.0
+# faust-streaming>=0.10.8
+# feast>=0.35.0
 # flower>=2.0.0
 # fpdf2>=2.7.0
 # google-auth-oauthlib>=1.0.0
 # google-auth>=2.14.1
 # google-cloud-bigquery>=3.15.0
 # google-cloud-storage>=2.10.0
+# great-expectations>=0.18.0
 # gspread>=5.7.2
+# gunicorn>=21.2.0
 # influxdb-client>=1.40.0
+# itsdangerous>=2.1.0
 # jaeger-client>=4.8.0
 # jinja2>=3.1.0
+# kafka-python>=2.0.2
+# kedro>=0.18.0
+# kubernetes>=28.1.0
 # langchain-community>=0.0.20
 # langchain>=0.1.0
 # llama-index>=0.10.0
+# luigi>=3.2.0
 # matplotlib>=3.8.0
 # minio>=7.2.0
+# mlflow>=2.9.0,<3.0.0
+# msal>=1.25.0
 # mysqlclient>=2.2.0
+# neptune-client>=1.7.0
+# okta-jwt-verifier>=0.2.3
 # openai>=1.10.0
 # openpyxl>=3.1.0
 # opentelemetry-api>=1.22.0
 # opentelemetry-instrumentation-fastapi>=0.43b0
 # opentelemetry-sdk>=1.22.0
 # plotly>=5.18.0
+# prefect>=2.14.0
+# pulsar-client>=3.3.0
 # pyarrow>=14.0.0
+# pyflink>=1.18.0
 # pymongo>=4.6.0
 # pymysql>=1.1.0
 # pyodbc>=5.0.1
 # python-docx>=1.1.0
+# python-jose[cryptography]>=3.3.0
+# python-keycloak>=3.0.0
+# python3-saml>=1.16.0
 # ray[default,train,tune]>=2.8.0,<3.0.0
+# redis-om>=0.2.2
+# redis>=5.0.0
 # reportlab>=4.0.0
+# requests-oauthlib>=1.3.1
 # seaborn>=0.13.0
 # sentry-sdk>=1.40.0
 # snowflake-connector-python>=3.7.0
@@ -258,7 +449,176 @@
 # streamlit-authenticator>=0.2.3
 # streamlit-option-menu>=0.3.6
 # streamlit>=1.30.0
+# supervisor>=4.2.5
 # tiktoken>=0.6.0
+# uvicorn[standard]>=0.24.0,<1.0.0
+# wandb>=0.16.0
+# xlsxwriter>=3.1.0
+
+# [all]
+# includes extras: agents, auth, sso, api, ui, reporting, export, connectors, cloud, streaming, feature-store, orchestration, production, mlops, quality, monitoring, explain, timeseries, nlp, vision, hpo, llm, distributed, gpu, deep, distributed-gpu, automl-gpu, serving-gpu, workers, tests, docs, dev, nocode, enterprise, gpu-complete
+# aioboto3>=12.0.0
+# aiokafka>=0.8.1
+# albumentations>=1.3.1
+# alibi>=0.9.5
+# anthropic>=0.8.0
+# apache-airflow>=2.8.0
+# auth0-python>=4.5.0
+# autogluon>=1.0.0
+# azure-storage-blob>=12.19.0
+# bayesian-optimization>=1.4.3
+# beautifulsoup4>=4.11.0
+# bentoml>=1.1.0
+# black>=24.0.0
+# boto3>=1.34.0
+# captum>=0.7.0
+# cassandra-driver>=3.29.0
+# chromadb>=0.4.22
+# coremltools>=6.3.0
+# cupy-cuda11x>=12.0.0,<13.0.0
+# cx_Oracle>=8.3.0
+# dagster>=1.5.0
+# darts>=0.27.0
+# dask[distributed]>=2023.12.0
+# databricks-connect>=14.1.0
+# datadog>=0.49.0
+# deepchecks>=0.17.0
+# deepspeed>=0.12.0
+# deltalake>=0.12.0
+# docker>=6.1.3
+# dvc>=3.0.0
+# elasticsearch>=8.12.0
+# eli5>=0.13.0
+# evidently>=0.4.0
+# fairscale>=0.4.13
+# fastapi-pagination>=0.12.11
+# fastapi-versioning>=0.10.0
+# fastparquet>=2023.10.0
+# faust-streaming>=0.10.8
+# feast>=0.35.0
+# flower>=2.0.0
+# fpdf2>=2.7.0
+# gensim>=4.3.0
+# google-auth-oauthlib>=1.0.0
+# google-auth>=2.14.1
+# google-cloud-bigquery>=3.15.0
+# google-cloud-storage>=2.10.0
+# gpustat>=1.1.1
+# gputil>=1.4.0
+# great-expectations>=0.18.0
+# gspread>=5.7.2
+# gunicorn>=21.2.0
+# horovod[pytorch]>=0.28.0
+# hyperopt>=0.2.7
+# hypothesis>=6.98.0
+# influxdb-client>=1.40.0
+# interpret>=0.4.4
+# ipython>=8.12.0
+# isort>=5.13.0
+# itsdangerous>=2.1.0
+# jaeger-client>=4.8.0
+# jinja2>=3.1.0
+# jupyter-book>=0.15.0
+# kafka-python>=2.0.2
+# kedro>=0.18.0
+# kubernetes>=28.1.0
+# langchain-community>=0.0.20
+# langchain>=0.1.0
+# langdetect>=1.0.9
+# lime>=0.2.0
+# llama-index>=0.10.0
+# luigi>=3.2.0
+# matplotlib>=3.8.0
+# minio>=7.2.0
+# mkdocs-material>=9.5.0
+# mkdocs>=1.5.0
+# mlflow>=2.9.0,<3.0.0
+# msal>=1.25.0
+# mypy>=1.8.0
+# mysqlclient>=2.2.0
+# myst-parser>=2.0.0
+# neptune-client>=1.7.0
+# neuralforecast>=1.7.0
+# nevergrad>=1.0.0
+# nltk>=3.8.1
+# nni>=3.0.0
+# numba[cuda]>=0.58.0
+# nvidia-ml-py3>=7.352.0
+# okta-jwt-verifier>=0.2.3
+# onnx>=1.15.0
+# onnxruntime-gpu>=1.16.0,<2.0.0
+# onnxruntime>=1.16.0
+# openai>=1.10.0
+# opencv-python>=4.8.0
+# openpyxl>=3.1.0
+# opentelemetry-api>=1.22.0
+# opentelemetry-instrumentation-fastapi>=0.43b0
+# opentelemetry-sdk>=1.22.0
+# optuna>=3.4.0
+# pillow>=10.0.0
+# plotly>=5.18.0
+# pmdarima>=2.0.3
+# pre-commit>=3.6.0
+# prefect>=2.14.0
+# prophet>=1.1.4
+# pulsar-client>=3.3.0
+# pyarrow>=14.0.0
+# pyflink>=1.18.0
+# pymongo>=4.6.0
+# pymysql>=1.1.0
+# pynvml>=11.5.0
+# pyodbc>=5.0.1
+# pytest-asyncio>=0.23.0
+# pytest-cov>=4.1.0
+# pytest-mock>=3.12.0
+# pytest>=8.0.0
+# python-docx>=1.1.0
+# python-jose[cryptography]>=3.3.0
+# python-keycloak>=3.0.0
+# python-socketio>=5.9.0
+# python3-saml>=1.16.0
+# pytorch-lightning>=2.1.0
+# ray[default,train,tune]>=2.8.0,<3.0.0
+# redis-om>=0.2.2
+# redis>=5.0.0
+# reportlab>=4.0.0
+# requests-oauthlib>=1.3.1
+# ruff>=0.2.0
+# scikit-optimize>=0.9.0
+# seaborn>=0.13.0
+# sentence-transformers>=2.2.0
+# sentry-sdk>=1.40.0
+# shap>=0.43.0
+# skl2onnx>=1.16.0
+# sklearn2pmml>=0.100.2
+# sktime>=0.23.0
+# slowapi>=0.1.9
+# snowflake-connector-python>=3.7.0
+# spacy>=3.7.0
+# sphinx-autodoc-typehints>=1.25.0
+# sphinx-copybutton>=0.5.0
+# sphinx-rtd-theme>=2.0.0
+# sphinx>=7.2.0
+# starlette-exporter>=0.19.0
+# statsmodels>=0.14.0
+# streamlit-aggrid>=0.3.4
+# streamlit-authenticator>=0.2.3
+# streamlit-option-menu>=0.3.6
+# streamlit>=1.30.0
+# supervision>=0.17.0
+# supervisor>=4.2.5
+# tensorflow-serving-api>=2.15.0
+# tensorflow>=2.15.0,<3.0.0
+# textblob>=0.17.1
+# tiktoken>=0.6.0
+# torch>=2.1.0,<3.0.0
+# torchaudio>=2.1.0,<3.0.0
+# torchvision>=0.16.0,<1.0.0
+# tritonclient[grpc]>=2.38.0
+# tsfresh>=0.20.0
+# ultralytics>=8.0.0
+# uvicorn[standard]>=0.24.0,<1.0.0
+# wandb>=0.16.0
 # xlsxwriter>=3.1.0
 
 
