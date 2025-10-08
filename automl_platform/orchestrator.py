@@ -839,21 +839,9 @@ class AutoMLOrchestrator:
                 import shap  # type: ignore
 
                 background = self._explanation_background
-                if background is None:
-                    background = X_subset.values
-
-                background = np.asarray(background)
-                if background.ndim == 1:
-                    background = background.reshape(1, -1)
-
-                max_background = getattr(self.config, 'explanation_background_size', 200)
-                if background.shape[0] > max_background:
-                    if hasattr(shap, 'sample'):
-                        background = shap.sample(background, max_background)
-                    else:
-                        rng = np.random.default_rng(getattr(self.config, 'random_state', None))
-                        idx = rng.choice(background.shape[0], size=max_background, replace=False)
-                        background = background[idx]
+                background_from_cache = background is not None
+                if not background_from_cache:
+                    background = X_subset.copy()
 
                 model = self.best_pipeline
                 transformed_subset = X_subset.values
@@ -867,8 +855,29 @@ class AutoMLOrchestrator:
                         if hasattr(transformed_subset, 'toarray'):
                             transformed_subset = transformed_subset.toarray()
                         feature_names = self._explanation_feature_names or feature_names
+                        if not background_from_cache:
+                            transformed_background = preprocessor.transform(background)
+                            if hasattr(transformed_background, 'toarray'):
+                                transformed_background = transformed_background.toarray()
+                            background = transformed_background
                     model = steps.get('model', list(steps.values())[-1])
 
+                if not background_from_cache:
+                    background = background.values if isinstance(background, pd.DataFrame) else background
+
+                background = np.asarray(background)
+                if background.ndim == 1:
+                    background = background.reshape(1, -1)
+
+                max_background = getattr(self.config, 'explanation_background_size', 200)
+                if background.shape[0] > max_background:
+                    if hasattr(shap, 'sample'):
+                        background = shap.sample(background, max_background)
+                    else:
+                        rng = np.random.default_rng(getattr(self.config, 'random_state', None))
+                        idx = rng.choice(background.shape[0], size=max_background, replace=False)
+                        background = background[idx]
+                
                 transformed_subset = np.asarray(transformed_subset)
                 explainer = shap.Explainer(model, background)
                 shap_values = explainer(transformed_subset)
