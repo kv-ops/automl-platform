@@ -34,13 +34,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/mlops", tags=["MLOps"])
 
 # Initialize services (would be dependency injected in production)
-config = AutoMLConfig()
-registry = MLflowRegistry(config)
-exporter = ModelExporter()
-ab_testing = ABTestingService(registry)
-storage = StorageService(config)
-monitor = ModelMonitor(config)
-retraining_service = RetrainingService(config, registry, monitor, storage)
+try:
+    config = AutoMLConfig()
+except Exception as exc:  # pragma: no cover - defensive fallback for optional deps
+    logger.warning("Failed to load AutoML configuration: %s", exc)
+    config = None
+
+try:
+    if config is None:
+        raise RuntimeError("Configuration unavailable")
+    registry = MLflowRegistry(config)
+    exporter = ModelExporter()
+    ab_testing = ABTestingService(registry)
+    storage = StorageService(config)
+    monitor = ModelMonitor(config)
+    retraining_service = RetrainingService(config, registry, monitor, storage)
+except Exception as exc:  # pragma: no cover - defensive fallback for optional deps
+    logger.warning("Failed to initialize advanced MLOps services: %s", exc)
+    registry = None
+    exporter = None
+    ab_testing = None
+    storage = None
+    monitor = None
+    retraining_service = None
 
 
 # ============================================================================
