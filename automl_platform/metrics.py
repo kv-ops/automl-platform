@@ -13,7 +13,10 @@ from sklearn.metrics import (
 )
 from scipy import stats
 import matplotlib.pyplot as plt
-import seaborn as sns
+try:
+    import seaborn as sns
+except ImportError:  # pragma: no cover - optional dependency
+    sns = None
 from io import BytesIO
 import base64
 import logging
@@ -474,19 +477,42 @@ def plot_confusion_matrices_comparison(
         Base64 encoded plot
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
-    # Model A
-    sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=ax1, cbar_kws={'label': 'Count'})
-    ax1.set_title(f'{model_names[0]} - Confusion Matrix')
-    ax1.set_ylabel('True Label')
-    ax1.set_xlabel('Predicted Label')
-    
-    # Model B
-    sns.heatmap(cm_b, annot=True, fmt='d', cmap='Greens', ax=ax2, cbar_kws={'label': 'Count'})
-    ax2.set_title(f'{model_names[1]} - Confusion Matrix')
-    ax2.set_ylabel('True Label')
-    ax2.set_xlabel('Predicted Label')
-    
+
+    if sns is None:
+        logger.warning(
+            "Seaborn is not installed; using matplotlib heatmaps for confusion matrices."
+        )
+
+        im_a = ax1.imshow(cm_a, cmap='Blues')
+        ax1.set_title(f'{model_names[0]} - Confusion Matrix')
+        ax1.set_ylabel('True Label')
+        ax1.set_xlabel('Predicted Label')
+
+        im_b = ax2.imshow(cm_b, cmap='Greens')
+        ax2.set_title(f'{model_names[1]} - Confusion Matrix')
+        ax2.set_ylabel('True Label')
+        ax2.set_xlabel('Predicted Label')
+
+        for ax, cm in ((ax1, cm_a), (ax2, cm_b)):
+            for i in range(cm.shape[0]):
+                for j in range(cm.shape[1]):
+                    ax.text(j, i, f"{cm[i, j]}", ha='center', va='center', color='black')
+
+        fig.colorbar(im_a, ax=ax1, fraction=0.046, pad=0.04)
+        fig.colorbar(im_b, ax=ax2, fraction=0.046, pad=0.04)
+    else:
+        # Model A
+        sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=ax1, cbar_kws={'label': 'Count'})
+        ax1.set_title(f'{model_names[0]} - Confusion Matrix')
+        ax1.set_ylabel('True Label')
+        ax1.set_xlabel('Predicted Label')
+
+        # Model B
+        sns.heatmap(cm_b, annot=True, fmt='d', cmap='Greens', ax=ax2, cbar_kws={'label': 'Count'})
+        ax2.set_title(f'{model_names[1]} - Confusion Matrix')
+        ax2.set_ylabel('True Label')
+        ax2.set_xlabel('Predicted Label')
+
     plt.tight_layout()
     
     # Convert to base64
