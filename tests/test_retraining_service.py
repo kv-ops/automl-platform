@@ -20,6 +20,7 @@ from automl_platform.retraining_service import (
     RetrainingConfig,
     RetrainingService
 )
+from automl_platform.mlflow_registry import ModelStage
 
 
 class TestRetrainingConfig:
@@ -193,11 +194,46 @@ class TestRetrainingService:
         retraining_service.registry.get_model_history = Mock(return_value=[
             {'created_at': recent_date}
         ])
-        
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
         assert should_retrain is False
         assert reason == "No retraining needed"
+
+    @pytest.mark.asyncio
+    async def test_retrain_model_promotes_with_valid_stage(self):
+        """Retraining should promote using a valid ModelStage enum"""
+        config = Mock()
+        registry = Mock()
+        monitor = Mock()
+        storage = Mock()
+
+        service = RetrainingService(config, registry, monitor, storage)
+        service._validate_model = AsyncMock(return_value=True)
+        service._send_notification = AsyncMock()
+
+        registry.client = None
+
+        mock_version = Mock()
+        mock_version.version = 1
+        registry.register_model = Mock(return_value=mock_version)
+        registry.promote_model = Mock(return_value=True)
+
+        leaderboard = pd.DataFrame([{'accuracy': 0.9}])
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.fit.return_value = None
+        mock_orchestrator.best_pipeline = Mock()
+        mock_orchestrator.get_leaderboard.return_value = leaderboard
+
+        X_train = pd.DataFrame(np.random.randn(20, 3), columns=['a', 'b', 'c'])
+        y_train = pd.Series(np.random.randint(0, 2, size=20))
+
+        with patch('automl_platform.orchestrator.AutoMLOrchestrator', return_value=mock_orchestrator):
+            result = await service.retrain_model('test_model', X_train, y_train, 'automated test')
+
+        registry.promote_model.assert_called_once_with('test_model', mock_version.version, ModelStage.STAGING)
+        assert result['status'] == 'success'
     
     def test_should_retrain_no_production_model(self, retraining_service):
         """Test when no production model exists"""
