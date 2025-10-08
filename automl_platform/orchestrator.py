@@ -18,6 +18,7 @@ import joblib
 import logging
 import uuid
 from datetime import datetime
+import hashlib
 
 from .data_prep import DataPreprocessor, handle_imbalance, validate_data
 from .model_selection import (
@@ -105,10 +106,40 @@ class AutoMLOrchestrator:
         # Training metadata
         self.training_id = str(uuid.uuid4())
         self.training_metadata = {}
-        
+
         logger.info(f"Orchestrator initialized with training ID: {self.training_id}")
-    
-    def fit(self, X: pd.DataFrame, y: pd.Series, 
+
+    def _generate_cache_key(self, X: pd.DataFrame, task: Optional[str]) -> str:
+        """Generate a stable cache key based on config and data metadata."""
+
+        config_str = json.dumps(self.config.to_dict(), sort_keys=True)
+
+        if isinstance(X, pd.DataFrame):
+            data_metadata = {
+                "shape": X.shape,
+                "columns": list(X.columns),
+                "dtypes": [str(dtype) for dtype in X.dtypes],
+            }
+        elif isinstance(X, np.ndarray):
+            data_metadata = {
+                "shape": X.shape,
+                "dtype": str(X.dtype),
+            }
+        else:
+            data_metadata = {
+                "shape": getattr(X, "shape", None),
+                "type": type(X).__name__,
+            }
+
+        data_signature = json.dumps(data_metadata, sort_keys=True)
+
+        hasher = hashlib.sha256()
+        hasher.update(config_str.encode("utf-8"))
+        hasher.update(data_signature.encode("utf-8"))
+        hasher.update(str(task).encode("utf-8"))
+        return f"automl_{hasher.hexdigest()}"
+
+    def fit(self, X: pd.DataFrame, y: pd.Series,
             task: Optional[str] = None,
             use_cache: bool = True,
             use_distributed: bool = None,
@@ -139,9 +170,8 @@ class AutoMLOrchestrator:
         cache_key = None
         if use_cache and self.pipeline_cache:
             # Create a hash of the config and data shape
-            config_str = json.dumps(self.config.to_dict(), sort_keys=True)
-            cache_key = f"automl_{hash(config_str)}_{X.shape}_{task}"
-            
+            cache_key = self._generate_cache_key(X, task)
+
             # Try to get from cache
             cached_pipeline = self.pipeline_cache.get_pipeline(cache_key, X)
             if cached_pipeline:
