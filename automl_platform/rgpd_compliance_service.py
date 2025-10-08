@@ -139,17 +139,29 @@ class RGPDRequest:
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    
+
     # Legal basis
     legal_basis: Optional[str] = None
     retention_override: Optional[bool] = None
-    
+
     def __post_init__(self):
         # Ensure type and request_type are consistent
         if self.request_type and not self.type:
             self.type = self.request_type
         elif self.type and not self.request_type:
             self.request_type = self.type
+
+        # Ensure metadata is always a dictionary
+        if self.metadata is None:
+            self.metadata = {}
+
+    @property
+    def metadata_json(self) -> Dict[str, Any]:  # Backward compatibility alias
+        return self.metadata
+
+    @metadata_json.setter
+    def metadata_json(self, value: Optional[Dict[str, Any]]) -> None:
+        self.metadata = value or {}
 
 @dataclass
 class ConsentRecord:
@@ -185,7 +197,7 @@ class ConsentRecord:
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def __post_init__(self):
         # Handle type/consent_type compatibility
         if self.type and not self.consent_type:
@@ -195,6 +207,17 @@ class ConsentRecord:
                 self.type = ConsentType(self.consent_type)
             except:
                 self.type = ConsentType.MARKETING  # Default
+
+        if self.metadata is None:
+            self.metadata = {}
+
+    @property
+    def metadata_json(self) -> Dict[str, Any]:  # Backward compatibility alias
+        return self.metadata
+
+    @metadata_json.setter
+    def metadata_json(self, value: Optional[Dict[str, Any]]) -> None:
+        self.metadata = value or {}
 
 # SQLAlchemy models (if available)
 if SQLALCHEMY_AVAILABLE:
@@ -505,9 +528,24 @@ class RGPDComplianceService:
         self._request_counter = 0
         self._consent_counter = 0
         self.cache: Dict[str, Any] = {}
-        
+
         logger.info("RGPD Compliance Service initialized")
-    
+
+    def _extract_metadata(self, obj: Any) -> Dict[str, Any]:
+        """Safely extract metadata dictionary from different object types."""
+        if obj is None:
+            return {}
+
+        metadata = getattr(obj, 'metadata', None)
+        if isinstance(metadata, dict):
+            return metadata
+
+        legacy_metadata = getattr(obj, 'metadata_json', None)
+        if isinstance(legacy_metadata, dict):
+            return legacy_metadata
+
+        return {}
+
     # ==================== REQUEST MANAGEMENT ====================
     
     def create_request(self, user_id: str, request_data: Dict) -> Optional[int]:
@@ -536,7 +574,7 @@ class RGPDComplianceService:
             status=RGPDRequestStatus.PENDING,
             details=request_data.get('details', ''),
             reason=request_data.get('reason'),
-            metadata_json=request_data,
+            metadata=request_data,
             tenant_id=request_data.get('tenant_id')
         )
         
@@ -548,7 +586,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='rgpd_request_created',
             user_id=user_id,
-            metadata_json=request_data,
+            metadata=request_data,
         )
         
         # Simulate database insertion
@@ -571,13 +609,13 @@ class RGPDComplianceService:
                 user_id=f"user{request_id}",
                 type=RGPDRequestType.ACCESS,
                 status=RGPDRequestStatus.PENDING,
-                metadata_json={'identity_verified': True}
+                metadata={'identity_verified': True}
             )
             self.requests[request_id] = request
             self.db.mock_requests[request_id] = request
         
         # Check identity verification
-        metadata = request.metadata_json or {}
+        metadata = self._extract_metadata(request)
         if not metadata.get('identity_verified', True):
             request.status = RGPDRequestStatus.REJECTED
             request.response = "Identity not verified"
@@ -618,7 +656,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='rgpd_request_processed',
             user_id=request.user_id,
-            metadata_json={'request_id': request_id, 'type': str(request_type)}
+            metadata={'request_id': request_id, 'type': str(request_type)}
         )
         
         self.db.commit()
@@ -716,7 +754,7 @@ class RGPDComplianceService:
             status=status,
             granted=status == ConsentStatus.GRANTED,
             details=consent_data.get('details', ''),
-            metadata_json=consent_data
+            metadata=consent_data
         )
         
         if consent.status == ConsentStatus.GRANTED:
@@ -728,7 +766,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='consent_created',
             user_id=user_id,
-            metadata_json=consent_data
+            metadata=consent_data
         )
         
         result = self.db.execute("INSERT", consent_data)
@@ -759,7 +797,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='consent_updated',
             user_id=consent.user_id,
-            metadata_json={'old_status': str(old_status), 'new_status': str(new_status)}
+            metadata={'old_status': str(old_status), 'new_status': str(new_status)}
         )
         
         self.db.commit()
@@ -828,7 +866,7 @@ class RGPDComplianceService:
         if old_data:
             self.audit_service.log_event(
                 event_type='data_retention_check',
-                metadata_json={'records_processed': len(old_data)}
+                metadata={'records_processed': len(old_data)}
             )
         
         return True
@@ -841,7 +879,7 @@ class RGPDComplianceService:
         self.audit_service.log_event(
             event_type='user_notified',
             user_id=user_id,
-            metadata_json={'notification_type': notification_type, 'data': data}
+            metadata={'notification_type': notification_type, 'data': data}
         )
         
         return True
