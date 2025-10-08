@@ -1194,7 +1194,9 @@ class DataRobotStyleQualityMonitor:
             # pandas doesn't misalign during correlation when the dataframe has a
             # custom index (e.g. filtered views or domain identifiers).
             encoded_target = pd.factorize(target_series)[0]
-            target_numeric = pd.Series(encoded_target, index=df.index)
+            target_numeric = pd.Series(encoded_target, index=df.index, dtype=float)
+            if target_series.isna().any():
+                target_numeric = target_numeric.mask(target_series.isna())
 
         # Check for perfect correlation
         for col in df.columns:
