@@ -173,6 +173,21 @@ class BillingConfig:
             "api_rate_limit": 60,
             "data_retention_days": 14
         },
+        "starter": {
+            "max_datasets": 25,
+            "max_dataset_size_mb": 250,
+            "max_models": 10,
+            "max_concurrent_jobs": 3,
+            "max_predictions_per_day": 5000,
+            "max_workers": 3,
+            "llm_enabled": True,
+            "llm_calls_per_month": 250,
+            "agent_first_enabled": True,
+            "agent_calls_per_month": 150,
+            "gpu_enabled": False,
+            "api_rate_limit": 250,
+            "data_retention_days": 30
+        },
         "pro": {
             "max_datasets": 100,
             "max_dataset_size_mb": 1000,
@@ -187,6 +202,21 @@ class BillingConfig:
             "gpu_enabled": False,
             "api_rate_limit": 100,
             "data_retention_days": 90
+        },
+        "professional": {
+            "max_datasets": 250,
+            "max_dataset_size_mb": 2500,
+            "max_models": 50,
+            "max_concurrent_jobs": 10,
+            "max_predictions_per_day": 50000,
+            "max_workers": 8,
+            "llm_enabled": True,
+            "llm_calls_per_month": 5000,
+            "agent_first_enabled": True,
+            "agent_calls_per_month": 2500,
+            "gpu_enabled": True,
+            "api_rate_limit": 500,
+            "data_retention_days": 180
         },
         "enterprise": {
             "max_datasets": -1,  # unlimited
@@ -209,7 +239,9 @@ class BillingConfig:
     pricing: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "free": {"monthly": 0, "yearly": 0},
         "trial": {"monthly": 0, "yearly": 0},
+        "starter": {"monthly": 49, "yearly": 490},
         "pro": {"monthly": 99, "yearly": 990},
+        "professional": {"monthly": 299, "yearly": 2990},
         "enterprise": {"monthly": 999, "yearly": 9990}
     })
     
