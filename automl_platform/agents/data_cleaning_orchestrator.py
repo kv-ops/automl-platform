@@ -34,12 +34,20 @@ from .intelligent_context_detector import IntelligentContextDetector
 from .intelligent_config_generator import IntelligentConfigGenerator
 from .adaptive_template_system import AdaptiveTemplateSystem
 
-# Import from enhanced version for GS1 compliance and retail recommendations
+# Import from enhanced version for GS1 compliance and retail recommendations.
+# ``automl_platform.agents`` can be imported either as ``automl_platform.agents``
+# or through the legacy top-level alias ``agents`` that some integrations rely
+# on.  Relative imports (``..data_quality_agent``) break when the module is
+# loaded via the latter alias because Python considers ``agents`` a top-level
+# package and refuses to traverse beyond it.  Using explicit absolute imports
+# keeps the orchestrator compatible with both import styles.
 try:
-    from ..data_quality_agent_enhanced import IntelligentDataQualityAgent
+    from automl_platform.data_quality_agent_enhanced import (
+        IntelligentDataQualityAgent,
+    )
 except ImportError:
     # Fallback to open-source implementation when enhanced module isn't bundled
-    from ..data_quality_agent import IntelligentDataQualityAgent
+    from automl_platform.data_quality_agent import IntelligentDataQualityAgent
 
 from .utils import (
     async_retry,
@@ -49,7 +57,7 @@ from .utils import (
     parse_llm_json
 )
 
-from ..risk import RiskLevel
+from automl_platform.risk import RiskLevel
 
 logger = logging.getLogger(__name__)
 
