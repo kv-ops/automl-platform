@@ -1167,16 +1167,28 @@ class AutoMLConfig:
                 agent_first_overridden_by_env = True
 
             # Handle nested configurations
-            nested_configs = [
-                'storage', 'monitoring', 'worker', 'llm', 'api', 'billing',
-                'rgpd', 'connectors', 'streaming', 'feature_store', 'agent_first'
-            ]
+            nested_config_classes = {
+                'storage': StorageConfig,
+                'monitoring': MonitoringConfig,
+                'worker': WorkerConfig,
+                'llm': LLMConfig,
+                'api': APIConfig,
+                'billing': BillingConfig,
+                'rgpd': RGPDConfig,
+                'connectors': ConnectorConfig,
+                'streaming': StreamingConfig,
+                'feature_store': FeatureStoreConfig,
+                'agent_first': AgentFirstConfig,
+            }
 
-            for config_name in nested_configs:
+            for config_name, config_class in nested_config_classes.items():
                 if config_name in config_dict and isinstance(config_dict[config_name], dict):
-                    config_class = globals().get(f"{config_name.replace('_', ' ').title().replace(' ', '')}Config")
-                    if config_class:
+                    try:
                         config_dict[config_name] = config_class(**config_dict[config_name])
+                    except Exception as exc:
+                        raise ValueError(
+                            f"Failed to load nested configuration '{config_name}' using {config_class.__name__}: {exc}"
+                        ) from exc
 
             # Propagate Agent-First enablement when nested flag is provided
             agent_first_cfg = config_dict.get('agent_first')

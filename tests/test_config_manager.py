@@ -7,6 +7,7 @@ Comprehensive tests for the configuration management system.
 import pytest
 import os
 import yaml
+from dataclasses import is_dataclass
 import json
 import tempfile
 from unittest.mock import Mock, patch, MagicMock
@@ -23,7 +24,8 @@ from automl_platform.config import (
     APIConfig,
     RGPDConfig,
     StreamingConfig,
-    PlanType
+    PlanType,
+    load_config
 )
 
 
@@ -170,6 +172,40 @@ class TestConfigManager:
 
         assert config.enable_agent_first is False
         assert "AUTOML_AGENT_FIRST environment variable overrides nested" in caplog.text
+
+    def test_load_config_builds_dataclasses_for_nested_sections(self, tmp_path):
+        """load_config should convert nested dictionaries into dataclass instances."""
+        config_path = tmp_path / "config.yaml"
+        config_payload = {
+            'api': {
+                'enable_auth': False,
+                'port': 9001,
+            },
+            'llm': {
+                'model_name': 'gpt-3.5-turbo',
+                'enable_agent_first': False,
+            },
+            'rgpd': {
+                'enabled': False,
+            },
+            'connectors': {
+                'default_connector': 'bigquery',
+            },
+        }
+
+        with config_path.open('w') as handle:
+            yaml.safe_dump(config_payload, handle)
+
+        config = load_config(filepath=str(config_path))
+
+        assert is_dataclass(config.api)
+        assert config.api.enable_auth is False
+        assert is_dataclass(config.llm)
+        assert config.llm.model_name == 'gpt-3.5-turbo'
+        assert is_dataclass(config.rgpd)
+        assert config.rgpd.enabled is False
+        assert is_dataclass(config.connectors)
+        assert config.connectors.default_connector == 'bigquery'
 
     def test_get_hybrid_mode_flag_prefers_nested(self):
         """AutoMLConfig should expose helper resolving hybrid mode from nested config."""
