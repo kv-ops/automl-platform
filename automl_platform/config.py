@@ -1108,7 +1108,11 @@ class AutoMLConfig:
                 plan_value = str(plan_value).lower()
 
                 assert plan_value in allowed_plan_types, f"Invalid plan type: {self.billing.plan_type}"
-            
+
+                # Persist the normalized plan type for downstream lookups that expect
+                # lower-case string keys (e.g. quota resolution).
+                self.billing.plan_type = plan_value
+                
             # Validate RGPD config
             if self.rgpd.enabled:
                 assert self.rgpd.request_processing_days <= 30, "GDPR requires processing within 30 days"
