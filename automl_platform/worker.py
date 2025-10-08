@@ -135,8 +135,14 @@ storage_manager = StorageManager(
 monitoring_service = MonitoringService(storage_manager) if config.monitoring.enabled else None
 
 # Initialize infrastructure and billing
-tenant_manager = TenantManager(db_url=config.database.url)
-security_manager = SecurityManager(secret_key=config.security.secret_key)
+database_cfg = getattr(config, 'database', None)
+security_cfg = getattr(config, 'security', None)
+
+primary_db_url = getattr(database_cfg, 'url', None) or getattr(config, 'database_url', 'sqlite:///automl.db')
+tenant_manager = TenantManager(db_url=primary_db_url)
+
+secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', 'default-secret')
+security_manager = SecurityManager(secret_key=secret_key)
 billing_manager = BillingManager(tenant_manager=tenant_manager)
 usage_tracker = UsageTracker(billing_manager=billing_manager)
 

@@ -195,6 +195,13 @@ class TestConfigManager:
         """load_config should convert nested dictionaries into dataclass instances."""
         config_path = tmp_path / "config.yaml"
         config_payload = {
+            'database': {
+                'url': 'sqlite:///tmp.db',
+                'audit_url': 'postgresql://user:pass@localhost/audit_test'
+            },
+            'security': {
+                'secret_key': 'unit-test-secret'
+            },
             'api': {
                 'enable_auth': False,
                 'port': 9001,
@@ -216,6 +223,11 @@ class TestConfigManager:
 
         config = load_config(filepath=str(config_path))
 
+        assert is_dataclass(config.database)
+        assert config.database.url == 'sqlite:///tmp.db'
+        assert config.database.audit_url == 'postgresql://user:pass@localhost/audit_test'
+        assert is_dataclass(config.security)
+        assert config.security.secret_key == 'unit-test-secret'
         assert is_dataclass(config.api)
         assert config.api.enable_auth is False
         assert is_dataclass(config.llm)

@@ -266,8 +266,14 @@ async def lifespan(app: FastAPI):
     app.state.monitoring = MonitoringService(app.state.storage) if config.monitoring.enabled else None
     
     # Initialize infrastructure components
-    app.state.tenant_manager = TenantManager(db_url=getattr(config, 'database_url', 'sqlite:///automl.db'))
-    app.state.security_manager = SecurityManager(secret_key=getattr(config, 'secret_key', 'default-secret'))
+    database_cfg = getattr(config, 'database', None)
+    security_cfg = getattr(config, 'security', None)
+
+    primary_db_url = getattr(database_cfg, 'url', None) or getattr(config, 'database_url', 'sqlite:///automl.db')
+    app.state.tenant_manager = TenantManager(db_url=primary_db_url)
+
+    secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', 'default-secret')
+    app.state.security_manager = SecurityManager(secret_key=secret_key)
     app.state.billing_manager = BillingManager()
     app.state.usage_tracker = UsageTracker()
     
@@ -303,19 +309,33 @@ async def lifespan(app: FastAPI):
     
     # Initialize Advanced Audit Service
     logger.info("Initializing Advanced Audit Service...")
+    audit_db_url = (
+        getattr(database_cfg, 'audit_url', None)
+        or getattr(config, 'audit_database_url', None)
+        or primary_db_url
+        or 'postgresql://user:pass@localhost/audit'
+    )
+    audit_encryption_key = getattr(security_cfg, 'audit_encryption_key', None) or getattr(config, 'audit_encryption_key', None)
     app.state.audit_service = AuditService(
-        database_url=getattr(config, 'audit_database_url', None) or getattr(config, 'database_url', 'postgresql://user:pass@localhost/audit'),
+        database_url=audit_db_url,
         redis_client=app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None,
-        encryption_key=getattr(config, 'audit_encryption_key', None)
+        encryption_key=audit_encryption_key
     )
     
     # Initialize RGPD Compliance Service
     logger.info("Initializing RGPD Compliance Service...")
+    rgpd_db_url = (
+        getattr(database_cfg, 'rgpd_url', None)
+        or getattr(config, 'rgpd_database_url', None)
+        or primary_db_url
+        or 'postgresql://user:pass@localhost/rgpd'
+    )
+    rgpd_encryption_key = getattr(security_cfg, 'rgpd_encryption_key', None) or getattr(config, 'rgpd_encryption_key', None)
     app.state.rgpd_service = RGPDComplianceService(
-        database_url=getattr(config, 'rgpd_database_url', None) or getattr(config, 'database_url', 'postgresql://user:pass@localhost/rgpd'),
+        database_url=rgpd_db_url,
         redis_client=app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None,
         audit_service=app.state.audit_service,
-        encryption_key=getattr(config, 'rgpd_encryption_key', None)
+        encryption_key=rgpd_encryption_key
     )
     
     # Initialize LLM assistant if configured

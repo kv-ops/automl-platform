@@ -48,6 +48,34 @@ class PlanType(Enum):
 
 
 @dataclass
+class DatabaseConfig:
+    """Database configuration for core, audit and compliance services."""
+
+    url: str = os.getenv("AUTOML_DATABASE_URL", "sqlite:///automl.db")
+    """Primary application database URL."""
+
+    audit_url: Optional[str] = os.getenv("AUTOML_AUDIT_DATABASE_URL")
+    """Optional database URL dedicated to the audit service."""
+
+    rgpd_url: Optional[str] = os.getenv("AUTOML_RGPD_DATABASE_URL")
+    """Optional database URL dedicated to RGPD compliance storage."""
+
+
+@dataclass
+class SecurityConfig:
+    """Security-related secrets used across the platform."""
+
+    secret_key: str = os.getenv("AUTOML_SECRET_KEY", "change-this-secret-key-in-production")
+    """Main application secret key."""
+
+    audit_encryption_key: Optional[str] = os.getenv("AUTOML_AUDIT_ENCRYPTION_KEY")
+    """Optional encryption key for the audit service."""
+
+    rgpd_encryption_key: Optional[str] = os.getenv("AUTOML_RGPD_ENCRYPTION_KEY")
+    """Optional encryption key for the RGPD compliance service."""
+
+
+@dataclass
 class AgentFirstConfig:
     """Configuration for Agent-First approach with intelligent agents"""
     enabled: bool = True
@@ -838,6 +866,8 @@ class AutoMLConfig:
     """Enhanced AutoML configuration with all components including Expert Mode and Agent-First."""
     
     # Component configurations
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
@@ -849,13 +879,62 @@ class AutoMLConfig:
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     feature_store: FeatureStoreConfig = field(default_factory=FeatureStoreConfig)
     agent_first: AgentFirstConfig = field(default_factory=AgentFirstConfig)  # NEW
-    
+
     # General settings
     environment: str = "development"  # "development", "staging", "production"
     debug: bool = True
     random_state: int = 42
     n_jobs: int = -1
     verbose: int = 1
+
+    def __post_init__(self) -> None:
+        """Ensure backward compatibility attributes remain available."""
+        if self.database is None:
+            self.database = DatabaseConfig()
+        if self.security is None:
+            self.security = SecurityConfig()
+
+        default_database = DatabaseConfig()
+        default_security = SecurityConfig()
+
+        legacy_database_url = getattr(self, 'database_url', None)
+        if legacy_database_url:
+            if self.database.url == default_database.url and legacy_database_url != self.database.url:
+                logger.warning(
+                    "Attribute 'database_url' is deprecated and will be removed in a future release; "
+                    "updating the nested DatabaseConfig.url from its value. Please migrate to config.database.url."
+                )
+                self.database.url = legacy_database_url
+            elif legacy_database_url != self.database.url:
+                logger.warning(
+                    "Conflicting database configuration detected between flat 'database_url' and nested database.url. "
+                    "Using the nested value '%s'.", self.database.url
+                )
+        setattr(self, 'database_url', self.database.url)
+
+        legacy_secret_key = getattr(self, 'secret_key', None)
+        if legacy_secret_key:
+            if self.security.secret_key == default_security.secret_key and legacy_secret_key != self.security.secret_key:
+                logger.warning(
+                    "Attribute 'secret_key' is deprecated and will be removed in a future release; "
+                    "updating the nested SecurityConfig.secret_key from its value. Please migrate to config.security.secret_key."
+                )
+                self.security.secret_key = legacy_secret_key
+            elif legacy_secret_key != self.security.secret_key:
+                logger.warning(
+                    "Conflicting security configuration detected between flat 'secret_key' and nested security.secret_key. "
+                    "Using the nested value."
+                )
+        setattr(self, 'secret_key', self.security.secret_key)
+
+        if not hasattr(self, 'audit_database_url') or getattr(self, 'audit_database_url', None) is None:
+            setattr(self, 'audit_database_url', self.database.audit_url)
+        if not hasattr(self, 'rgpd_database_url') or getattr(self, 'rgpd_database_url', None) is None:
+            setattr(self, 'rgpd_database_url', self.database.rgpd_url)
+        if not hasattr(self, 'audit_encryption_key') or getattr(self, 'audit_encryption_key', None) is None:
+            setattr(self, 'audit_encryption_key', self.security.audit_encryption_key)
+        if not hasattr(self, 'rgpd_encryption_key') or getattr(self, 'rgpd_encryption_key', None) is None:
+            setattr(self, 'rgpd_encryption_key', self.security.rgpd_encryption_key)
     
     # EXPERT MODE CONFIGURATION
     expert_mode: bool = field(default=False)
@@ -1187,6 +1266,39 @@ class AutoMLConfig:
             original_enable_hybrid_mode = config_dict.get('enable_hybrid_mode')
             hybrid_flag_defined = 'enable_hybrid_mode' in config_dict
             agent_first_overridden_by_env = False
+
+            legacy_database_url = config_dict.pop('database_url', None)
+            legacy_secret_key = config_dict.pop('secret_key', None)
+
+            if legacy_database_url is not None:
+                if 'database' in config_dict:
+                    logger.warning(
+                        "Detected legacy 'database_url' alongside nested 'database' configuration; "
+                        "ignoring the flat key in favour of the nested section. Please migrate your "
+                        "configuration to use only the nested structure."
+                    )
+                else:
+                    logger.warning(
+                        "Detected legacy 'database_url' configuration. This key is deprecated; "
+                        "automatically mapping it to database.url. Please update your YAML to use the "
+                        "nested 'database' block."
+                    )
+                    config_dict['database'] = {'url': legacy_database_url}
+
+            if legacy_secret_key is not None:
+                if 'security' in config_dict:
+                    logger.warning(
+                        "Detected legacy 'secret_key' alongside nested 'security' configuration; "
+                        "ignoring the flat key in favour of the nested section. Please migrate your "
+                        "configuration to use only the nested structure."
+                    )
+                else:
+                    logger.warning(
+                        "Detected legacy 'secret_key' configuration. This key is deprecated; "
+                        "automatically mapping it to security.secret_key. Please update your YAML to "
+                        "use the nested 'security' block."
+                    )
+                    config_dict['security'] = {'secret_key': legacy_secret_key}
             # Check for expert mode in environment variable first
             expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
             if expert_mode_env in ["true", "1", "yes", "on"]:
@@ -1206,6 +1318,8 @@ class AutoMLConfig:
 
             # Handle nested configurations
             nested_config_classes = {
+                'database': DatabaseConfig,
+                'security': SecurityConfig,
                 'storage': StorageConfig,
                 'monitoring': MonitoringConfig,
                 'worker': WorkerConfig,
@@ -1227,6 +1341,15 @@ class AutoMLConfig:
                         raise ValueError(
                             f"Failed to load nested configuration '{config_name}' using {config_class.__name__}: {exc}"
                         ) from exc
+
+            # Ensure critical nested configs are always present even if omitted in YAML
+            for required_name, config_class in (
+                ('database', DatabaseConfig),
+                ('security', SecurityConfig),
+            ):
+                section_value = config_dict.get(required_name)
+                if section_value is None:
+                    config_dict[required_name] = config_class()
 
             # Propagate Agent-First enablement when nested flag is provided
             agent_first_cfg = config_dict.get('agent_first')
@@ -1309,6 +1432,8 @@ class AutoMLConfig:
             assert 0 <= self.max_missing_ratio <= 1, "max_missing_ratio must be between 0 and 1"
             assert self.cv_folds > 1, "cv_folds must be greater than 1"
             assert self.hpo_n_iter > 0, "hpo_n_iter must be positive"
+            assert self.database.url, "database.url must be defined"
+            assert self.security.secret_key, "security.secret_key must be defined"
             
             # Validate storage config
             assert self.storage.backend in ["local", "minio", "s3", "gcs"], f"Invalid storage backend: {self.storage.backend}"
