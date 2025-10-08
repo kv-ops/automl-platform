@@ -71,7 +71,7 @@ class RetrainingConfig:
 
 class RetrainingService:
     """Automated model retraining based on drift and performance"""
-    
+
     def __init__(self, config, registry, monitor, storage_service):
         self.config = config
         self.registry = registry
@@ -84,10 +84,46 @@ class RetrainingService:
         self.last_check = datetime.utcnow()
         
         logger.info("Retraining service initialized")
-    
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> Optional[datetime]:
+        """Safely parse timestamp values from various formats."""
+
+        if value in (None, ""):
+            return None
+
+        # Handle numeric timestamps (seconds or milliseconds since epoch)
+        try:
+            if isinstance(value, (int, float)):
+                timestamp = float(value)
+                if timestamp > 1e12:  # Likely in milliseconds
+                    timestamp /= 1000.0
+                return datetime.fromtimestamp(timestamp)
+
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    return None
+
+                # Try ISO format first
+                try:
+                    return datetime.fromisoformat(value)
+                except ValueError:
+                    pass
+
+                # Fall back to numeric parsing
+                timestamp = float(value)
+                if timestamp > 1e12:
+                    timestamp /= 1000.0
+                return datetime.fromtimestamp(timestamp)
+        except (ValueError, TypeError, OSError, OverflowError):
+            return None
+
+        return None
+
     def should_retrain(self, model_name: str) -> Tuple[bool, str, Dict]:
         """Check if model should be retrained with detailed reasoning"""
-        
+
         reasons = []
         metrics = {}
         
@@ -131,12 +167,18 @@ class RetrainingService:
         # Check time since last training
         model_history = self.registry.get_model_history(model_name, limit=1)
         if model_history:
-            last_training = datetime.fromisoformat(model_history[0].get('created_at', ''))
-            days_since_training = (datetime.utcnow() - last_training).days
-            metrics['days_since_training'] = days_since_training
-            
-            if days_since_training > 30:  # Retrain monthly at minimum
-                reasons.append(f"Model is {days_since_training} days old")
+            history_entry = model_history[0]
+            last_training = None
+            for field in ('created_at', 'creation_timestamp', 'creation_time'):
+                last_training = self._parse_timestamp(history_entry.get(field))
+                if last_training:
+                    break
+            if last_training:
+                days_since_training = (datetime.utcnow() - last_training).days
+                metrics['days_since_training'] = days_since_training
+
+                if days_since_training > 30:  # Retrain monthly at minimum
+                    reasons.append(f"Model is {days_since_training} days old")
         
         should_retrain = len(reasons) > 0
         reason_text = "; ".join(reasons) if reasons else "No retraining needed"

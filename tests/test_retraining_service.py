@@ -170,9 +170,31 @@ class TestRetrainingService:
         retraining_service.registry.get_model_history = Mock(return_value=[
             {'created_at': old_date}
         ])
-        
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
+        assert should_retrain is True
+        assert 'days old' in reason
+        assert metrics['days_since_training'] >= 30
+
+    def test_should_handle_integer_timestamps(self, retraining_service):
+        """Ensure integer timestamps from MLflow history are parsed safely."""
+        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
+        retraining_service.monitor.get_drift_score = Mock(return_value=0.3)
+        retraining_service.monitor.get_performance_metrics = Mock(return_value={
+            'baseline_accuracy': 0.9,
+            'current_accuracy': 0.88
+        })
+        retraining_service.monitor.get_new_data_count = Mock(return_value=500)
+
+        old_datetime = datetime.utcnow() - timedelta(days=35)
+        integer_timestamp = int(old_datetime.timestamp() * 1000)  # milliseconds since epoch
+        retraining_service.registry.get_model_history = Mock(return_value=[
+            {'created_at': integer_timestamp}
+        ])
+
+        should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
+
         assert should_retrain is True
         assert 'days old' in reason
         assert metrics['days_since_training'] >= 30
