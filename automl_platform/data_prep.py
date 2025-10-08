@@ -658,32 +658,45 @@ class EnhancedDataPreprocessor:
         dup_cols = df.columns[df.columns.duplicated()].tolist()
         if dup_cols:
             quality_report['issues'].append(f"Duplicate columns: {dup_cols}")
+            quality_report['statistics']['duplicate_columns'] = dup_cols
             quality_report['quality_score'] -= 10
+            quality_report['valid'] = False
         
         # Check missing values
         missing_report = {}
+        all_null_cols = []
         for col in df.columns:
             missing_ratio = df[col].isnull().mean()
             if missing_ratio > 0:
                 missing_report[col] = missing_ratio
-                
+
                 if missing_ratio > self.config.get('max_missing_ratio', 0.5):
                     quality_report['issues'].append(f"Column {col} has {missing_ratio:.2%} missing values")
                     quality_report['quality_score'] -= 5
                 elif missing_ratio > 0.2:
                     quality_report['warnings'].append(f"Column {col} has {missing_ratio:.2%} missing values")
-        
+
+            if df[col].isnull().all():
+                all_null_cols.append(col)
+
+        if all_null_cols:
+            quality_report['issues'].append(f"All null columns: {all_null_cols}")
+            quality_report['statistics']['all_null_columns'] = all_null_cols
+            quality_report['valid'] = False
+
         quality_report['statistics']['missing_values'] = missing_report
-        
+
         # Check for constant columns
         constant_cols = []
         for col in df.columns:
             if df[col].nunique() == 1:
                 constant_cols.append(col)
-        
+
         if constant_cols:
-            quality_report['warnings'].append(f"Constant columns: {constant_cols}")
+            quality_report['issues'].append(f"Single value columns: {constant_cols}")
+            quality_report['statistics']['single_value_columns'] = constant_cols
             quality_report['quality_score'] -= len(constant_cols) * 2
+            quality_report['valid'] = False
         
         # Check for outliers in numeric columns
         outlier_report = {}
