@@ -1110,8 +1110,10 @@ class AutoMLConfig:
         """Load configuration from YAML file with nested configs."""
         with open(filepath, 'r') as f:
             config_dict = yaml.safe_load(f)
-        
+
         if config_dict:
+            original_enable_agent_first = config_dict.get('enable_agent_first')
+            agent_first_overridden_by_env = False
             # Check for expert mode in environment variable first
             expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
             if expert_mode_env in ["true", "1", "yes", "on"]:
@@ -1119,30 +1121,65 @@ class AutoMLConfig:
             elif expert_mode_env in ["false", "0", "no", "off"]:
                 config_dict['expert_mode'] = False
             # Otherwise use value from YAML or default
-            
+
             # Check for Agent-First mode in environment variable
             agent_first_env = os.getenv("AUTOML_AGENT_FIRST", "").lower()
             if agent_first_env in ["true", "1", "yes", "on"]:
                 config_dict['enable_agent_first'] = True
+                agent_first_overridden_by_env = True
             elif agent_first_env in ["false", "0", "no", "off"]:
                 config_dict['enable_agent_first'] = False
-            
+                agent_first_overridden_by_env = True
+
             # Handle nested configurations
             nested_configs = [
-                'storage', 'monitoring', 'worker', 'llm', 'api', 'billing', 
+                'storage', 'monitoring', 'worker', 'llm', 'api', 'billing',
                 'rgpd', 'connectors', 'streaming', 'feature_store', 'agent_first'
             ]
-            
+
             for config_name in nested_configs:
                 if config_name in config_dict and isinstance(config_dict[config_name], dict):
                     config_class = globals().get(f"{config_name.replace('_', ' ').title().replace(' ', '')}Config")
                     if config_class:
                         config_dict[config_name] = config_class(**config_dict[config_name])
-            
+
+            # Propagate Agent-First enablement when nested flag is provided
+            agent_first_cfg = config_dict.get('agent_first')
+            agent_first_enabled = None
+
+            if isinstance(agent_first_cfg, dict):
+                agent_first_enabled = agent_first_cfg.get('enabled')
+            elif hasattr(agent_first_cfg, 'enabled'):
+                agent_first_enabled = getattr(agent_first_cfg, 'enabled')
+
+            if agent_first_enabled is not None:
+                current_enable_agent_first = config_dict.get('enable_agent_first')
+
+                if agent_first_overridden_by_env:
+                    if current_enable_agent_first != agent_first_enabled:
+                        logger.warning(
+                            "AUTOML_AGENT_FIRST environment variable overrides nested agent_first.enabled=%s; "
+                            "keeping enable_agent_first=%s",
+                            agent_first_enabled,
+                            current_enable_agent_first,
+                        )
+                elif current_enable_agent_first is None and 'enable_agent_first' not in config_dict:
+                    config_dict['enable_agent_first'] = agent_first_enabled
+                elif original_enable_agent_first is None:
+                    config_dict['enable_agent_first'] = agent_first_enabled
+                elif original_enable_agent_first != agent_first_enabled:
+                    logger.warning(
+                        "Conflicting Agent-First flags in YAML: enable_agent_first=%s vs agent_first.enabled=%s. "
+                        "Using nested agent_first.enabled.",
+                        original_enable_agent_first,
+                        agent_first_enabled,
+                    )
+                    config_dict['enable_agent_first'] = agent_first_enabled
+
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
                 config_dict['algorithms'] = [config_dict['algorithms']]
-        
+
         return cls(**config_dict) if config_dict else cls()
     
     def to_yaml(self, filepath: str) -> None:

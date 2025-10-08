@@ -56,8 +56,37 @@ class EnhancedDataPreprocessor:
         if isinstance(config, dict):
             self.config = config
             self.enable_intelligent_cleaning = config.get('enable_intelligent_cleaning', False)
-            self.enable_agent_first = config.get('enable_agent_first', False)
+            top_level_agent_first = config.get('enable_agent_first')
+            if isinstance(top_level_agent_first, bool):
+                self.enable_agent_first = top_level_agent_first
+            else:
+                self.enable_agent_first = bool(top_level_agent_first) if top_level_agent_first is not None else False
             self.enable_hybrid_mode = config.get('enable_hybrid_mode', False)  # NEW: Hybrid mode support
+            nested_agent_first = config.get('agent_first') or {}
+            nested_enabled = None
+            if isinstance(nested_agent_first, dict):
+                nested_enabled = nested_agent_first.get('enabled')
+            elif hasattr(nested_agent_first, 'enabled'):
+                nested_enabled = getattr(nested_agent_first, 'enabled')
+            elif hasattr(nested_agent_first, 'get'):
+                nested_enabled = nested_agent_first.get('enabled')
+
+            if isinstance(nested_enabled, bool):
+                if top_level_agent_first is None:
+                    self.enable_agent_first = nested_enabled
+                elif self.enable_agent_first != nested_enabled:
+                    logger.warning(
+                        "Conflicting Agent-First flags in configuration dict: enable_agent_first=%s vs agent_first.enabled=%s. "
+                        "Using nested agent_first.enabled.",
+                        top_level_agent_first,
+                        nested_enabled,
+                    )
+                    self.enable_agent_first = nested_enabled
+            elif nested_enabled:
+                # Backward compatibility for truthy non-bool values
+                if not self.enable_agent_first:
+                    self.enable_agent_first = True
+            self.agent_first_config = nested_agent_first if nested_agent_first else None
         else:  # AutoMLConfig instance
             self.config = config.to_dict() if hasattr(config, 'to_dict') else asdict(config)
             self.enable_intelligent_cleaning = getattr(config, 'enable_intelligent_cleaning', False)
@@ -66,6 +95,18 @@ class EnhancedDataPreprocessor:
             # Get Agent-First config if available
             if hasattr(config, 'agent_first'):
                 self.agent_first_config = config.agent_first
+                nested_enabled = getattr(self.agent_first_config, 'enabled', None)
+                if isinstance(nested_enabled, bool):
+                    if self.enable_agent_first != nested_enabled:
+                        logger.warning(
+                            "Conflicting Agent-First flags on AutoMLConfig: enable_agent_first=%s vs agent_first.enabled=%s. "
+                            "Using nested agent_first.enabled.",
+                            self.enable_agent_first,
+                            nested_enabled,
+                        )
+                    self.enable_agent_first = nested_enabled
+                elif nested_enabled and not self.enable_agent_first:
+                    self.enable_agent_first = True
             else:
                 self.agent_first_config = None
         
