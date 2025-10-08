@@ -879,7 +879,7 @@ class GCSStorage(StorageBackend):
         if bucket is None:
             raise RuntimeError("Datasets bucket is not available for GCS backend")
 
-        data_hash = hashlib.sha256(data.to_csv(index=False).encode()).hexdigest()[:16]
+        data_hash = hashlib.sha256(data.to_csv().encode()).hexdigest()[:16]
         extension_map = {
             "parquet": "parquet",
             "csv": "csv",
