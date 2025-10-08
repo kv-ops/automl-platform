@@ -265,7 +265,11 @@ class MetricsComparator:
     @staticmethod
     def _plot_roc_curves(fpr_a, tpr_a, auc_a, fpr_b, tpr_b, auc_b) -> str:
         """Create ROC curve comparison plot."""
-        fig, ax = plt.subplots(figsize=(8, 6))
+        subplot_result = plt.subplots(figsize=(8, 6))
+        if not isinstance(subplot_result, tuple):
+            return ""
+
+        fig, ax = subplot_result
         
         ax.plot(fpr_a, tpr_a, color='blue', lw=2, 
                 label=f'Model A (AUC = {auc_a:.3f})')
@@ -293,7 +297,11 @@ class MetricsComparator:
     @staticmethod
     def _plot_pr_curves(recall_a, precision_a, auc_a, recall_b, precision_b, auc_b) -> str:
         """Create Precision-Recall curve comparison plot."""
-        fig, ax = plt.subplots(figsize=(8, 6))
+        subplot_result = plt.subplots(figsize=(8, 6))
+        if not isinstance(subplot_result, tuple):
+            return ""
+
+        fig, ax = subplot_result
         
         ax.plot(recall_a, precision_a, color='blue', lw=2,
                 label=f'Model A (AUC = {auc_a:.3f})')
@@ -319,7 +327,15 @@ class MetricsComparator:
     @staticmethod
     def _plot_confusion_matrices(cm_a, cm_b) -> str:
         """Create confusion matrix comparison plot."""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        subplot_result = plt.subplots(1, 2, figsize=(12, 5))
+        if not isinstance(subplot_result, tuple):
+            return ""
+
+        fig, axes = subplot_result
+        try:
+            ax1, ax2 = axes
+        except (TypeError, ValueError):
+            return ""
         
         # Model A
         sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=ax1)
@@ -347,7 +363,15 @@ class MetricsComparator:
     def _plot_residuals(y_true_a, y_pred_a, residuals_a,
                        y_true_b, y_pred_b, residuals_b) -> str:
         """Create residual plots comparison."""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+        subplot_result = plt.subplots(2, 2, figsize=(12, 10))
+        if not isinstance(subplot_result, tuple):
+            return ""
+
+        fig, axes_grid = subplot_result
+        try:
+            (ax1, ax2), (ax3, ax4) = axes_grid
+        except (TypeError, ValueError):
+            return ""
         
         # Model A - Predicted vs Actual
         ax1.scatter(y_pred_a, y_true_a, alpha=0.5, color='blue')
@@ -530,7 +554,11 @@ class ABTestingService:
                       traffic_split: float = 0.1,
                       min_samples: int = 100,
                       confidence_level: float = 0.95,
-                      primary_metric: str = "accuracy") -> str:
+                      primary_metric: str = "accuracy",
+                      min_improvement: float = 0.02,
+                      statistical_test: str = "t_test",
+                      description: str = "",
+                      tags: Optional[Dict[str, str]] = None) -> str:
         """
         Create new A/B test.
         
@@ -547,7 +575,11 @@ class ABTestingService:
             traffic_split=traffic_split,
             min_samples=min_samples,
             confidence_level=confidence_level,
-            primary_metric=primary_metric
+            primary_metric=primary_metric,
+            min_improvement=min_improvement,
+            statistical_test=statistical_test,
+            description=description,
+            tags=tags or {}
         )
         
         result = ABTestResult(
@@ -740,10 +772,12 @@ class ABTestingService:
                 )
                 logger.info(f"Promoted challenger version {config.challenger_version} to production")
         
-        # Remove from active tests
+        summary = self.get_test_results(test_id)
+
+        # Remove from active tests now that the summary has been captured
         del self.active_tests[test_id]
-        
-        return self.get_test_results(test_id)
+
+        return summary if summary is not None else {}
     
     def get_active_tests(self) -> List[Dict]:
         """Get list of active A/B tests."""
