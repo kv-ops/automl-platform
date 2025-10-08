@@ -56,7 +56,34 @@ except Exception as exc:  # pragma: no cover - defensive fallback for optional d
     ab_testing = None
     storage = None
     monitor = None
-    retraining_service = None
+retraining_service = None
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def ensure_services_available() -> None:
+    """Verify that all critical MLOps services are initialized."""
+
+    services = {
+        "registry": registry,
+        "exporter": exporter,
+        "ab_testing": ab_testing,
+        "retraining_service": retraining_service,
+        "storage": storage,
+        "monitor": monitor,
+    }
+
+    missing_services = [name for name, service in services.items() if service is None]
+
+    if missing_services:
+        detail = (
+            "MLOps services unavailable: "
+            + ", ".join(sorted(missing_services))
+            + " not initialized."
+        )
+        raise HTTPException(status_code=503, detail=detail)
 
 
 # ============================================================================
@@ -118,10 +145,20 @@ class PredictionRequest(BaseModel):
 # Model Registry Endpoints
 # ============================================================================
 
-@router.post("/models/register")
+@router.post(
+    "/models/register",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure registry and related"
+            " components are initialized.",
+        }
+    },
+)
 async def register_model(request: ModelRegistrationRequest):
     """Register a new model version in MLflow"""
-    
+
+    ensure_services_available()
+
     try:
         # This would normally load the actual model from storage
         # For demo, we'll create a dummy registration
@@ -148,10 +185,20 @@ async def register_model(request: ModelRegistrationRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/models/promote")
+@router.post(
+    "/models/promote",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure registry and related"
+            " components are initialized.",
+        }
+    },
+)
 async def promote_model(request: ModelPromotionRequest):
     """Promote model to different stage"""
-    
+
+    ensure_services_available()
+
     try:
         # Validate stage
         try:
@@ -177,13 +224,23 @@ async def promote_model(request: ModelPromotionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/models/{model_name}/versions")
+@router.get(
+    "/models/{model_name}/versions",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure registry and related"
+            " components are initialized.",
+        }
+    },
+)
 async def get_model_versions(
     model_name: str,
     limit: int = Query(10, ge=1, le=100)
 ):
     """Get model version history"""
-    
+
+    ensure_services_available()
+
     try:
         history = registry.get_model_history(model_name, limit)
         
@@ -198,14 +255,24 @@ async def get_model_versions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/models/{model_name}/compare")
+@router.get(
+    "/models/{model_name}/compare",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure registry and related"
+            " components are initialized.",
+        }
+    },
+)
 async def compare_model_versions(
     model_name: str,
     version1: int,
     version2: int
 ):
     """Compare two model versions"""
-    
+
+    ensure_services_available()
+
     try:
         comparison = registry.compare_models(model_name, version1, version2)
         
@@ -216,10 +283,20 @@ async def compare_model_versions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/models/{model_name}/rollback")
+@router.post(
+    "/models/{model_name}/rollback",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure registry and related"
+            " components are initialized.",
+        }
+    },
+)
 async def rollback_model(model_name: str, target_version: int):
     """Rollback to previous model version"""
-    
+
+    ensure_services_available()
+
     try:
         success = registry.rollback_model(model_name, target_version)
         
@@ -238,10 +315,20 @@ async def rollback_model(model_name: str, target_version: int):
 # A/B Testing Endpoints
 # ============================================================================
 
-@router.post("/ab-tests/create")
+@router.post(
+    "/ab-tests/create",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure A/B testing components"
+            " are initialized.",
+        }
+    },
+)
 async def create_ab_test(request: ABTestRequest):
     """Create new A/B test"""
-    
+
+    ensure_services_available()
+
     try:
         test_id = ab_testing.create_ab_test(
             model_name=request.model_name,
@@ -265,10 +352,20 @@ async def create_ab_test(request: ABTestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/ab-tests/{test_id}/results")
+@router.get(
+    "/ab-tests/{test_id}/results",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure A/B testing components"
+            " are initialized.",
+        }
+    },
+)
 async def get_ab_test_results(test_id: str):
     """Get A/B test results"""
-    
+
+    ensure_services_available()
+
     try:
         results = ab_testing.get_test_results(test_id)
         
@@ -282,13 +379,23 @@ async def get_ab_test_results(test_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/ab-tests/{test_id}/conclude")
+@router.post(
+    "/ab-tests/{test_id}/conclude",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure A/B testing components"
+            " are initialized.",
+        }
+    },
+)
 async def conclude_ab_test(
     test_id: str,
     promote_winner: bool = Query(False, description="Automatically promote winner")
 ):
     """Conclude A/B test and optionally promote winner"""
-    
+
+    ensure_services_available()
+
     try:
         results = ab_testing.conclude_test(test_id, promote_winner)
         
@@ -302,10 +409,20 @@ async def conclude_ab_test(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/ab-tests/active")
+@router.get(
+    "/ab-tests/active",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure A/B testing components"
+            " are initialized.",
+        }
+    },
+)
 async def get_active_ab_tests():
     """Get list of active A/B tests"""
-    
+
+    ensure_services_available()
+
     try:
         active_tests = ab_testing.get_active_tests()
         
@@ -323,10 +440,20 @@ async def get_active_ab_tests():
 # Model Export Endpoints
 # ============================================================================
 
-@router.post("/models/export")
+@router.post(
+    "/models/export",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure export components are"
+            " initialized.",
+        }
+    },
+)
 async def export_model(request: ExportRequest):
     """Export model to specified format"""
-    
+
+    ensure_services_available()
+
     try:
         # Load model from registry
         # This is simplified - would load actual model
@@ -371,14 +498,24 @@ async def export_model(request: ExportRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/models/export/{model_name}/{version}/download")
+@router.get(
+    "/models/export/{model_name}/{version}/download",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure export components are"
+            " initialized.",
+        }
+    },
+)
 async def download_exported_model(
     model_name: str,
     version: int,
     format: str = Query("onnx", description="Export format")
 ):
     """Download exported model file"""
-    
+
+    ensure_services_available()
+
     try:
         # Build file path
         export_dir = Path(exporter.config.output_dir)
@@ -408,10 +545,20 @@ async def download_exported_model(
 # Automated Retraining Endpoints
 # ============================================================================
 
-@router.post("/retraining/check")
+@router.post(
+    "/retraining/check",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure retraining components"
+            " are initialized.",
+        }
+    },
+)
 async def check_retraining_needed(request: RetrainingCheckRequest):
     """Check if model needs retraining"""
-    
+
+    ensure_services_available()
+
     try:
         should_retrain, reason, metrics = retraining_service.should_retrain(
             request.model_name
@@ -430,13 +577,23 @@ async def check_retraining_needed(request: RetrainingCheckRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/retraining/trigger/{model_name}")
+@router.post(
+    "/retraining/trigger/{model_name}",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure retraining components"
+            " are initialized.",
+        }
+    },
+)
 async def trigger_retraining(
     model_name: str,
     background_tasks: BackgroundTasks
 ):
     """Manually trigger model retraining"""
-    
+
+    ensure_services_available()
+
     try:
         # Add retraining to background tasks
         background_tasks.add_task(
@@ -455,12 +612,22 @@ async def trigger_retraining(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/retraining/history")
+@router.get(
+    "/retraining/history",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure retraining components"
+            " are initialized.",
+        }
+    },
+)
 async def get_retraining_history(
     limit: int = Query(10, ge=1, le=100)
 ):
     """Get retraining history"""
-    
+
+    ensure_services_available()
+
     try:
         history = retraining_service.get_retraining_history(limit)
         
@@ -474,10 +641,20 @@ async def get_retraining_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/retraining/stats")
+@router.get(
+    "/retraining/stats",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure retraining components"
+            " are initialized.",
+        }
+    },
+)
 async def get_retraining_stats():
     """Get retraining statistics"""
-    
+
+    ensure_services_available()
+
     try:
         stats = retraining_service.get_retraining_stats()
         
@@ -488,10 +665,20 @@ async def get_retraining_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/retraining/schedule")
+@router.post(
+    "/retraining/schedule",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure retraining components"
+            " are initialized.",
+        }
+    },
+)
 async def create_retraining_schedule():
     """Create automated retraining schedule"""
-    
+
+    ensure_services_available()
+
     try:
         schedule = retraining_service.create_retraining_schedule()
         
@@ -516,10 +703,20 @@ async def create_retraining_schedule():
 # Prediction Endpoints with MLOps Features
 # ============================================================================
 
-@router.post("/predict")
+@router.post(
+    "/predict",
+    responses={
+        503: {
+            "description": "MLOps services unavailable. Ensure required components"
+            " are initialized.",
+        }
+    },
+)
 async def predict_with_mlops(request: PredictionRequest):
     """Make predictions with optional A/B testing and model versioning"""
-    
+
+    ensure_services_available()
+
     try:
         features = np.array(request.features)
         
@@ -576,7 +773,9 @@ async def predict_with_mlops(request: PredictionRequest):
 
 async def retrain_model_background(model_name: str):
     """Background task for model retraining"""
-    
+
+    ensure_services_available()
+
     try:
         # Load training data from storage
         X_train, y_train = storage.load_training_data(model_name)
