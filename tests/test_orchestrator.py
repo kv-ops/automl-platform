@@ -198,7 +198,97 @@ class TestOrchestrator:
         top_2 = orchestrator.get_leaderboard(top_n=2)
         assert len(top_2) <= 2
 
+    def test_simplified_mode_enforces_multiple_models(self, monkeypatch):
+        """Ensure simplified mode falls back to multiple models when needed."""
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import cross_val_score as sklearn_cross_val_score
+
+        config = AutoMLConfig(expert_mode=False)
+        config.algorithms = ['NonExistentModel']
+        config.hpo_n_iter = 0
+        config.cv_folds = 2
+
+        available_keys = ['LogisticRegression', 'RandomForestClassifier']
+
+        def fake_get_available_models(task, include_incremental=False):
+            return {
+                'LogisticRegression': LogisticRegression(max_iter=200, random_state=42),
+                'RandomForestClassifier': RandomForestClassifier(n_estimators=10, random_state=42),
+            }
+
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                self.run_id = None
+
+            def log_params(self, *args, **kwargs):
+                return None
+
+            def register_model(self, *args, **kwargs):
+                class _Version:
+                    version = 1
+                    run_id = None
+
+                return _Version()
+
+            def promote_model(self, *args, **kwargs):
+                return None
+
+            @property
+            def client(self):
+                return None
+
+        class IdentityPreprocessor:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def fit(self, X, y=None):
+                return self
+
+            def transform(self, X):
+                return X
+
+            def fit_transform(self, X, y=None):
+                return X
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.get_available_models',
+            fake_get_available_models
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.DataPreprocessor',
+            IdentityPreprocessor
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.cross_val_score',
+            lambda estimator, X, y, cv, scoring, n_jobs=-1: sklearn_cross_val_score(
+                estimator,
+                X,
+                y,
+                cv=cv,
+                scoring=scoring,
+                n_jobs=1,
+            )
+        )
+
+        X, y = make_classification(
+            n_samples=60, n_features=10, n_classes=2, n_informative=5, random_state=42
+        )
+        X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(10)])
+        y = pd.Series(y)
+
+        orchestrator = AutoMLOrchestrator(config)
+        orchestrator.fit(X, y, task='classification')
+
+        assert set(orchestrator.config.algorithms) == set(available_keys)
+        assert len(orchestrator.leaderboard) >= 2
+
         # Check sorting (best first)
+        leaderboard = orchestrator.get_leaderboard()
         if len(leaderboard) > 1:
             assert leaderboard['cv_score'].iloc[0] >= leaderboard['cv_score'].iloc[1]
 

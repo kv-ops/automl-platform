@@ -17,6 +17,7 @@ try:
         tune_model,
         try_optuna
     )
+    from automl_platform.config import AutoMLConfig
     MODULE_AVAILABLE = True
 except ImportError as e:
     MODULE_AVAILABLE = False
@@ -46,14 +47,39 @@ class TestModelSelection:
     def test_get_available_models_regression(self):
         """Test getting regression models."""
         models = get_available_models('regression')
-        
+
         assert len(models) > 0
         assert any(name in models for name in ['LinearRegression', 'RandomForestRegressor', 'Ridge'])
-        
+
         # Check that models can be instantiated
         for name, model in list(models.items())[:3]:  # Test first 3 models
             assert hasattr(model, 'fit')
             assert hasattr(model, 'predict')
+
+    def test_simplified_algorithms_match_available_models(self):
+        """Simplified mode algorithms should align with available models."""
+        config = AutoMLConfig(expert_mode=False)
+
+        classification_algos = config.get_simplified_algorithms('classification')
+        available_classification = get_available_models('classification')
+        assert len(classification_algos) >= 2
+        assert all(algo in available_classification for algo in classification_algos)
+
+        regression_algos = config.get_simplified_algorithms('regression')
+        available_regression = get_available_models('regression')
+        assert len(regression_algos) >= 2
+        assert all(algo in available_regression for algo in regression_algos)
+
+        timeseries_algos = config.get_simplified_algorithms('timeseries')
+        available_timeseries = get_available_models('timeseries', include_timeseries=True)
+        assert len(timeseries_algos) >= 2
+        assert all(algo in available_timeseries for algo in timeseries_algos)
+
+        auto_algos = config.get_simplified_algorithms('auto')
+        assert len(auto_algos) >= 4  # Should cover multiple tasks
+        assert any(algo in auto_algos for algo in classification_algos)
+        assert any(algo in auto_algos for algo in regression_algos)
+        assert len(auto_algos) == len(set(auto_algos))
     
     def test_get_cv_splitter_classification(self):
         """Test CV splitter for classification."""

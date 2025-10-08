@@ -949,13 +949,90 @@ class AutoMLConfig:
         
         return True
     
-    def get_simplified_algorithms(self) -> List[str]:
-        """Get simplified algorithm list for non-expert mode"""
+    def get_simplified_algorithms(self, task: Optional[str] = None) -> List[str]:
+        """Get simplified algorithm list for non-expert mode.
+
+        Args:
+            task: Optional task hint ("classification", "regression",
+                "timeseries" or "auto"). When not provided or set to
+                "auto", simplified algorithms for both classification and
+                regression will be returned so that downstream task detection
+                can still succeed.
+
+        Returns:
+            A list of algorithm names matching the keys produced by
+            :func:`automl_platform.model_selection.get_available_models`.
+        """
         if self.expert_mode:
             return self.algorithms
+
+        # Import lazily to avoid circular dependencies at module import time
+        from automl_platform.model_selection import get_available_models
+
+        preferred_by_task: Dict[str, List[str]] = {
+            "classification": [
+                "RandomForestClassifier",
+                "GradientBoostingClassifier",
+                "LogisticRegression",
+                "XGBClassifier",
+                "LGBMClassifier",
+            ],
+            "regression": [
+                "RandomForestRegressor",
+                "GradientBoostingRegressor",
+                "LinearRegression",
+                "XGBRegressor",
+                "LGBMRegressor",
+            ],
+            "timeseries": [
+                "RandomForestRegressor",
+                "GradientBoostingRegressor",
+                "Ridge",
+                "LinearRegression",
+            ],
+        }
+
+        normalized_task = (task or "auto").lower()
+        if normalized_task in ("", "auto"):
+            tasks_to_consider = ["classification", "regression"]
+        elif normalized_task in preferred_by_task:
+            tasks_to_consider = [normalized_task]
         else:
-            # Return only the most reliable and easy-to-understand algorithms
-            return ["XGBoost", "RandomForest", "LogisticRegression", "LinearRegression"]
+            # Unknown task - default to classification for safety
+            tasks_to_consider = ["classification"]
+
+        simplified_algorithms: List[str] = []
+
+        for task_name in tasks_to_consider:
+            include_timeseries = task_name == "timeseries"
+            available_models = get_available_models(
+                task_name,
+                include_timeseries=include_timeseries,
+            )
+
+            preferred = preferred_by_task.get(task_name, [])
+            selected = [name for name in preferred if name in available_models]
+
+            # Ensure we keep at least two algorithms per task when possible
+            if len(selected) < 2:
+                for model_name in available_models.keys():
+                    if model_name not in selected:
+                        selected.append(model_name)
+                    if len(selected) >= 2:
+                        break
+
+            for model_name in selected:
+                if model_name not in simplified_algorithms:
+                    simplified_algorithms.append(model_name)
+
+        if not simplified_algorithms:
+            # As a final fallback, expose whatever models are available for the
+            # first considered task to avoid empty selections downstream.
+            fallback_task = tasks_to_consider[0]
+            fallback_models = get_available_models(fallback_task)
+            simplified_algorithms = list(fallback_models.keys())
+
+        return simplified_algorithms
     
     def get_simplified_hpo_config(self) -> Dict[str, Any]:
         """Get simplified HPO configuration for non-expert mode"""

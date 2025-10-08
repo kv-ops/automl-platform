@@ -186,9 +186,22 @@ class AutoMLOrchestrator:
                 self.task,
                 include_incremental=use_incremental
             )
-            models = {k: v for k, v in all_models.items() 
+            models = {k: v for k, v in all_models.items()
                      if k in self.config.algorithms}
-        
+
+        if (not self.config.expert_mode and
+                self.config.algorithms != ['all'] and
+                len(models) < 2):
+            logger.warning(
+                "Simplified mode requires multiple models; "
+                "falling back to default selection."
+            )
+            models = get_available_models(
+                self.task,
+                include_incremental=use_incremental
+            )
+            self.config.algorithms = list(models.keys())
+
         # Filter excluded models
         for excluded in self.config.exclude_algorithms:
             models.pop(excluded, None)
