@@ -70,7 +70,7 @@ from automl_platform.llm import AutoMLLLMAssistant, DataCleaningAgent
 from automl_platform.prompts import PromptTemplates, PromptOptimizer
 
 # Infrastructure and billing
-from automl_platform.infrastructure import TenantManager, SecurityManager, DeploymentManager
+from automl_platform.api.infrastructure import TenantManager, SecurityManager, DeploymentManager
 from automl_platform.api.billing import BillingManager, UsageTracker, PlanType, BillingPeriod
 
 # Data connectors
