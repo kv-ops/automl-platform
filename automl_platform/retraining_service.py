@@ -17,6 +17,8 @@ import numpy as np
 from pathlib import Path
 import json
 
+from .mlflow_registry import ModelStage
+
 # Airflow imports for scheduling
 try:
     from airflow import DAG
@@ -222,9 +224,9 @@ class RetrainingService:
             if validation_passed:
                 # Promote to staging for further validation
                 self.registry.promote_model(
-                    model_name, 
+                    model_name,
                     new_version.version,
-                    self.registry.ModelStage.STAGING
+                    ModelStage.STAGING
                 )
                 
                 retrain_result["status"] = "success"
@@ -472,7 +474,7 @@ class RetrainingService:
                         success = self.registry.promote_model(
                             model_name,
                             new_version,
-                            self.registry.ModelStage.PRODUCTION
+                            ModelStage.PRODUCTION
                         )
                         
                         if success:
@@ -586,7 +588,7 @@ class RetrainingService:
                     success = self.registry.promote_model(
                         model_name,
                         new_version,
-                        self.registry.ModelStage.PRODUCTION
+                        ModelStage.PRODUCTION
                     )
                     
                     if success:
