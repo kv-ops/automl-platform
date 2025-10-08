@@ -363,7 +363,7 @@ class TestStorageManager:
         """Test saving and loading model through manager."""
         from sklearn.ensemble import RandomForestClassifier
         model = RandomForestClassifier(n_estimators=10, random_state=42)
-        
+
         metadata = {
             'model_id': 'test_model',
             'model_type': 'classification',
@@ -371,19 +371,93 @@ class TestStorageManager:
             'metrics': {'accuracy': 0.95},
             'feature_names': ['feat1', 'feat2']
         }
-        
+
         # Save model
         path = storage_manager.save_model(model, metadata, version="1.0.0")
         assert path is not None
-        
+
         # Load model
         loaded_model, loaded_metadata = storage_manager.load_model(
             "test_model", "1.0.0"
         )
-        
+
         assert loaded_model is not None
         assert loaded_metadata["model_id"] == "test_model"
-    
+
+    def test_load_from_connector_with_mock(self, storage_manager):
+        """StorageManager should instantiate and use configured connectors."""
+
+        captured = {}
+
+        class DummyConnector:
+            def __init__(self, config):
+                captured['config'] = config
+
+            def query(self, query):
+                captured['query'] = query
+                return pd.DataFrame({'value': [1]})
+
+            def read_table(self, table):  # pragma: no cover - not used in this test
+                captured['table'] = table
+                return pd.DataFrame({'value': [1]})
+
+        storage_manager.connectors = {'dummy': DummyConnector}
+
+        result = storage_manager.load_from_connector(
+            'dummy',
+            {
+                'connection_type': 'dummy',
+                'tenant_id': 'tenant_123',
+                'host': 'localhost'
+            },
+            query='SELECT 1'
+        )
+
+        assert isinstance(result, pd.DataFrame)
+        assert result.equals(pd.DataFrame({'value': [1]}))
+        assert 'config' in captured and 'query' in captured
+        assert captured['query'] == 'SELECT 1'
+        assert isinstance(captured['config'], storage_manager._connector_config_cls)
+
+    def test_load_from_connector_warns_for_legacy_keys(self, storage_manager):
+        """Legacy connection keys should emit a deprecation warning when used."""
+
+        captured = {}
+
+        class DummyConnector:
+            def __init__(self, config):
+                captured['config'] = config
+
+            def query(self, query):
+                captured['query'] = query
+                return pd.DataFrame({'value': [query]})
+
+            def read_table(self, table):  # pragma: no cover - fallback path
+                return pd.DataFrame({'value': [table]})
+
+        storage_manager.connectors = {'dummy': DummyConnector}
+
+        with pytest.warns(DeprecationWarning):
+            result = storage_manager.load_from_connector(
+                'dummy',
+                {
+                    'connection_type': 'dummy',
+                    'tenant_id': 'tenant_123',
+                    'user': 'legacy_user',
+                    'dbname': 'legacy_db',
+                },
+                query='legacy',
+            )
+
+        assert isinstance(result, pd.DataFrame)
+        assert list(result['value']) == ['legacy']
+        assert captured['config'].username == 'legacy_user'
+        assert captured['config'].database == 'legacy_db'
+        assert captured['config'].tenant_id == 'tenant_123'
+        assert captured['query'] == 'legacy'
+        assert captured['config'].connection_type == 'dummy'
+        assert captured['config'].tenant_id == 'tenant_123'
+
     def test_get_model_history(self, storage_manager):
         """Test getting model version history."""
         from sklearn.ensemble import RandomForestClassifier
@@ -559,14 +633,14 @@ class TestStorageManager:
         # Export to ONNX
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = os.path.join(temp_dir, "model.onnx")
-            
+
             with patch('automl_platform.storage.ONNX_AVAILABLE', True):
                 result = storage_manager.export_model_to_onnx(
                     "test_model", "1.0.0", output_path=output_path
                 )
-            
+
             assert result == output_path
-    
+
     @patch('automl_platform.storage.sklearn2pmml')
     def test_export_model_to_pmml(self, mock_sklearn2pmml, storage_manager):
         """Test exporting model to PMML format."""
@@ -584,10 +658,11 @@ class TestStorageManager:
         # Export to PMML
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = os.path.join(temp_dir, "model.pmml")
-            result = storage_manager.export_model_to_pmml(
-                "test_model", "1.0.0", output_path=output_path
-            )
-            
+            with patch('automl_platform.storage.PMML_AVAILABLE', True):
+                result = storage_manager.export_model_to_pmml(
+                    "test_model", "1.0.0", output_path=output_path
+                )
+
             # Verify sklearn2pmml was called
             mock_sklearn2pmml.assert_called_once()
 
