@@ -146,6 +146,17 @@ class TestConfigManager:
         assert config.agent_first.enable_hybrid_mode is False
         assert config.enable_hybrid_mode is False
 
+    def test_from_yaml_mirrors_top_level_hybrid_flag(self, tmp_path):
+        """Top-level hybrid flag should update nested Agent-First config when absent."""
+        config_path = tmp_path / "top_level_hybrid.yaml"
+        with config_path.open('w') as f:
+            yaml.safe_dump({'enable_hybrid_mode': False}, f)
+
+        config = AutoMLConfig.from_yaml(str(config_path))
+
+        assert config.enable_hybrid_mode is False
+        assert config.agent_first.enable_hybrid_mode is False
+
     def test_from_yaml_conflicting_agent_first_prefers_nested(self, tmp_path, caplog):
         """Nested Agent-First flag should override conflicting top-level flag from YAML."""
         config_path = tmp_path / "agent_first_conflict.yaml"

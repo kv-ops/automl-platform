@@ -1210,9 +1210,10 @@ class AutoMLConfig:
                     )
                     config_dict['enable_agent_first'] = agent_first_enabled
 
+            normalized_top_level = _coerce_bool(original_enable_hybrid_mode)
+
             if agent_first_hybrid is not None:
                 normalized_hybrid = _coerce_bool(agent_first_hybrid)
-                normalized_top_level = _coerce_bool(original_enable_hybrid_mode)
 
                 if not hybrid_flag_defined or normalized_top_level is None:
                     config_dict['enable_hybrid_mode'] = normalized_hybrid
@@ -1224,6 +1225,14 @@ class AutoMLConfig:
                         agent_first_hybrid,
                     )
                     config_dict['enable_hybrid_mode'] = normalized_hybrid
+            elif hybrid_flag_defined and normalized_top_level is not None:
+                if isinstance(agent_first_cfg, dict):
+                    agent_first_cfg['enable_hybrid_mode'] = normalized_top_level
+                elif agent_first_cfg is None:
+                    config_dict['agent_first'] = AgentFirstConfig(enable_hybrid_mode=normalized_top_level)
+                    agent_first_cfg = config_dict['agent_first']
+                elif hasattr(agent_first_cfg, 'enable_hybrid_mode'):
+                    setattr(agent_first_cfg, 'enable_hybrid_mode', normalized_top_level)
 
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):
