@@ -9,10 +9,10 @@ from pathlib import Path
 import os
 import sys
 
-# Add parent directory to path (automl_platform is already in the path)
-# No need to modify sys.path if running from project root
-# If running this file directly, uncomment the next line:
-# sys.path.append(str(Path(__file__).parent.parent.parent))
+# Ensure the project root is on the Python path when executed directly
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from automl_platform.agents import DataCleaningOrchestrator, AgentConfig
 from automl_platform.data_prep import EnhancedDataPreprocessor
