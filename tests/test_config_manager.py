@@ -123,7 +123,43 @@ class TestConfigManager:
         
         finally:
             os.unlink(temp_path)
-    
+
+    def test_from_yaml_propagates_agent_first_flag(self, tmp_path):
+        """Agent-First nested flag should enable top-level setting when loading YAML."""
+        config_path = tmp_path / "agent_first.yaml"
+        with config_path.open('w') as f:
+            yaml.safe_dump({'agent_first': {'enabled': True}}, f)
+
+        config = AutoMLConfig.from_yaml(str(config_path))
+
+        assert config.agent_first.enabled is True
+        assert config.enable_agent_first is True
+
+    def test_from_yaml_conflicting_agent_first_prefers_nested(self, tmp_path, caplog):
+        """Nested Agent-First flag should override conflicting top-level flag from YAML."""
+        config_path = tmp_path / "agent_first_conflict.yaml"
+        with config_path.open('w') as f:
+            yaml.safe_dump({'enable_agent_first': False, 'agent_first': {'enabled': True}}, f)
+
+        with caplog.at_level("WARNING"):
+            config = AutoMLConfig.from_yaml(str(config_path))
+
+        assert config.enable_agent_first is True
+        assert "Conflicting Agent-First flags in YAML" in caplog.text
+
+    def test_from_yaml_nested_flag_respects_env_override(self, tmp_path, caplog):
+        """Environment variable should take precedence over nested Agent-First flag."""
+        config_path = tmp_path / "agent_first_env.yaml"
+        with config_path.open('w') as f:
+            yaml.safe_dump({'agent_first': {'enabled': True}}, f)
+
+        with patch.dict(os.environ, {"AUTOML_AGENT_FIRST": "0"}):
+            with caplog.at_level("WARNING"):
+                config = AutoMLConfig.from_yaml(str(config_path))
+
+        assert config.enable_agent_first is False
+        assert "AUTOML_AGENT_FIRST environment variable overrides nested" in caplog.text
+
     def test_config_validation_cross_component(self):
         """Test cross-component validation with various inconsistencies."""
         manager = ConfigManager(config_path="non_existent.yaml")

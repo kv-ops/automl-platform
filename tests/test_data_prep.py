@@ -4,6 +4,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from sklearn.pipeline import Pipeline
+from unittest.mock import patch
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -11,12 +12,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Try importing the module, skip tests if not available
 try:
     from automl_platform.data_prep import DataPreprocessor, validate_data, handle_imbalance
+    from automl_platform.config import AutoMLConfig
     MODULE_AVAILABLE = True
 except ImportError as e:
     MODULE_AVAILABLE = False
     DataPreprocessor = None
     validate_data = None
     handle_imbalance = None
+    AutoMLConfig = None
 
 
 @pytest.mark.skipif(not MODULE_AVAILABLE, reason="automl_platform.data_prep module not available")
@@ -57,14 +60,71 @@ class TestDataPreprocessor:
         """Test pipeline creation."""
         preprocessor = DataPreprocessor(self.config)
         pipeline = preprocessor.create_pipeline(self.df)
-        
+
         assert pipeline is not None
         assert hasattr(pipeline, 'fit_transform')
-    
+
+    def test_agent_first_enabled_from_nested_config(self):
+        """Ensure nested agent_first.enabled enables Agent-First mode."""
+        config = {
+            'agent_first': {
+                'enabled': True
+            }
+        }
+
+        with patch.object(DataPreprocessor, '_init_agent_first_components') as mock_init:
+            preprocessor = DataPreprocessor(config)
+            mock_init.assert_called_once()
+
+        assert preprocessor.enable_agent_first is True
+
+    def test_agent_first_enabled_from_config_object(self):
+        """Ensure AutoMLConfig propagates nested Agent-First flag."""
+        automl_config = AutoMLConfig()
+        automl_config.enable_agent_first = False
+        automl_config.agent_first.enabled = True
+
+        with patch.object(DataPreprocessor, '_init_agent_first_components') as mock_init:
+            preprocessor = DataPreprocessor(automl_config)
+            mock_init.assert_called_once()
+
+        assert preprocessor.enable_agent_first is True
+
+    def test_agent_first_conflict_prefers_nested_dict(self, caplog):
+        """Nested Agent-First flag should override conflicting top-level flag in dict config."""
+        config = {
+            'enable_agent_first': False,
+            'agent_first': {
+                'enabled': True,
+            }
+        }
+
+        with patch.object(DataPreprocessor, '_init_agent_first_components') as mock_init:
+            with caplog.at_level("WARNING"):
+                preprocessor = DataPreprocessor(config)
+            mock_init.assert_called_once()
+
+        assert preprocessor.enable_agent_first is True
+        assert "Conflicting Agent-First flags in configuration dict" in caplog.text
+
+    def test_agent_first_conflict_prefers_nested_config_object(self, caplog):
+        """Nested Agent-First flag should override conflicting top-level flag on AutoMLConfig."""
+        automl_config = AutoMLConfig()
+        automl_config.enable_agent_first = True
+        automl_config.agent_first.enabled = False
+
+        with patch.object(DataPreprocessor, '_init_agent_first_components') as mock_init:
+            with caplog.at_level("WARNING"):
+                preprocessor = DataPreprocessor(automl_config)
+            mock_init.assert_not_called()
+
+        assert preprocessor.enable_agent_first is False
+        assert "Conflicting Agent-First flags on AutoMLConfig" in caplog.text
+
     def test_no_data_leakage(self):
         """Test that there's no data leakage in preprocessing."""
         preprocessor = DataPreprocessor(self.config)
-        
+
         # Split data
         train_df = self.df[:80].copy()
         test_df = self.df[80:].copy()
