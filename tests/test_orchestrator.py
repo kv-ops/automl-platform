@@ -92,14 +92,127 @@ class TestOrchestrator:
         
         # Update config for regression
         self.config.algorithms = ['LinearRegression', 'RandomForestRegressor', 'Ridge']
-        
+
         orchestrator = AutoMLOrchestrator(self.config)
         orchestrator.fit(X, y)
-        
+
         assert orchestrator.best_pipeline is not None
         assert len(orchestrator.leaderboard) > 0
         assert orchestrator.task == 'regression'
-    
+
+    def test_expert_mode_marketing_names_are_normalized(self, monkeypatch):
+        """Marketing names should be normalized in expert mode."""
+        X, y = make_classification(
+            n_samples=80, n_features=8, n_informative=4, n_classes=2,
+            random_state=42
+        )
+        X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(8)])
+        y = pd.Series(y)
+
+        config = AutoMLConfig(
+            random_state=42,
+            cv_folds=2,
+            hpo_n_iter=0,
+            expert_mode=True,
+            algorithms=['xgboost', 'RandomForestClassifier', 'LIGHTGBM']
+        )
+
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def register_model(self, *args, **kwargs):
+                class _Version:
+                    version = 1
+                    run_id = None
+
+                return _Version()
+
+        class IdentityPreprocessor:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def fit(self, X, y=None):
+                return self
+
+            def transform(self, X):
+                return X
+
+            def fit_transform(self, X, y=None):
+                return X
+
+        from sklearn.model_selection import cross_val_score as sklearn_cross_val_score
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.cross_val_score',
+            lambda estimator, X, y, cv, scoring, n_jobs=-1: sklearn_cross_val_score(
+                estimator,
+                X,
+                y,
+                cv=cv,
+                scoring=scoring,
+                n_jobs=1,
+            )
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.DataPreprocessor',
+            IdentityPreprocessor
+        )
+
+        orchestrator = AutoMLOrchestrator(config)
+        orchestrator.fit(X, y)
+
+        assert orchestrator.best_pipeline is not None
+        assert orchestrator.leaderboard
+        assert 'RandomForestClassifier' in orchestrator.config.algorithms
+        assert 'XGBClassifier' in orchestrator.config.algorithms
+        assert 'LGBMClassifier' in orchestrator.config.algorithms
+
+    def test_fit_raises_on_unknown_algorithm_name(self, monkeypatch):
+        """An explicit error should be raised for unknown algorithms."""
+        X, y = make_classification(
+            n_samples=30,
+            n_features=4,
+            n_informative=2,
+            n_classes=2,
+            random_state=42,
+        )
+        X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(4)])
+        y = pd.Series(y)
+
+        config = AutoMLConfig(
+            random_state=42,
+            cv_folds=2,
+            hpo_n_iter=0,
+            expert_mode=True,
+            algorithms=['UnknownAlgo']
+        )
+
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def register_model(self, *args, **kwargs):
+                class _Version:
+                    version = 1
+                    run_id = None
+
+                return _Version()
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+
+        orchestrator = AutoMLOrchestrator(config)
+
+        with pytest.raises(ValueError, match="Unknown algorithm names: UnknownAlgo"):
+            orchestrator.fit(X, y)
+
     def test_predict_after_fit(self):
         """Test prediction after fitting."""
         X, y = make_classification(
@@ -205,7 +318,7 @@ class TestOrchestrator:
         from sklearn.model_selection import cross_val_score as sklearn_cross_val_score
 
         config = AutoMLConfig(expert_mode=False)
-        config.algorithms = ['NonExistentModel']
+        config.algorithms = ['LogisticRegression']
         config.hpo_n_iter = 0
         config.cv_folds = 2
 

@@ -187,6 +187,7 @@ task: auto  # Options: classification, regression, auto
 cv_folds: 5
 scoring: auto
 # Fixed: Use specific algorithm list instead of "all"
+# Accepts marketing names (e.g. "XGBoost") or estimator identifiers (e.g. "XGBClassifier")
 algorithms: ["XGBoost", "RandomForest", "LogisticRegression", "LightGBM", "CatBoost"]
 exclude_algorithms: []
 

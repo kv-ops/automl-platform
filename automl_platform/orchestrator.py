@@ -23,7 +23,7 @@ import hashlib
 from .data_prep import DataPreprocessor, handle_imbalance, validate_data
 from .model_selection import (
     get_available_models, get_param_grid, get_cv_splitter,
-    tune_model, try_optuna
+    tune_model, try_optuna, normalize_algorithm_names
 )
 from .metrics import calculate_metrics, detect_task
 from .config import AutoMLConfig
@@ -192,7 +192,27 @@ class AutoMLOrchestrator:
             self.task = task
         
         logger.info(f"Task detected: {self.task}")
-        
+
+        # Gather available models once to normalize and later filter selections.
+        all_models = get_available_models(
+            self.task,
+            include_incremental=use_incremental
+        )
+
+        if self.config.algorithms:
+            self.config.algorithms = normalize_algorithm_names(
+                self.config.algorithms,
+                task=self.task,
+                known_algorithms=list(all_models.keys())
+            )
+
+        if self.config.exclude_algorithms:
+            self.config.exclude_algorithms = normalize_algorithm_names(
+                self.config.exclude_algorithms,
+                task=self.task,
+                known_algorithms=list(all_models.keys())
+            )
+
         # Store training metadata
         self.training_metadata = {
             "training_id": self.training_id,
@@ -207,17 +227,12 @@ class AutoMLOrchestrator:
         
         # Get available models
         if self.config.algorithms == ['all']:
-            models = get_available_models(
-                self.task,
-                include_incremental=use_incremental
-            )
+            models = all_models
         else:
-            all_models = get_available_models(
-                self.task,
-                include_incremental=use_incremental
-            )
-            models = {k: v for k, v in all_models.items()
-                     if k in self.config.algorithms}
+            models = {
+                k: v for k, v in all_models.items()
+                if k in self.config.algorithms
+            }
 
         if (not self.config.expert_mode and
                 self.config.algorithms != ['all'] and

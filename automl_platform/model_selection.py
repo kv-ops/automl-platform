@@ -51,13 +51,166 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+ALGORITHM_NAME_MAPPING: Dict[str, Dict[str, List[str]]] = {
+    "XGBoost": {
+        "classification": ["XGBClassifier"],
+        "regression": ["XGBRegressor"],
+        "timeseries": ["XGBRegressor"],
+    },
+    "LightGBM": {
+        "classification": ["LGBMClassifier"],
+        "regression": ["LGBMRegressor"],
+        "timeseries": ["LGBMRegressor"],
+    },
+    "RandomForest": {
+        "classification": ["RandomForestClassifier"],
+        "regression": ["RandomForestRegressor"],
+        "timeseries": ["RandomForestRegressor"],
+    },
+    "ExtraTrees": {
+        "classification": ["ExtraTreesClassifier"],
+        "regression": ["ExtraTreesRegressor"],
+    },
+    "GradientBoosting": {
+        "classification": ["GradientBoostingClassifier"],
+        "regression": ["GradientBoostingRegressor"],
+    },
+    "AdaBoost": {
+        "classification": ["AdaBoostClassifier"],
+        "regression": ["AdaBoostRegressor"],
+    },
+    "DecisionTree": {
+        "classification": ["DecisionTreeClassifier"],
+        "regression": ["DecisionTreeRegressor"],
+    },
+    "SVM": {
+        "classification": ["SVC"],
+        "regression": ["SVR"],
+    },
+    "KNN": {
+        "classification": ["KNeighborsClassifier"],
+        "regression": ["KNeighborsRegressor"],
+    },
+    "NaiveBayes": {
+        "classification": ["GaussianNB"],
+    },
+    "NeuralNetwork": {
+        "classification": ["MLPClassifier"],
+        "regression": ["MLPRegressor"],
+    },
+    "CatBoost": {
+        "classification": ["CatBoostClassifier"],
+        "regression": ["CatBoostRegressor"],
+    },
+}
+
+_MARKETING_NAME_LOOKUP: Dict[str, Dict[str, List[str]]] = {
+    name.lower(): mapping for name, mapping in ALGORITHM_NAME_MAPPING.items()
+}
+
+
+def _build_known_algorithm_lookup(
+    known_algorithms: Optional[List[str]]
+) -> Dict[str, str]:
+    if not known_algorithms:
+        return {}
+
+    return {algorithm.lower(): algorithm for algorithm in known_algorithms}
+
 __all__ = [
+    'ALGORITHM_NAME_MAPPING',
+    'normalize_algorithm_names',
     'get_available_models',
-    'get_param_grid', 
+    'get_param_grid',
     'get_cv_splitter',
     'tune_model',
     'try_optuna'
 ]
+
+
+def normalize_algorithm_names(
+    algorithms: Optional[List[str]],
+    task: Optional[str] = None,
+    known_algorithms: Optional[List[str]] = None
+) -> List[str]:
+    """Normalize user-provided algorithm identifiers.
+
+    Both marketing-friendly names (e.g. ``"XGBoost"``) and technical estimator
+    identifiers (e.g. ``"XGBClassifier"``) are accepted. Marketing names are
+    expanded to the underlying estimators for the requested task, while
+    technical identifiers are passed through as-is. Names are matched
+    case-insensitively. If an unknown name is provided and ``known_algorithms``
+    is supplied, a :class:`ValueError` is raised with a descriptive message to
+    aid debugging.
+    """
+
+    if not algorithms:
+        return []
+
+    normalized: List[str] = []
+    seen = set()
+    unknown: List[str] = []
+    known_lookup = _build_known_algorithm_lookup(known_algorithms)
+
+    for raw_name in algorithms:
+        if not isinstance(raw_name, str):
+            unknown.append(str(raw_name))
+            continue
+
+        name = raw_name.strip()
+        lowered = name.lower()
+
+        if lowered == 'all':
+            if 'all' not in seen:
+                normalized.append('all')
+                seen.add('all')
+            continue
+
+        mapping = _MARKETING_NAME_LOOKUP.get(lowered)
+        if mapping:
+            candidates: List[str] = []
+
+            if task and task in mapping:
+                candidates = mapping[task]
+            else:
+                for values in mapping.values():
+                    candidates.extend(values)
+
+            for candidate in candidates:
+                if candidate not in seen:
+                    normalized.append(candidate)
+                    seen.add(candidate)
+            if candidates:
+                continue
+
+        technical_name = known_lookup.get(lowered)
+        if technical_name:
+            if technical_name not in seen:
+                normalized.append(technical_name)
+                seen.add(technical_name)
+            continue
+
+        if not known_lookup:
+            if name not in seen:
+                normalized.append(name)
+                seen.add(name)
+            continue
+
+        unknown.append(name)
+
+    if unknown:
+        marketing_options = sorted(ALGORITHM_NAME_MAPPING.keys())
+        technical_options = sorted(known_lookup.values())
+        raise ValueError(
+            "Unknown algorithm names: {}. Supported marketing names: {}. "
+            "Supported technical identifiers: {}.".format(
+                ", ".join(sorted(set(unknown))),
+                ", ".join(marketing_options),
+                ", ".join(technical_options)
+            )
+        )
+
+    return normalized
 
 
 def get_available_models(
