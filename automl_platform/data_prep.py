@@ -52,6 +52,14 @@ class EnhancedDataPreprocessor:
         Args:
             config: Configuration dictionary or AutoMLConfig instance
         """
+        # Detect environment override for Agent-First mode if provided
+        agent_first_env = os.getenv("AUTOML_AGENT_FIRST", "").strip().lower()
+        self._agent_first_env_override = None
+        if agent_first_env in ["true", "1", "yes", "on"]:
+            self._agent_first_env_override = True
+        elif agent_first_env in ["false", "0", "no", "off"]:
+            self._agent_first_env_override = False
+
         # Handle both dict and AutoMLConfig instances
         if isinstance(config, dict):
             self.config = config
@@ -61,6 +69,17 @@ class EnhancedDataPreprocessor:
                 self.enable_agent_first = top_level_agent_first
             else:
                 self.enable_agent_first = bool(top_level_agent_first) if top_level_agent_first is not None else False
+            if (
+                self._agent_first_env_override is not None
+                and self.enable_agent_first != self._agent_first_env_override
+            ):
+                logger.warning(
+                    "AUTOML_AGENT_FIRST environment variable overrides enable_agent_first=%s from configuration dict; "
+                    "keeping enable_agent_first=%s",
+                    self.enable_agent_first,
+                    self._agent_first_env_override,
+                )
+                self.enable_agent_first = self._agent_first_env_override
             self.enable_hybrid_mode = config.get('enable_hybrid_mode', False)  # NEW: Hybrid mode support
             nested_agent_first = config.get('agent_first') or {}
             nested_enabled = None
@@ -72,7 +91,16 @@ class EnhancedDataPreprocessor:
                 nested_enabled = nested_agent_first.get('enabled')
 
             if isinstance(nested_enabled, bool):
-                if top_level_agent_first is None:
+                if self._agent_first_env_override is not None:
+                    if self._agent_first_env_override != nested_enabled:
+                        logger.warning(
+                            "AUTOML_AGENT_FIRST environment variable overrides nested agent_first.enabled=%s; "
+                            "keeping enable_agent_first=%s",
+                            nested_enabled,
+                            self._agent_first_env_override,
+                        )
+                    self.enable_agent_first = self._agent_first_env_override
+                elif top_level_agent_first is None:
                     self.enable_agent_first = nested_enabled
                 elif self.enable_agent_first != nested_enabled:
                     logger.warning(
@@ -84,7 +112,9 @@ class EnhancedDataPreprocessor:
                     self.enable_agent_first = nested_enabled
             elif nested_enabled:
                 # Backward compatibility for truthy non-bool values
-                if not self.enable_agent_first:
+                if self._agent_first_env_override is not None:
+                    self.enable_agent_first = self._agent_first_env_override
+                elif not self.enable_agent_first:
                     self.enable_agent_first = True
             self.agent_first_config = nested_agent_first if nested_agent_first else None
         else:  # AutoMLConfig instance
@@ -92,21 +122,40 @@ class EnhancedDataPreprocessor:
             self.enable_intelligent_cleaning = getattr(config, 'enable_intelligent_cleaning', False)
             self.enable_agent_first = getattr(config, 'enable_agent_first', False)
             self.enable_hybrid_mode = getattr(config, 'enable_hybrid_mode', False)  # NEW: Hybrid mode support
+            if self._agent_first_env_override is not None and self.enable_agent_first != self._agent_first_env_override:
+                logger.warning(
+                    "AUTOML_AGENT_FIRST environment variable overrides AutoMLConfig.enable_agent_first=%s; keeping enable_agent_first=%s",
+                    self.enable_agent_first,
+                    self._agent_first_env_override,
+                )
+                self.enable_agent_first = self._agent_first_env_override
             # Get Agent-First config if available
             if hasattr(config, 'agent_first'):
                 self.agent_first_config = config.agent_first
                 nested_enabled = getattr(self.agent_first_config, 'enabled', None)
                 if isinstance(nested_enabled, bool):
-                    if self.enable_agent_first != nested_enabled:
-                        logger.warning(
-                            "Conflicting Agent-First flags on AutoMLConfig: enable_agent_first=%s vs agent_first.enabled=%s. "
-                            "Using nested agent_first.enabled.",
-                            self.enable_agent_first,
-                            nested_enabled,
-                        )
-                    self.enable_agent_first = nested_enabled
+                    if self._agent_first_env_override is not None:
+                        if self._agent_first_env_override != nested_enabled:
+                            logger.warning(
+                                "AUTOML_AGENT_FIRST environment variable overrides agent_first.enabled=%s on AutoMLConfig; keeping enable_agent_first=%s",
+                                nested_enabled,
+                                self._agent_first_env_override,
+                            )
+                        self.enable_agent_first = self._agent_first_env_override
+                    else:
+                        if self.enable_agent_first != nested_enabled:
+                            logger.warning(
+                                "Conflicting Agent-First flags on AutoMLConfig: enable_agent_first=%s vs agent_first.enabled=%s. "
+                                "Using nested agent_first.enabled.",
+                                self.enable_agent_first,
+                                nested_enabled,
+                            )
+                        self.enable_agent_first = nested_enabled
                 elif nested_enabled and not self.enable_agent_first:
-                    self.enable_agent_first = True
+                    if self._agent_first_env_override is not None:
+                        self.enable_agent_first = self._agent_first_env_override
+                    else:
+                        self.enable_agent_first = True
             else:
                 self.agent_first_config = None
         
