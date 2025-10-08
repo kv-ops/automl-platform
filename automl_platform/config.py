@@ -1,5 +1,7 @@
 """Enhanced configuration management for AutoML platform with Agent-First support."""
 
+import warnings
+
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -16,6 +18,9 @@ except ImportError:  # pragma: no cover - fallback when billing module unavailab
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_BILLING_PLAN_TYPE = "free"
 
 
 def _coerce_bool(value: Any) -> Optional[bool]:
@@ -152,7 +157,12 @@ class AgentFirstConfig:
 class BillingConfig:
     """Billing and quotas configuration"""
     enabled: bool = True
-    plan_type: str = "free"  # free, trial, pro, enterprise
+    plan_type: Optional[str] = None  # free, trial, pro, enterprise
+    default_plan: Optional[str] = field(
+        default=None,
+        repr=False,
+        metadata={"deprecated": True},
+    )
     
     # Quotas by plan (updated with Agent-First limits)
     quotas: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
@@ -247,6 +257,34 @@ class BillingConfig:
             "data_retention_days": 365
         }
     })
+
+    def __post_init__(self) -> None:
+        """Normalize deprecated keys and ensure a billing plan is always defined."""
+        default_plan_value = self.default_plan
+        plan_default = self.__dataclass_fields__["plan_type"].default
+
+        if default_plan_value is not None:
+            warnings.warn(
+                "BillingConfig.default_plan is deprecated; use plan_type instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if self.plan_type is None or self.plan_type == plan_default:
+                self.plan_type = default_plan_value
+            elif default_plan_value != self.plan_type:
+                warnings.warn(
+                    "Ignoring deprecated default_plan=%r because plan_type=%r is set." % (
+                        default_plan_value,
+                        self.plan_type,
+                    ),
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+        if self.plan_type is None:
+            self.plan_type = DEFAULT_BILLING_PLAN_TYPE
+
+        self.default_plan = None
     
     # Pricing
     pricing: Dict[str, Dict[str, float]] = field(default_factory=lambda: {

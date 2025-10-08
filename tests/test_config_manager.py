@@ -29,6 +29,24 @@ from automl_platform.config import (
 )
 
 
+def test_repo_config_uses_free_plan_type_by_default():
+    """Ensure the repository config YAML keeps the free billing plan type."""
+    config_path = Path(__file__).resolve().parents[1] / "config.yaml"
+    with config_path.open() as handle:
+        config_dict = yaml.safe_load(handle)
+
+    assert config_dict["billing"]["plan_type"] == "free"
+
+
+def test_billing_config_accepts_default_plan_alias():
+    """Legacy default_plan key should map to plan_type with a deprecation warning."""
+    with pytest.deprecated_call():
+        config = BillingConfig(enabled=False, default_plan="trial")
+
+    assert config.plan_type == "trial"
+    assert config.default_plan is None
+
+
 class TestConfigManager:
     """Test suite for ConfigManager."""
     
