@@ -145,11 +145,19 @@ class MemoryBudget:
 
 
 class LRUMemoryCache:
-    """LRU cache with memory size limits"""
-    
-    def __init__(self, max_size_mb: int = 500):
+    """LRU cache with memory and entry limits."""
+
+    def __init__(self, max_size_mb: int = 500, max_items: Optional[int] = None):
+        # Convert MB to bytes for memory tracking
         self.max_size = max_size_mb * 1024 * 1024
-        self.cache = OrderedDict()
+        # Bound the number of cached entries to avoid thousands of small items
+        if max_items is None:
+            derived = max_size_mb // 10
+            self.max_items = max(10, derived) if derived else 10
+        else:
+            self.max_items = max(1, max_items)
+
+        self.cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.current_size = 0
         
     def get(self, key: str) -> Optional[Any]:
@@ -167,14 +175,21 @@ class LRUMemoryCache:
             size_bytes = sys.getsizeof(pickle.dumps(data))
         
         # Remove oldest items if needed
-        while self.current_size + size_bytes > self.max_size and self.cache:
+        while (
+            self.cache
+            and (
+                self.current_size + size_bytes > self.max_size
+                or len(self.cache) >= self.max_items
+            )
+        ):
             oldest_key, oldest_value = self.cache.popitem(last=False)
             self.current_size -= oldest_value['size']
             logger.debug(f"🗑️ Evicted {oldest_key} from cache ({oldest_value['size']/(1024*1024):.2f} MB)")
-        
+
         # Add new item
         if key in self.cache:
             self.current_size -= self.cache[key]['size']
+            self.cache.pop(key, None)
         
         self.cache[key] = {
             'data': data,
@@ -199,6 +214,7 @@ class LRUMemoryCache:
             'items': len(self.cache),
             'size_mb': self.current_size / (1024 * 1024),
             'max_size_mb': self.max_size / (1024 * 1024),
+            'max_items': self.max_items,
             'utilization': self.current_size / self.max_size if self.max_size > 0 else 0
         }
 

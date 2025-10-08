@@ -1179,8 +1179,8 @@ Respond ONLY with valid JSON:
         return recommendations
     
     async def _apply_local_cleaning_enhanced(
-        self, 
-        df: pd.DataFrame, 
+        self,
+        df: pd.DataFrame,
         user_context: Dict[str, Any],
         assessment: Any
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -1346,4 +1346,111 @@ Respond ONLY with valid JSON:
             "gs1_compliance": gs1_compliance if sector == 'retail' else None
         }
         
+        return cleaned_df, report
+
+    async def _apply_local_cleaning(
+        self,
+        df: pd.DataFrame,
+        user_context: Dict[str, Any],
+        assessment: Optional[Any] = None
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Backward compatible local cleaning fallback used by hybrid mode."""
+
+        logger.info("🧼 Applying basic local cleaning fallback")
+        # Update local statistics so reports remain consistent
+        self.local_stats = self._calculate_local_metrics(df)
+        self.performance_metrics["hybrid_decisions"]["local"] += 1
+
+        # Try to reuse the enhanced path when an assessment is available
+        if assessment is None:
+            try:
+                assessment = self.data_quality_agent.assess(
+                    df,
+                    user_context.get("target_variable")
+                )
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning("⚠️ Local assessment failed: %s", exc)
+                assessment = None
+
+        if assessment is not None:
+            cleaned_df, report = await self._apply_local_cleaning_enhanced(
+                df, user_context, assessment
+            )
+            report.setdefault(
+                "summary",
+                {
+                    "decision": "local_cleaning",
+                    "reason": "Hybrid safeguards selected rule-based fallback"
+                },
+            )
+            return cleaned_df, report
+
+        cleaned_df = df.copy()
+        transformations: List[Dict[str, Any]] = []
+
+        # Remove duplicate rows
+        if cleaned_df.duplicated().any():
+            removed = int(cleaned_df.duplicated().sum())
+            cleaned_df = cleaned_df.drop_duplicates()
+            transformations.append({
+                "action": "remove_duplicates",
+                "params": {"rows_removed": removed}
+            })
+
+        # Basic missing value handling
+        for col in cleaned_df.columns:
+            if cleaned_df[col].isnull().any():
+                if pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                    cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
+                    method = "median"
+                else:
+                    cleaned_df[col] = cleaned_df[col].fillna("missing")
+                    method = "constant"
+
+                transformations.append({
+                    "column": col,
+                    "action": "fill_missing",
+                    "params": {"method": method}
+                })
+
+        # Light outlier clipping for numeric columns
+        for col in cleaned_df.select_dtypes(include=[np.number]).columns:
+            q1 = cleaned_df[col].quantile(0.25)
+            q3 = cleaned_df[col].quantile(0.75)
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            mask = (cleaned_df[col] < lower) | (cleaned_df[col] > upper)
+            if mask.any():
+                cleaned_df[col] = cleaned_df[col].clip(lower, upper)
+                transformations.append({
+                    "column": col,
+                    "action": "clip_outliers",
+                    "params": {"count": int(mask.sum())}
+                })
+
+        # Compute simple quality metrics for the report
+        total_cells = max(cleaned_df.size, 1)
+        missing_ratio = cleaned_df.isnull().sum().sum() / total_cells
+        quality_before = self.local_stats.get("quality_score", 100.0)
+        quality_after = 100 - missing_ratio * 100
+
+        report = {
+            "mode": "local_basic",
+            "quality_before": quality_before,
+            "quality_after": quality_after,
+            "transformations": transformations,
+            "metrics": {
+                "duplicates_removed": sum(1 for t in transformations if t["action"] == "remove_duplicates"),
+                "missing_imputed": sum(1 for t in transformations if t["action"] == "fill_missing"),
+                "outliers_clipped": sum(1 for t in transformations if t["action"] == "clip_outliers")
+            },
+            "summary": {
+                "decision": "local_cleaning",
+                "reason": "Hybrid safeguards selected rule-based fallback"
+            }
+        }
+
         return cleaned_df, report

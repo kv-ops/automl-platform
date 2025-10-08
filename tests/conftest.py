@@ -4,6 +4,8 @@ Fixtures Centralisées pour Tests AutoML Platform
 Fixtures réutilisables pour tous les tests du projet.
 """
 
+import inspect
+import asyncio
 import pytest
 import pandas as pd
 import numpy as np
@@ -14,10 +16,57 @@ from pathlib import Path
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-import asyncio
 import sys
 import types
 import importlib.util
+
+
+# ---------------------------------------------------------------------------
+# Async test support
+# ---------------------------------------------------------------------------
+#
+# The upstream project relies heavily on ``async def`` tests but the lightweight
+# execution environment used for kata style exercises does not install
+# ``pytest-asyncio`` by default.  When pytest encounters a coroutine test
+# without an async-aware plugin it raises the helpful but blocking error message
+# "async def functions are not natively supported".  To keep the dependency
+# footprint minimal we implement a tiny hook that executes coroutine tests
+# within a dedicated event loop.
+#
+# The hook mirrors the behaviour of ``pytest-asyncio`` in "auto" mode: for each
+# async test we create a fresh event loop, run the coroutine to completion and
+# tear the loop down to avoid leaking pending tasks between tests.  Synchronous
+# tests fall back to the default pytest execution path.
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    """Execute ``async def`` tests without requiring pytest-asyncio."""
+
+    test_func = pyfuncitem.obj
+    if inspect.iscoroutinefunction(test_func):
+        signature = inspect.signature(test_func)
+        allowed_args = {
+            name: pyfuncitem.funcargs[name]
+            for name in signature.parameters
+            if name in pyfuncitem.funcargs
+        }
+
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(test_func(**allowed_args))
+        finally:
+            try:
+                loop.run_until_complete(asyncio.gather(*asyncio.all_tasks(loop)))
+            except RuntimeError:
+                # ``all_tasks`` raises when the loop is closed; ignore quietly.
+                pass
+            loop.close()
+            asyncio.set_event_loop(None)
+        return True
+
+    return None
 
 # ---------------------------------------------------------------------------
 # Optional dependency stubs
