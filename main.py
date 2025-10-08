@@ -157,7 +157,7 @@ def train(args):
         config.early_stopping_rounds = simplified_hpo['early_stopping_rounds']
         
         # Use simplified algorithm list
-        config.algorithms = config.get_simplified_algorithms()
+        config.algorithms = config.get_simplified_algorithms(task=args.task)
         
         # Set simplified defaults
         config.cv_folds = 3  # Faster validation
@@ -235,7 +235,7 @@ def train(args):
     # Save mode information
     mode_info = {
         "expert_mode": config.expert_mode,
-        "simplified_algorithms": config.get_simplified_algorithms() if not config.expert_mode else None,
+        "simplified_algorithms": config.get_simplified_algorithms(task=args.task) if not config.expert_mode else None,
         "simplified_hpo": config.get_simplified_hpo_config() if not config.expert_mode else None,
         "version": "3.2.1"
     }
