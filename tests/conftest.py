@@ -58,10 +58,32 @@ def pytest_pyfunc_call(pyfuncitem):
             loop.run_until_complete(test_func(**allowed_args))
         finally:
             try:
-                loop.run_until_complete(asyncio.gather(*asyncio.all_tasks(loop)))
+                pending_tasks = [
+                    task for task in asyncio.all_tasks(loop) if not task.done()
+                ]
             except RuntimeError:
                 # ``all_tasks`` raises when the loop is closed; ignore quietly.
-                pass
+                pending_tasks = []
+
+            for task in pending_tasks:
+                task.cancel()
+
+            if pending_tasks:
+                try:
+                    loop.run_until_complete(
+                        asyncio.wait_for(
+                            asyncio.gather(
+                                *pending_tasks, return_exceptions=True
+                            ),
+                            timeout=1,
+                        )
+                    )
+                except asyncio.TimeoutError:
+                    # Some tasks may ignore cancellation; continue shutting down the loop.
+                    pass
+                except RuntimeError:
+                    # ``run_until_complete`` raises when the loop is closed; ignore quietly.
+                    pass
             loop.close()
             asyncio.set_event_loop(None)
         return True
