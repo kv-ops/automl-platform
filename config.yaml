@@ -233,7 +233,7 @@ log_file: ./logs/automl.log
 # Billing (requires database setup)
 billing:
   enabled: false
-  default_plan: free
+  plan_type: free
 
 # Security
 security:
