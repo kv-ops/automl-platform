@@ -100,7 +100,7 @@ class RetrainingService:
                 timestamp = float(value)
                 if timestamp > 1e12:  # Likely in milliseconds
                     timestamp /= 1000.0
-                return datetime.fromtimestamp(timestamp)
+                return datetime.utcfromtimestamp(timestamp)
 
             if isinstance(value, str):
                 value = value.strip()
@@ -117,7 +117,7 @@ class RetrainingService:
                 timestamp = float(value)
                 if timestamp > 1e12:
                     timestamp /= 1000.0
-                return datetime.fromtimestamp(timestamp)
+                return datetime.utcfromtimestamp(timestamp)
         except (ValueError, TypeError, OSError, OverflowError):
             return None
 
