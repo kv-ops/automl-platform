@@ -120,6 +120,30 @@ class JobRequest:
 # Plan-based Limits Configuration
 # ============================================================================
 
+_PROFESSIONAL_PLAN_LIMITS = {
+    "max_concurrent_jobs": 5,
+    "max_workers": 8,
+    "gpu_access": True,
+    "max_gpu_hours_per_month": 10,
+    "queue_priority": 70,
+    "max_job_duration_minutes": 180,
+    "max_memory_gb": 16,
+    "queues_allowed": [
+        QueueType.CPU_DEFAULT,
+        QueueType.CPU_PRIORITY,
+        QueueType.GPU_INFERENCE,
+        QueueType.LLM,
+        QueueType.BATCH,
+    ],
+    "api_rate_limit": 100,
+    "llm_calls_per_month": 1000,
+    "max_api_calls_per_day": 10000,
+    "max_predictions_per_month": 100000,
+    "priority": 70,
+    "distributed_training": True,
+}
+
+
 PLAN_LIMITS = {
     PlanType.FREE.value: {
         "max_concurrent_jobs": 1,
@@ -153,23 +177,8 @@ PLAN_LIMITS = {
         "priority": 30,
         "distributed_training": False
     },
-    PlanType.PROFESSIONAL.value: {
-        "max_concurrent_jobs": 5,
-        "max_workers": 8,
-        "gpu_access": True,
-        "max_gpu_hours_per_month": 10,
-        "queue_priority": 70,
-        "max_job_duration_minutes": 180,
-        "max_memory_gb": 16,
-        "queues_allowed": [QueueType.CPU_DEFAULT, QueueType.CPU_PRIORITY, 
-                          QueueType.GPU_INFERENCE, QueueType.LLM, QueueType.BATCH],
-        "api_rate_limit": 100,
-        "llm_calls_per_month": 1000,
-        "max_api_calls_per_day": 10000,
-        "max_predictions_per_month": 100000,
-        "priority": 70,
-        "distributed_training": True
-    },
+    PlanType.PRO.value: _PROFESSIONAL_PLAN_LIMITS,
+    PlanType.PROFESSIONAL.value: _PROFESSIONAL_PLAN_LIMITS,
     PlanType.ENTERPRISE.value: {
         "max_concurrent_jobs": 20,
         "max_workers": 50,
