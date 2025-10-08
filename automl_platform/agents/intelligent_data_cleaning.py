@@ -13,10 +13,10 @@ from datetime import datetime
 import json
 import importlib.util
 
-from ..data_quality_agent import (
+from automl_platform.data_quality_agent import (
     DataRobotStyleQualityMonitor,
     IntelligentDataQualityAgent,
-    DataQualityAssessment
+    DataQualityAssessment,
 )
 from .data_cleaning_orchestrator import DataCleaningOrchestrator
 from .agent_config import AgentConfig
