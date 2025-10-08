@@ -9,7 +9,7 @@ installation experience.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Iterable, List, Mapping, MutableMapping, Sequence
+from typing import Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
 # Ordered groups of core dependencies allow generated files to retain helpful
 # commentary while providing setup.py with a flattened install_requires list.
@@ -112,6 +112,38 @@ BASE_EXTRAS: "OrderedDict[str, List[str]]" = OrderedDict(
             ],
         ),
         (
+            "auth",
+            [
+                "python-jose[cryptography]>=3.3.0",
+                "python-keycloak>=3.0.0",
+                "itsdangerous>=2.1.0",
+                "okta-jwt-verifier>=0.2.3",
+                "msal>=1.25.0",
+                "requests-oauthlib>=1.3.1",
+            ],
+        ),
+        (
+            "sso",
+            [
+                "auth0-python>=4.5.0",
+                "python3-saml>=1.16.0",
+                "okta-jwt-verifier>=0.2.3",
+                "msal>=1.25.0",
+                "google-auth-oauthlib>=1.0.0",
+                "requests-oauthlib>=1.3.1",
+            ],
+        ),
+        (
+            "api",
+            [
+                "fastapi-pagination>=0.12.11",
+                "fastapi-versioning>=0.10.0",
+                "python-socketio>=5.9.0",
+                "starlette-exporter>=0.19.0",
+                "slowapi>=0.1.9",
+            ],
+        ),
+        (
             "ui",
             [
                 "streamlit>=1.30.0",
@@ -131,6 +163,17 @@ BASE_EXTRAS: "OrderedDict[str, List[str]]" = OrderedDict(
                 "xlsxwriter>=3.1.0",
                 "fpdf2>=2.7.0",
                 "jinja2>=3.1.0",
+            ],
+        ),
+        (
+            "export",
+            [
+                "onnx>=1.15.0",
+                "onnxruntime>=1.16.0",
+                "skl2onnx>=1.16.0",
+                "sklearn2pmml>=0.100.2",
+                "tensorflow>=2.15.0,<3.0.0",
+                "coremltools>=6.3.0",
             ],
         ),
         (
@@ -166,6 +209,57 @@ BASE_EXTRAS: "OrderedDict[str, List[str]]" = OrderedDict(
             ],
         ),
         (
+            "streaming",
+            [
+                "kafka-python>=2.0.2",
+                "aiokafka>=0.8.1",
+                "pulsar-client>=3.3.0",
+                "pyflink>=1.18.0",
+                "faust-streaming>=0.10.8",
+                "redis>=5.0.0",
+            ],
+        ),
+        (
+            "feature-store",
+            [
+                "feast>=0.35.0",
+                "redis-om>=0.2.2",
+                "deltalake>=0.12.0",
+                "great-expectations>=0.18.0",
+            ],
+        ),
+        (
+            "orchestration",
+            [
+                "apache-airflow>=2.8.0",
+                "prefect>=2.14.0",
+                "dagster>=1.5.0",
+                "kedro>=0.18.0",
+                "luigi>=3.2.0",
+            ],
+        ),
+        (
+            "production",
+            [
+                "docker>=6.1.3",
+                "kubernetes>=28.1.0",
+                "gunicorn>=21.2.0",
+                "uvicorn[standard]>=0.24.0,<1.0.0",
+                "supervisor>=4.2.5",
+            ],
+        ),
+        (
+            "mlops",
+            [
+                "mlflow>=2.9.0,<3.0.0",
+                "dvc>=3.0.0",
+                "wandb>=0.16.0",
+                "neptune-client>=1.7.0",
+                "bentoml>=1.1.0",
+                "great-expectations>=0.18.0",
+            ],
+        ),
+        (
             "quality",
             [
                 "deepchecks>=0.17.0",
@@ -181,6 +275,60 @@ BASE_EXTRAS: "OrderedDict[str, List[str]]" = OrderedDict(
                 "jaeger-client>=4.8.0",
                 "sentry-sdk>=1.40.0",
                 "datadog>=0.49.0",
+            ],
+        ),
+        (
+            "explain",
+            [
+                "shap>=0.43.0",
+                "lime>=0.2.0",
+                "eli5>=0.13.0",
+                "interpret>=0.4.4",
+                "alibi>=0.9.5",
+                "captum>=0.7.0",
+            ],
+        ),
+        (
+            "timeseries",
+            [
+                "prophet>=1.1.4",
+                "statsmodels>=0.14.0",
+                "pmdarima>=2.0.3",
+                "sktime>=0.23.0",
+                "tsfresh>=0.20.0",
+                "darts>=0.27.0",
+                "neuralforecast>=1.7.0",
+            ],
+        ),
+        (
+            "nlp",
+            [
+                "sentence-transformers>=2.2.0",
+                "spacy>=3.7.0",
+                "nltk>=3.8.1",
+                "gensim>=4.3.0",
+                "textblob>=0.17.1",
+                "langdetect>=1.0.9",
+            ],
+        ),
+        (
+            "vision",
+            [
+                "opencv-python>=4.8.0",
+                "pillow>=10.0.0",
+                "albumentations>=1.3.1",
+                "supervision>=0.17.0",
+                "ultralytics>=8.0.0",
+            ],
+        ),
+        (
+            "hpo",
+            [
+                "optuna>=3.4.0",
+                "hyperopt>=0.2.7",
+                "scikit-optimize>=0.9.0",
+                "nevergrad>=1.0.0",
+                "bayesian-optimization>=1.4.3",
             ],
         ),
         (
@@ -222,6 +370,28 @@ BASE_EXTRAS: "OrderedDict[str, List[str]]" = OrderedDict(
                 "torchaudio>=2.1.0,<3.0.0",
                 "tensorflow>=2.15.0,<3.0.0",
                 "pytorch-lightning>=2.1.0",
+            ],
+        ),
+        (
+            "distributed-gpu",
+            [
+                "horovod[pytorch]>=0.28.0",
+                "deepspeed>=0.12.0",
+                "fairscale>=0.4.13",
+            ],
+        ),
+        (
+            "automl-gpu",
+            [
+                "autogluon>=1.0.0",
+                "nni>=3.0.0",
+            ],
+        ),
+        (
+            "serving-gpu",
+            [
+                "tritonclient[grpc]>=2.38.0",
+                "tensorflow-serving-api>=2.15.0",
             ],
         ),
         (
@@ -271,21 +441,43 @@ BASE_EXTRAS: "OrderedDict[str, List[str]]" = OrderedDict(
 # bundles.  They intentionally omit direct package listings so that the manifest
 # can expand them consistently across setup.py, pyproject.toml, and the
 # documentation generator.
+ENTERPRISE_EXTRAS: Tuple[str, ...] = (
+    "nocode",
+    "cloud",
+    "monitoring",
+    "quality",
+    "distributed",
+    "llm",
+    "workers",
+    "auth",
+    "sso",
+    "production",
+    "mlops",
+    "feature-store",
+    "streaming",
+    "orchestration",
+)
+
+GPU_COMPLETE_EXTRAS: Tuple[str, ...] = (
+    "gpu",
+    "deep",
+    "distributed-gpu",
+    "automl-gpu",
+    "serving-gpu",
+)
+
+ALL_EXTRAS_BUNDLE: Tuple[str, ...] = tuple(BASE_EXTRAS.keys()) + (
+    "nocode",
+    "enterprise",
+    "gpu-complete",
+)
+
 AGGREGATED_EXTRAS: "OrderedDict[str, Sequence[str]]" = OrderedDict(
     [
         ("nocode", ("ui", "connectors", "reporting")),
-        (
-            "enterprise",
-            (
-                "nocode",
-                "cloud",
-                "monitoring",
-                "quality",
-                "distributed",
-                "llm",
-                "workers",
-            ),
-        ),
+        ("enterprise", ENTERPRISE_EXTRAS),
+        ("gpu-complete", GPU_COMPLETE_EXTRAS),
+        ("all", ALL_EXTRAS_BUNDLE),
     ]
 )
 
@@ -294,15 +486,30 @@ AGGREGATED_EXTRAS: "OrderedDict[str, Sequence[str]]" = OrderedDict(
 OPTIONAL_DEPENDENCY_CATEGORIES: "OrderedDict[str, List[str]]" = OrderedDict(
     [
         ("Intelligent Agents", ["agents"]),
+        ("Security & Access", ["auth", "sso"]),
+        ("API & Integration", ["api", "streaming", "orchestration"]),
+        ("Feature Management", ["feature-store"]),
         ("User Experience", ["ui", "nocode"]),
-        ("Reporting", ["reporting"]),
+        ("Reporting", ["reporting", "export"]),
         ("Connectors & Data Sources", ["connectors", "cloud"]),
-        ("Monitoring & Quality", ["monitoring", "quality"]),
+        ("Monitoring & Quality", ["monitoring", "quality", "mlops", "production"]),
         ("LLM Integration", ["llm"]),
-        ("Distributed & GPU", ["distributed", "gpu", "deep"]),
+        ("Advanced Analytics", ["explain", "timeseries", "nlp", "vision", "hpo"]),
+        (
+            "Distributed & GPU",
+            [
+                "distributed",
+                "gpu",
+                "deep",
+                "distributed-gpu",
+                "automl-gpu",
+                "serving-gpu",
+                "gpu-complete",
+            ],
+        ),
         ("Automation & Workers", ["workers"]),
         ("Developer Tooling", ["tests", "docs", "dev"]),
-        ("Enterprise Bundle", ["enterprise"]),
+        ("Enterprise Bundle", ["enterprise", "all"]),
     ]
 )
 

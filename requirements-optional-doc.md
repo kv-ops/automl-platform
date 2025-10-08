@@ -134,6 +134,7 @@ Production API server features:
 - Rate limiting
 - Socket.IO
 - API versioning
+- Prometheus exporter for FastAPI
 
 ### `[monitoring]` - Observability
 Monitoring and observability tools:
@@ -187,6 +188,14 @@ Computer vision tools:
 - Supervision
 - Ultralytics (YOLO)
 
+### `[hpo]` - Hyperparameter Optimization
+Advanced optimization libraries:
+- Optuna for Bayesian optimization
+- Hyperopt for distributed search
+- Scikit-Optimize for sequential model-based optimization
+- Nevergrad evolutionary strategies
+- Bayesian Optimization utilities
+
 ## Infrastructure Extras
 
 ### `[cloud]` - Cloud Providers
@@ -213,6 +222,13 @@ Real-time data processing:
 - Redis Streams
 - Faust
 
+### `[feature-store]` - Unified Feature Store
+Centralized feature management:
+- Feast feature store SDK
+- Delta Lake integration for historical storage
+- Redis OM for low-latency serving
+- Data quality with Great Expectations
+
 ### `[orchestration]` - Workflow Orchestration
 Workflow management:
 - Apache Airflow
@@ -233,7 +249,8 @@ ML lifecycle management:
 Production deployment tools:
 - Docker
 - Kubernetes
-- Nginx
+- Gunicorn and Uvicorn for API serving
+- Supervisor for process management
 
 ## Development Extras
 
