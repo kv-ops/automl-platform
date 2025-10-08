@@ -9,6 +9,7 @@ import json
 import tempfile
 import os
 import sys
+import logging
 from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
 import pandas as pd
@@ -67,17 +68,24 @@ class TestHealthEndpoints:
         assert 'timestamp' in data
         assert 'services' in data
     
-    def test_metrics_endpoint(self, client):
+    def test_metrics_endpoint(self, client, caplog):
         """Test metrics endpoint"""
-        with patch('automl_platform.api.api.PROMETHEUS_AVAILABLE', True):
-            with patch('automl_platform.api.api.generate_latest') as mock_generate:
-                mock_generate.return_value = b"# HELP test_metric Test metric\n# TYPE test_metric gauge\ntest_metric 1.0\n"
-                
+        with patch('automl_platform.api.api.PROMETHEUS_AVAILABLE', True), \
+             patch('automl_platform.api.api.REGISTRY', None), \
+             patch('automl_platform.api.api.CollectorRegistry') as mock_registry_cls, \
+             patch('automl_platform.api.api.generate_latest') as mock_generate:
+            mock_registry = object()
+            mock_registry_cls.return_value = mock_registry
+            mock_generate.return_value = b"# HELP test_metric Test metric\n# TYPE test_metric gauge\ntest_metric 1.0\n"
+
+            with caplog.at_level(logging.WARNING):
                 response = client.get("/metrics")
-                
-                assert response.status_code == 200
-                assert b"test_metric" in response.content
-    
+
+            assert response.status_code == 200
+            assert b"test_metric" in response.content
+            mock_generate.assert_called_once_with(mock_registry)
+            assert "Prometheus default registry is missing" in caplog.text
+
     def test_metrics_not_available(self, client):
         """Test metrics endpoint when Prometheus is not available"""
         with patch('automl_platform.api.api.PROMETHEUS_AVAILABLE', False):

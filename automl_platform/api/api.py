@@ -364,13 +364,42 @@ async def metrics_endpoint():
     metrics_generator = getattr(module_ref, "generate_latest", None)
     registry = getattr(module_ref, "REGISTRY", None)
 
-    if not prometheus_available or metrics_generator is None or registry is None:
+    if not prometheus_available or metrics_generator is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Prometheus client not installed. Install with: pip install prometheus-client"
         )
 
-    metrics_bytes = metrics_generator(registry)
+    used_fallback_registry = False
+    if registry is None:
+        registry_factory = getattr(module_ref, "CollectorRegistry", None)
+        if callable(registry_factory):
+            try:
+                registry = registry_factory()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "Prometheus default registry unavailable and fallback collector creation failed: %s",
+                    exc,
+                )
+                registry = None
+            else:
+                used_fallback_registry = True
+        else:
+            logger.warning(
+                "Prometheus default registry is missing and CollectorRegistry constructor is unavailable; "
+                "attempting to generate metrics without an explicit registry.",
+            )
+
+    try:
+        metrics_bytes = metrics_generator(registry) if registry is not None else metrics_generator()
+    except TypeError:
+        metrics_bytes = metrics_generator()
+
+    if used_fallback_registry:
+        logger.warning(
+            "Prometheus default registry is missing; served metrics using a temporary CollectorRegistry instance.",
+        )
+
     media_type = globals().get("CONTENT_TYPE_LATEST") or "text/plain; version=0.0.4; charset=utf-8"
     return Response(content=metrics_bytes, media_type=media_type)
 
