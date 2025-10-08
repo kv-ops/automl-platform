@@ -127,34 +127,41 @@ class TestConfigManager:
     def test_config_validation_cross_component(self):
         """Test cross-component validation with various inconsistencies."""
         manager = ConfigManager(config_path="non_existent.yaml")
-        
+
         # Test 1: Worker count exceeds plan limit
         manager.config.billing.enabled = True
         manager.config.billing.plan_type = 'starter'
-        manager.config.billing.quotas = {
-            'starter': {'max_workers': 2}
-        }
-        manager.config.worker.max_workers = 10
-        
+        starter_limit = manager.config.billing.quotas['starter']['max_workers']
+        manager.config.worker.max_workers = starter_limit + 5
+
         manager._validate_cross_component()
-        assert manager.config.worker.max_workers == 2  # Should be adjusted
-        
+        assert manager.config.worker.max_workers == starter_limit  # Should be adjusted
+
         # Test 2: GPU workers without plan support
         manager.config.worker.gpu_workers = 5
-        manager.config.billing.quotas['starter']['gpu_enabled'] = False
-        
+
         manager._validate_cross_component()
         assert manager.config.worker.gpu_workers == 0  # Should be disabled
-        
-        # Test 3: Kafka streaming without brokers
+
+        # Test 3: Professional plan should retain GPU workers and adjust worker count
+        manager.config.billing.plan_type = 'professional'
+        professional_limit = manager.config.billing.quotas['professional']['max_workers']
+        manager.config.worker.max_workers = professional_limit + 3
+        manager.config.worker.gpu_workers = 4
+
+        manager._validate_cross_component()
+        assert manager.config.worker.max_workers == professional_limit
+        assert manager.config.worker.gpu_workers == 4  # GPU allowed for professional
+
+        # Test 4: Kafka streaming without brokers
         manager.config.streaming.enabled = True
         manager.config.streaming.platform = "kafka"
         manager.config.streaming.brokers = []
-        
+
         with pytest.raises(ValueError, match="Kafka brokers not configured"):
             manager._validate_cross_component()
-        
-        # Test 4: RGPD audit requires monitoring
+
+        # Test 5: RGPD audit requires monitoring
         manager.config.streaming.enabled = False  # Disable to avoid previous error
         manager.config.rgpd.enabled = True
         manager.config.rgpd.audit_all_data_access = True
