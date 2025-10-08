@@ -408,7 +408,21 @@ class TestDataRobotStyleQualityMonitor:
             'target': np.random.randn(100)
         })
         df['leaky_feature'] = df['target'] * 2 + np.random.randn(100) * 0.01  # Almost perfect correlation
-        
+
+        leakage_risk = monitor._detect_target_leakage(df, 'target')
+        assert leakage_risk is RiskLevel.HIGH
+
+    def test_detect_target_leakage_categorical_alignment(self, monitor):
+        """Factorized categorical targets must align indexes when correlating."""
+        df = pd.DataFrame(
+            {
+                'leaky_feature': [0.1, 1.0, 0.2, 1.1],
+                'benign_feature': [10, 11, 12, 13],
+                'target': ['yes', 'no', 'yes', 'no'],
+            },
+            index=pd.Index([101, 105, 110, 115], name='custom_id'),
+        )
+
         leakage_risk = monitor._detect_target_leakage(df, 'target')
         assert leakage_risk is RiskLevel.HIGH
     

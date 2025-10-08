@@ -1186,18 +1186,28 @@ class DataRobotStyleQualityMonitor:
             
         target_series = df[target_column]
         max_correlation = 0.0
-        
+
+        if pd.api.types.is_numeric_dtype(target_series):
+            target_numeric = pd.Series(target_series, index=df.index)
+        else:
+            # Factorize categorical targets but preserve the original index so that
+            # pandas doesn't misalign during correlation when the dataframe has a
+            # custom index (e.g. filtered views or domain identifiers).
+            encoded_target = pd.factorize(target_series)[0]
+            target_numeric = pd.Series(encoded_target, index=df.index)
+
         # Check for perfect correlation
         for col in df.columns:
             if col == target_column or not pd.api.types.is_numeric_dtype(df[col]):
                 continue
 
             try:
-                corr = pd.Series(df[col]).corr(pd.Series(target_series))
+                feature_series = pd.Series(df[col], index=df.index)
+                corr = feature_series.corr(target_numeric)
                 if pd.notna(corr) and abs(corr) > self.quality_thresholds["correlation_high"]:
                     max_correlation = max(max_correlation, abs(corr))
             except Exception:
-                 continue
+                continue
         
         # Return graduated risk levels
         if max_correlation >= 0.95:
