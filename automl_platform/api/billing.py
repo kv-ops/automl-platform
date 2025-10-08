@@ -47,6 +47,7 @@ class PlanType(Enum):
     FREE = "free"
     TRIAL = "trial"
     STARTER = "starter"
+    PRO = "pro"
     PROFESSIONAL = "professional"
     ENTERPRISE = "enterprise"
     CUSTOM = "custom"
