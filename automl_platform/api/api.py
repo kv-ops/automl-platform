@@ -12,6 +12,7 @@ import sys
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+import asyncio
 import inspect
 
 from fastapi import (
@@ -33,9 +34,6 @@ import numpy as np
 from pathlib import Path
 import uuid
 from io import BytesIO
-from fastapi.dependencies.utils import get_dependant, solve_dependencies
-from contextlib import AsyncExitStack
-from unittest.mock import AsyncMock, Mock
 
 # ============================================================================
 # Prometheus metrics imports
@@ -538,7 +536,7 @@ def _feature_available(flag_name: str) -> bool:
     return bool(getattr(_module_ref(), flag_name, False))
 
 
-async def _get_current_user_dependency(request: Request):
+async def _get_current_user_dependency():
     """Resolve the current user, accommodating patched dependencies in tests."""
 
     module = _module_ref()
@@ -549,48 +547,22 @@ async def _get_current_user_dependency(request: Request):
     if dependency is None:
         return None
 
-    dependant = get_dependant(path=request.url.path, call=dependency)
-    async with AsyncExitStack() as stack:
-        solved = await solve_dependencies(
-            request=request,
-            dependant=dependant,
-            dependency_overrides_provider=request.app.dependency_overrides,
-            async_exit_stack=stack,
-            embed_body_fields=False,
-        )
+    try:
+        if inspect.iscoroutinefunction(dependency):
+            return await dependency()  # type: ignore[func-returns-value]
 
-        if solved.errors:
-            if isinstance(dependency, (Mock, AsyncMock)):
-                try:
-                    result = dependency()
-                    if inspect.isawaitable(result):
-                        return await result
-                    return result
-                except HTTPException:
-                    raise
-                except Exception as exc:  # pragma: no cover - defensive
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Not authenticated"
-                    ) from exc
-
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated"
-            )
-
-        try:
-            result = dependency(**solved.values)
-            if inspect.isawaitable(result):
-                return await result
-            return result
-        except HTTPException:
-            raise
-        except Exception as exc:  # pragma: no cover - defensive
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated"
-            ) from exc
+        result = dependency()
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
+    except TypeError as exc:
+        # FastAPI will normally inject required parameters. When running in
+        # isolated tests without the full auth stack we surface an auth error
+        # instead of returning a validation failure.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated"
+        ) from exc
 
 
 def _require_auth(current_user: Optional[User]) -> None:
