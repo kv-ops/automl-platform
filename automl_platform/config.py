@@ -18,6 +18,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _coerce_bool(value: Any) -> Optional[bool]:
+    """Normalize common truthy/falsey representations to booleans."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return bool(value)
+
+
 class PlanType(Enum):
     """Subscription plans"""
     FREE = "free"
@@ -840,6 +853,8 @@ class AutoMLConfig:
     
     # AGENT-FIRST FLAG
     enable_agent_first: bool = field(default=False)
+    # Hybrid cleaning flag mirrors Agent-First configuration when not explicitly set
+    enable_hybrid_mode: bool = field(default=True)
     """
     Enable Agent-First approach for template-free AutoML.
     
@@ -1102,8 +1117,22 @@ class AutoMLConfig:
         # Check if OpenAI API key is available
         if not self.llm.api_key and not os.getenv("OPENAI_API_KEY"):
             return False
-        
+
         return True
+
+    def get_hybrid_mode_flag(self) -> bool:
+        """Return the resolved hybrid mode flag preferring nested Agent-First config."""
+        nested = None
+        if hasattr(self, 'agent_first') and self.agent_first is not None:
+            nested = _coerce_bool(getattr(self.agent_first, 'enable_hybrid_mode', None))
+
+        top_level = _coerce_bool(getattr(self, 'enable_hybrid_mode', None))
+
+        if nested is not None:
+            return nested
+        if top_level is not None:
+            return top_level
+        return False
     
     @classmethod
     def from_yaml(cls, filepath: str) -> "AutoMLConfig":
@@ -1113,6 +1142,8 @@ class AutoMLConfig:
 
         if config_dict:
             original_enable_agent_first = config_dict.get('enable_agent_first')
+            original_enable_hybrid_mode = config_dict.get('enable_hybrid_mode')
+            hybrid_flag_defined = 'enable_hybrid_mode' in config_dict
             agent_first_overridden_by_env = False
             # Check for expert mode in environment variable first
             expert_mode_env = os.getenv("AUTOML_EXPERT_MODE", "").lower()
@@ -1146,11 +1177,14 @@ class AutoMLConfig:
             # Propagate Agent-First enablement when nested flag is provided
             agent_first_cfg = config_dict.get('agent_first')
             agent_first_enabled = None
+            agent_first_hybrid = None
 
             if isinstance(agent_first_cfg, dict):
                 agent_first_enabled = agent_first_cfg.get('enabled')
+                agent_first_hybrid = agent_first_cfg.get('enable_hybrid_mode')
             elif hasattr(agent_first_cfg, 'enabled'):
                 agent_first_enabled = getattr(agent_first_cfg, 'enabled')
+                agent_first_hybrid = getattr(agent_first_cfg, 'enable_hybrid_mode', None)
 
             if agent_first_enabled is not None:
                 current_enable_agent_first = config_dict.get('enable_agent_first')
@@ -1175,6 +1209,21 @@ class AutoMLConfig:
                         agent_first_enabled,
                     )
                     config_dict['enable_agent_first'] = agent_first_enabled
+
+            if agent_first_hybrid is not None:
+                normalized_hybrid = _coerce_bool(agent_first_hybrid)
+                normalized_top_level = _coerce_bool(original_enable_hybrid_mode)
+
+                if not hybrid_flag_defined or normalized_top_level is None:
+                    config_dict['enable_hybrid_mode'] = normalized_hybrid
+                elif normalized_top_level != normalized_hybrid:
+                    logger.warning(
+                        "Conflicting hybrid mode flags in YAML: enable_hybrid_mode=%s vs agent_first.enable_hybrid_mode=%s. "
+                        "Using nested agent_first.enable_hybrid_mode.",
+                        original_enable_hybrid_mode,
+                        agent_first_hybrid,
+                    )
+                    config_dict['enable_hybrid_mode'] = normalized_hybrid
 
             # Handle legacy configs
             if 'algorithms' in config_dict and not isinstance(config_dict['algorithms'], list):

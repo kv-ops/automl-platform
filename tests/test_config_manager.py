@@ -135,6 +135,17 @@ class TestConfigManager:
         assert config.agent_first.enabled is True
         assert config.enable_agent_first is True
 
+    def test_from_yaml_propagates_hybrid_mode_flag(self, tmp_path):
+        """Nested hybrid flag should populate top-level enable_hybrid_mode when missing."""
+        config_path = tmp_path / "agent_first_hybrid.yaml"
+        with config_path.open('w') as f:
+            yaml.safe_dump({'agent_first': {'enabled': True, 'enable_hybrid_mode': False}}, f)
+
+        config = AutoMLConfig.from_yaml(str(config_path))
+
+        assert config.agent_first.enable_hybrid_mode is False
+        assert config.enable_hybrid_mode is False
+
     def test_from_yaml_conflicting_agent_first_prefers_nested(self, tmp_path, caplog):
         """Nested Agent-First flag should override conflicting top-level flag from YAML."""
         config_path = tmp_path / "agent_first_conflict.yaml"
@@ -159,6 +170,22 @@ class TestConfigManager:
 
         assert config.enable_agent_first is False
         assert "AUTOML_AGENT_FIRST environment variable overrides nested" in caplog.text
+
+    def test_get_hybrid_mode_flag_prefers_nested(self):
+        """AutoMLConfig should expose helper resolving hybrid mode from nested config."""
+        config = AutoMLConfig()
+        config.enable_hybrid_mode = True
+        config.agent_first.enable_hybrid_mode = False
+
+        assert config.get_hybrid_mode_flag() is False
+
+    def test_get_hybrid_mode_flag_defaults_to_top_level(self):
+        """Hybrid helper should fall back to top-level flag when nested is undefined."""
+        config = AutoMLConfig()
+        config.enable_hybrid_mode = False
+        config.agent_first.enable_hybrid_mode = None
+
+        assert config.get_hybrid_mode_flag() is False
 
     def test_config_validation_cross_component(self):
         """Test cross-component validation with various inconsistencies."""
