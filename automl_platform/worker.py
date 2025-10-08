@@ -119,7 +119,7 @@ from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
 from .config import AutoMLConfig, load_config
 from .storage import StorageManager
 from .monitoring import MonitoringService, ModelMonitor
-from .infrastructure import TenantManager, SecurityManager
+from .api.infrastructure import TenantManager, SecurityManager
 from .billing import BillingManager, UsageTracker
 from .metrics import calculate_metrics, detect_task
 
