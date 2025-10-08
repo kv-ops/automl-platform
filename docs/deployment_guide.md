@@ -465,6 +465,19 @@ Les données sont persistées dans des volumes Docker :
 - `minio_data` : Fichiers et modèles
 - `shared_models` : Modèles partagés entre services
 
+### Configuration Google Cloud Storage
+
+L'option `storage.backend: gcs` permet de déléguer le stockage des modèles et des jeux de données à Google Cloud Storage. Pour un déploiement sécurisé :
+
+1. **Création des buckets** : créez manuellement (ou via IaC) les buckets `models`, `datasets` et `artifacts` dans votre projet GCP. Assignez-leur une stratégie de rétention adaptée à vos contraintes de conformité.
+2. **Authentification** :
+   - En développement, utilisez un compte de service dédié (rôle minimal `Storage Object Admin`) et exposez son chemin via la clé `storage.credentials_path` ou la variable d'environnement `GOOGLE_APPLICATION_CREDENTIALS`.
+   - En production sur GKE, privilégiez **Workload Identity** afin d'éviter la distribution de fichiers de clés.
+3. **Sécurité des secrets** : ne validez jamais les fichiers de crédential dans Git. Stockez-les dans un coffre-fort (Secret Manager, Vault…) et montez-les au runtime.
+4. **Validation** : exécutez `pytest tests/test_storage.py::TestStorageManager::test_storage_manager_gcs_backend` pour vérifier que la configuration GCS est fonctionnelle.
+
+> 💡 Lorsque `storage.credentials_path` est défini, la validation de configuration s'assure désormais que le fichier existe réellement afin d'éviter les déploiements incomplets.
+
 ## Monitoring et supervision
 
 ### Prometheus

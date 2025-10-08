@@ -1262,6 +1262,11 @@ class AutoMLConfig:
             
             # Validate storage config
             assert self.storage.backend in ["local", "minio", "s3", "gcs"], f"Invalid storage backend: {self.storage.backend}"
+            if self.storage.backend == "gcs" and self.storage.credentials_path:
+                credentials_file = Path(self.storage.credentials_path).expanduser()
+                assert credentials_file.exists(), (
+                    f"GCS credentials_path does not exist: {credentials_file}"
+                )
             
             # Validate monitoring config
             if self.monitoring.enabled:

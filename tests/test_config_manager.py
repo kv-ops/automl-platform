@@ -264,10 +264,27 @@ class TestConfigManager:
 
         assert config.validate()
 
+    def test_validate_accepts_gcs_backend_without_credentials_path(self):
+        """GCS backend validates when relying on ambient credentials."""
+        config = AutoMLConfig()
+        config.storage.backend = "gcs"
+        config.storage.credentials_path = None
+
+        assert config.validate()
+
+    def test_validate_gcs_backend_raises_on_missing_credentials_file(self, tmp_path):
+        """Missing credentials path is surfaced during validation for GCS."""
+        config = AutoMLConfig()
+        config.storage.backend = "gcs"
+        config.storage.credentials_path = str(tmp_path / "missing.json")
+
+        with pytest.raises(AssertionError, match="credentials_path"):
+            config.validate()
+
     def test_get_service_config(self):
         """Test getting configuration for specific services."""
         manager = ConfigManager(config_path="non_existent.yaml")
-        
+
         # Get storage config
         storage_config = manager.get_service_config("storage")
         assert isinstance(storage_config, StorageConfig)
