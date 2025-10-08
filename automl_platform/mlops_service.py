@@ -41,10 +41,17 @@ from .metrics import calculate_metrics, detect_task
 try:
     from .pipeline_cache import PipelineCache, CacheConfig, warm_cache, monitor_cache_health
     from .incremental_learning import IncrementalLearner
-    from .distributed_training import DistributedTrainer
+    from .distributed_training import DistributedTrainer, DistributedConfig
     OPTIMIZATIONS_AVAILABLE = True
 except ImportError:
     OPTIMIZATIONS_AVAILABLE = False
+    PipelineCache = None
+    CacheConfig = None
+    warm_cache = None
+    monitor_cache_health = None
+    IncrementalLearner = None
+    DistributedTrainer = None
+    DistributedConfig = None
 
 logger = logging.getLogger(__name__)
 
@@ -228,10 +235,14 @@ class RetrainingService:
         
         self.distributed_trainer = None
         if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'distributed_training') and config.distributed_training:
-            self.distributed_trainer = DistributedTrainer(
+            dist_config = DistributedConfig(
                 backend=getattr(config, 'distributed_backend', 'ray'),
-                n_workers=getattr(config, 'n_workers', 4)
+                num_workers=getattr(config, 'n_workers', 4),
+                num_cpus_per_worker=getattr(config, 'num_cpus_per_worker', getattr(config, 'n_cpus', 2)),
+                num_gpus_per_worker=getattr(config, 'num_gpus_per_worker', getattr(config, 'n_gpus', 0.0)),
+                memory_per_worker_gb=getattr(config, 'memory_per_worker_gb', getattr(config, 'memory_gb', 4)),
             )
+            self.distributed_trainer = DistributedTrainer(dist_config)
     
     async def check_retraining_needed(self, model_name: str) -> bool:
         """Check if model needs retraining"""
