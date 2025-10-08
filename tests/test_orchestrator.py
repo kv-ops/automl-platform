@@ -8,6 +8,7 @@ from pathlib import Path
 from sklearn.datasets import make_classification, make_regression
 import sys
 import os
+import builtins
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Try importing the module, skip tests if not available
@@ -309,6 +310,32 @@ class TestOrchestrator:
         
         # Should have either SHAP, LIME, or feature importance
         assert explanations['method'] in ['shap', 'lime', 'feature_importance']
+
+    def test_explain_predictions_feature_importance_fallback(self, monkeypatch):
+        """Ensure fallback to feature importance when SHAP and LIME are unavailable."""
+
+        X, y = make_classification(
+            n_samples=60, n_features=5, n_classes=2, random_state=42
+        )
+        X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(5)])
+        y = pd.Series(y)
+
+        orchestrator = AutoMLOrchestrator(self.config)
+        orchestrator.fit(X, y)
+
+        original_import = builtins.__import__
+
+        def mocked_import(name, *args, **kwargs):
+            if name in {'shap', 'lime', 'lime.lime_tabular'}:
+                raise ImportError("mocked missing dependency")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, '__import__', mocked_import)
+
+        explanations = orchestrator.explain_predictions(X, indices=[0, 1, 2])
+
+        assert explanations['method'] == 'feature_importance'
+        assert 'importances_mean' in explanations
 
 
 @pytest.mark.skipif(not MODULE_AVAILABLE, reason="automl_platform modules not available")

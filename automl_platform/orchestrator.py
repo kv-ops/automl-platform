@@ -57,6 +57,11 @@ class AutoMLOrchestrator:
         self.best_pipeline = None
         self.task = None
         self.feature_importance = {}
+        self._explanation_background = None
+        self._explanation_feature_names = None
+        self._explanation_training_sample = None
+        self._explanation_training_target = None
+        self._feature_names = None
         
         # Initialize optimization components
         self.distributed_trainer = None
@@ -388,7 +393,7 @@ class AutoMLOrchestrator:
         # Select best pipeline
         if self.leaderboard:
             self.best_pipeline = self.leaderboard[0]['pipeline']
-            
+
             # Cache the best pipeline
             if use_cache and self.pipeline_cache and cache_key:
                 self.pipeline_cache.set_pipeline(
@@ -405,7 +410,13 @@ class AutoMLOrchestrator:
                 self._calculate_feature_importance(X, y)
             except:
                 pass
-            
+
+            # Prepare data for explanation methods
+            try:
+                self._prepare_explanation_data(X, y)
+            except Exception as exc:
+                logger.debug(f"Failed to prepare explanation data: {exc}")
+
             # Register best model in MLflow
             if register_best_model:
                 if model_name is None:
@@ -659,12 +670,12 @@ class AutoMLOrchestrator:
     
     def _calculate_feature_importance(self, X: pd.DataFrame, y: pd.Series) -> None:
         """Calculate feature importance using permutation"""
-        
+
         from sklearn.inspection import permutation_importance
-        
+
         try:
             X_transformed = self.best_pipeline.named_steps['preprocessor'].transform(X)
-            
+
             result = permutation_importance(
                 self.best_pipeline.named_steps['model'],
                 X_transformed, y,
@@ -672,14 +683,302 @@ class AutoMLOrchestrator:
                 random_state=self.config.random_state,
                 n_jobs=-1
             )
-            
+
             self.feature_importance = {
                 'importances_mean': result.importances_mean.tolist(),
                 'importances_std': result.importances_std.tolist()
             }
-            
+
         except Exception as e:
             logger.warning(f"Could not calculate feature importance: {e}")
+
+    def _prepare_explanation_data(self, X: pd.DataFrame, y: pd.Series) -> None:
+        """Prepare cached data structures for explanation strategies."""
+
+        if len(X) == 0:
+            return
+
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        self._feature_names = list(X.columns)
+
+        sample_size = min(getattr(self.config, 'explanation_background_size', 200), len(X))
+        if sample_size <= 0:
+            return
+
+        random_state = getattr(self.config, 'random_state', None)
+        sample = X.sample(sample_size, random_state=random_state) if len(X) > sample_size else X.copy()
+        self._explanation_training_sample = sample
+
+        if isinstance(y, pd.Series):
+            try:
+                self._explanation_training_target = y.loc[sample.index]
+            except Exception:
+                self._explanation_training_target = y.iloc[:len(sample)]
+        else:
+            self._explanation_training_target = None
+
+        transformed_sample = sample
+        feature_names = list(sample.columns)
+
+        if isinstance(self.best_pipeline, Pipeline):
+            preprocessor = self.best_pipeline.named_steps.get('preprocessor')
+            if preprocessor is not None:
+                transformed_sample = preprocessor.transform(sample)
+                if hasattr(transformed_sample, 'toarray'):
+                    transformed_sample = transformed_sample.toarray()
+                try:
+                    feature_names = list(preprocessor.get_feature_names_out())
+                except Exception:
+                    feature_names = list(sample.columns)
+        else:
+            transformed_sample = sample.values
+
+        transformed_array = np.asarray(transformed_sample)
+        self._explanation_background = transformed_array
+        self._explanation_feature_names = feature_names
+
+    def _refresh_feature_importance(self) -> None:
+        """Ensure feature importance is available using cached data or model attributes."""
+
+        if self.feature_importance:
+            return
+
+        if self._explanation_training_sample is not None and self._explanation_training_target is not None:
+            try:
+                self._calculate_feature_importance(
+                    self._explanation_training_sample,
+                    self._explanation_training_target
+                )
+            except Exception as exc:
+                logger.debug(f"Permutation importance failed during refresh: {exc}")
+
+        if self.feature_importance:
+            return
+
+        model = self.best_pipeline
+        feature_names = self._explanation_feature_names or self._feature_names
+
+        if isinstance(self.best_pipeline, Pipeline):
+            model = self.best_pipeline.named_steps.get('model', list(self.best_pipeline.named_steps.values())[-1])
+
+        if hasattr(model, 'feature_importances_'):
+            importances = np.asarray(model.feature_importances_)
+            self.feature_importance = {
+                'importances_mean': importances.tolist(),
+                'importances_std': [0.0] * len(importances)
+            }
+        elif hasattr(model, 'coef_'):
+            coef = np.asarray(model.coef_)
+            if coef.ndim > 1:
+                coef = np.mean(np.abs(coef), axis=0)
+            else:
+                coef = np.abs(coef)
+            self.feature_importance = {
+                'importances_mean': coef.tolist(),
+                'importances_std': [0.0] * len(coef)
+            }
+
+        if self.feature_importance and feature_names:
+            # Align lengths if mismatch
+            mean_vals = self.feature_importance.get('importances_mean', [])
+            if len(mean_vals) != len(feature_names):
+                min_len = min(len(mean_vals), len(feature_names))
+                self.feature_importance['importances_mean'] = mean_vals[:min_len]
+                if 'importances_std' in self.feature_importance:
+                    self.feature_importance['importances_std'] = self.feature_importance['importances_std'][:min_len]
+
+    def explain_predictions(self, X: pd.DataFrame, indices: Optional[List[int]] = None, method: Optional[str] = None) -> Dict[str, Any]:
+        """Explain predictions using SHAP, LIME, or feature importance."""
+
+        if self.best_pipeline is None:
+            raise ValueError("No model trained yet")
+
+        if X is None:
+            raise ValueError("Input features are required for explanation")
+
+        if not isinstance(X, pd.DataFrame):
+            columns = self._feature_names
+            if columns is None and hasattr(self.best_pipeline, 'feature_names_in_'):
+                columns = list(self.best_pipeline.feature_names_in_)
+            if columns is None and self._explanation_training_sample is not None:
+                columns = list(self._explanation_training_sample.columns)
+            if columns is None:
+                columns = [f'feature_{i}' for i in range(np.asarray(X).shape[1])]
+            X_df = pd.DataFrame(X, columns=columns)
+        else:
+            X_df = X
+
+        n_samples = len(X_df)
+        if n_samples == 0:
+            raise ValueError("No samples available for explanation")
+
+        if indices is None:
+            default_count = min(getattr(self.config, 'explanation_default_samples', 5), n_samples)
+            indices = list(range(default_count))
+        else:
+            indices = sorted({int(i) for i in indices if 0 <= int(i) < n_samples})
+
+        if not indices:
+            raise ValueError("No valid indices selected for explanation")
+
+        max_samples = getattr(self.config, 'explanation_max_samples', 50)
+        if len(indices) > max_samples:
+            rng = np.random.default_rng(getattr(self.config, 'random_state', None))
+            indices = sorted(rng.choice(indices, size=max_samples, replace=False).tolist())
+
+        X_subset = X_df.iloc[indices].copy()
+
+        shap_error = None
+        lime_error = None
+
+        # Attempt SHAP explanations
+        if method in (None, 'shap'):
+            try:
+                import shap  # type: ignore
+
+                background = self._explanation_background
+                if background is None:
+                    background = X_subset.values
+
+                background = np.asarray(background)
+                if background.ndim == 1:
+                    background = background.reshape(1, -1)
+
+                max_background = getattr(self.config, 'explanation_background_size', 200)
+                if background.shape[0] > max_background:
+                    if hasattr(shap, 'sample'):
+                        background = shap.sample(background, max_background)
+                    else:
+                        rng = np.random.default_rng(getattr(self.config, 'random_state', None))
+                        idx = rng.choice(background.shape[0], size=max_background, replace=False)
+                        background = background[idx]
+
+                model = self.best_pipeline
+                transformed_subset = X_subset.values
+                feature_names = list(X_subset.columns)
+
+                if isinstance(self.best_pipeline, Pipeline):
+                    steps = self.best_pipeline.named_steps
+                    preprocessor = steps.get('preprocessor')
+                    if preprocessor is not None:
+                        transformed_subset = preprocessor.transform(X_subset)
+                        if hasattr(transformed_subset, 'toarray'):
+                            transformed_subset = transformed_subset.toarray()
+                        feature_names = self._explanation_feature_names or feature_names
+                    model = steps.get('model', list(steps.values())[-1])
+
+                transformed_subset = np.asarray(transformed_subset)
+                explainer = shap.Explainer(model, background)
+                shap_values = explainer(transformed_subset)
+
+                values_array = np.asarray(shap_values.values)
+                base_values = np.asarray(shap_values.base_values)
+                explanation = {
+                    'method': 'shap',
+                    'values': values_array.tolist(),
+                    'base_values': base_values.tolist(),
+                    'feature_names': feature_names,
+                    'indices': indices
+                }
+                if hasattr(shap_values, 'data'):
+                    explanation['data'] = np.asarray(shap_values.data).tolist()
+                return explanation
+            except ImportError:
+                shap_error = "SHAP library is not installed"
+            except Exception as exc:
+                shap_error = str(exc)
+
+        # Attempt LIME explanations
+        if method in (None, 'lime'):
+            try:
+                from lime.lime_tabular import LimeTabularExplainer
+
+                training_data = self._explanation_training_sample
+                if training_data is None:
+                    sample_size = min(max(len(indices), 10), n_samples)
+                    training_data = X_df.sample(sample_size, random_state=getattr(self.config, 'random_state', None))
+
+                feature_names = list(training_data.columns)
+
+                mode = 'regression'
+                class_names = None
+                if self.task == 'classification':
+                    mode = 'classification'
+                    model_step = None
+                    if isinstance(self.best_pipeline, Pipeline):
+                        model_step = self.best_pipeline.named_steps.get('model')
+                    elif hasattr(self.best_pipeline, 'classes_'):
+                        model_step = self.best_pipeline
+                    if model_step is not None and hasattr(model_step, 'classes_'):
+                        class_names = [str(c) for c in model_step.classes_]
+
+                explainer = LimeTabularExplainer(
+                    training_data.to_numpy(),
+                    feature_names=feature_names,
+                    class_names=class_names,
+                    mode=mode,
+                    discretize_continuous=True
+                )
+
+                def predict_fn(data: np.ndarray) -> np.ndarray:
+                    df_data = pd.DataFrame(data, columns=feature_names)
+                    if mode == 'classification' and hasattr(self.best_pipeline, 'predict_proba'):
+                        return self.best_pipeline.predict_proba(df_data)
+                    return self.best_pipeline.predict(df_data)
+
+                explanations = {}
+                top_features = min(len(feature_names), getattr(self.config, 'explanation_top_features', 10))
+                for idx in indices:
+                    instance = X_df.iloc[idx]
+                    lime_exp = explainer.explain_instance(
+                        instance.to_numpy(),
+                        predict_fn,
+                        num_features=top_features
+                    )
+                    explanations[idx] = lime_exp.as_list()
+
+                return {
+                    'method': 'lime',
+                    'feature_names': feature_names,
+                    'indices': indices,
+                    'explanations': explanations
+                }
+            except ImportError:
+                lime_error = "LIME library is not installed"
+            except Exception as exc:
+                lime_error = str(exc)
+
+        # Fallback to feature importance
+        self._refresh_feature_importance()
+
+        if self.feature_importance:
+            feature_names = self._explanation_feature_names or list(X_df.columns)
+            importances = self.feature_importance.get('importances_mean', [])
+            stds = self.feature_importance.get('importances_std', [])
+
+            if feature_names and len(importances) != len(feature_names):
+                min_len = min(len(importances), len(feature_names))
+                importances = importances[:min_len]
+                stds = stds[:min_len] if stds else []
+                feature_names = feature_names[:min_len]
+
+            return {
+                'method': 'feature_importance',
+                'feature_names': feature_names,
+                'importances_mean': importances,
+                'importances_std': stds,
+                'indices': indices
+            }
+
+        errors = []
+        if shap_error:
+            errors.append(f"SHAP: {shap_error}")
+        if lime_error:
+            errors.append(f"LIME: {lime_error}")
+        error_msg = "; ".join(errors) if errors else "No explanation strategy available"
+        raise RuntimeError(error_msg)
     
     def get_cache_stats(self) -> Dict:
         """Get pipeline cache statistics"""
