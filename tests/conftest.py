@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional
 import asyncio
 import sys
 import types
+import importlib.util
 
 # ---------------------------------------------------------------------------
 # Optional dependency stubs
@@ -30,6 +31,36 @@ import types
 # missing.  Only the attributes accessed in the code base (``heatmap`` and the
 # ``__version__`` metadata) are provided, and the functions simply return
 # ``None``.
+if "streamlit" not in sys.modules:  # pragma: no cover - import-time guard
+    try:  # pragma: no cover - executed only when dependency installed
+        import streamlit  # type: ignore  # noqa: F401
+    except ModuleNotFoundError:  # pragma: no cover - default test environment
+        stub_dir = Path(__file__).resolve().parent / "stubs" / "streamlit_stub"
+        init_file = stub_dir / "__init__.py"
+        spec = importlib.util.spec_from_file_location(
+            "streamlit",
+            init_file,
+            submodule_search_locations=[str(stub_dir)],
+        )
+        if spec and spec.loader:  # pragma: no cover - defensive
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["streamlit"] = module
+            spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+            # Ensure the ``streamlit.errors`` alias is registered for imports.
+            errors_module = sys.modules.get("streamlit.errors")
+            if errors_module is not None:
+                setattr(module, "errors", errors_module)
+            else:  # pragma: no cover - defensive fallback
+                errors_spec = importlib.util.spec_from_file_location(
+                    "streamlit.errors", stub_dir / "errors.py"
+                )
+                if errors_spec and errors_spec.loader:
+                    errors_module = importlib.util.module_from_spec(errors_spec)
+                    sys.modules["streamlit.errors"] = errors_module
+                    errors_spec.loader.exec_module(errors_module)  # type: ignore[union-attr]
+                    setattr(module, "errors", errors_module)
+
 if "seaborn" not in sys.modules:  # pragma: no cover - import-time guard
     seaborn_stub = types.ModuleType("seaborn")
 
