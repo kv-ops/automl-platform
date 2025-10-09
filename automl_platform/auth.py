@@ -18,7 +18,6 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Any, Tuple
 from dataclasses import dataclass, asdict
-from enum import Enum
 import asyncio
 from functools import wraps
 import uuid
@@ -49,6 +48,8 @@ except ImportError:
     MLOpsConfig = None
     StorageService = None
     MonitoringService = None
+
+from automl_platform.plans import PlanType, normalize_plan_type, plan_level
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -131,14 +132,6 @@ project_users = Table('project_users', Base.metadata,
     Column('user_id', UUID(as_uuid=True), ForeignKey('users.id')),
     Column('role', String(50))  # project-specific role
 )
-
-
-class PlanType(str, Enum):
-    """Pricing tiers as per business model"""
-    FREE = "free"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
-    TRIAL = "trial"
 
 
 class User(Base):
@@ -654,31 +647,53 @@ class QuotaService:
                 "concurrent_jobs": 1,
                 "storage_gb": 10,
                 "compute_minutes": 100,
-                "api_calls": 1000
-            },
-            PlanType.PRO: {
-                "workers": 4,  # Like DataRobot trial
-                "concurrent_jobs": 4,
-                "storage_gb": 100,
-                "compute_minutes": 10000,
-                "api_calls": 100000
-            },
-            PlanType.ENTERPRISE: {
-                "workers": 999999,  # Unlimited
-                "concurrent_jobs": 999999,
-                "storage_gb": 999999,
-                "compute_minutes": 999999,
-                "api_calls": 999999
+                "api_calls": 1000,
             },
             PlanType.TRIAL: {
                 "workers": 4,  # DataRobot trial limit
                 "concurrent_jobs": 2,  # H2O: 2 jobs per node
                 "storage_gb": 50,
                 "compute_minutes": 1000,
-                "api_calls": 10000
-            }
+                "api_calls": 10000,
+            },
+            PlanType.STARTER: {
+                "workers": 3,
+                "concurrent_jobs": 3,
+                "storage_gb": 25,
+                "compute_minutes": 5000,
+                "api_calls": 30000,
+            },
+            PlanType.PRO: {
+                "workers": 4,  # Legacy Pro plan
+                "concurrent_jobs": 4,
+                "storage_gb": 100,
+                "compute_minutes": 10000,
+                "api_calls": 100000,
+            },
+            PlanType.PROFESSIONAL: {
+                "workers": 8,
+                "concurrent_jobs": 10,
+                "storage_gb": 250,
+                "compute_minutes": 50000,
+                "api_calls": 500000,
+            },
+            PlanType.ENTERPRISE: {
+                "workers": 999999,  # Unlimited
+                "concurrent_jobs": 999999,
+                "storage_gb": 999999,
+                "compute_minutes": 999999,
+                "api_calls": 999999,
+            },
+            PlanType.CUSTOM: {
+                "workers": 999999,
+                "concurrent_jobs": 999999,
+                "storage_gb": 999999,
+                "compute_minutes": 999999,
+                "api_calls": 999999,
+            },
         }
-        return limits.get(plan_type, limits[PlanType.FREE])
+        resolved_plan = normalize_plan_type(plan_type, default=PlanType.FREE)
+        return limits.get(resolved_plan, limits[PlanType.FREE])
 
 
 # ============================================================================
@@ -881,21 +896,16 @@ def require_plan(min_plan: PlanType):
             
             user = request.state.user
             
-            # Define plan hierarchy
-            plan_hierarchy = {
-                PlanType.FREE: 0,
-                PlanType.TRIAL: 1,
-                PlanType.PRO: 2,
-                PlanType.ENTERPRISE: 3
-            }
-            
-            user_plan_level = plan_hierarchy.get(user.plan_type, 0)
-            required_plan_level = plan_hierarchy.get(min_plan, 0)
-            
+            required_plan = normalize_plan_type(min_plan, default=PlanType.FREE)
+            user_plan_level = plan_level(getattr(user, "plan_type", None))
+            required_plan_level = plan_level(required_plan)
+
             if user_plan_level < required_plan_level:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"This feature requires {min_plan} plan or higher"
+                    detail=(
+                        f"This feature requires the {required_plan.value} plan or higher"
+                    )
                 )
             
             return await func(*args, **kwargs)
@@ -936,10 +946,17 @@ class RateLimiter:
         limits = {
             PlanType.FREE: 10,  # 10 requests per minute
             PlanType.TRIAL: 60,  # 60 requests per minute
-            PlanType.PRO: 300,  # 300 requests per minute
-            PlanType.ENTERPRISE: 9999  # Effectively unlimited
+            PlanType.STARTER: 250,
+            PlanType.PRO: 300,  # 300 requests per minute for legacy Pro
+            PlanType.PROFESSIONAL: 500,
+            PlanType.ENTERPRISE: 9999,  # Effectively unlimited
+            PlanType.CUSTOM: 9999,
         }
-        return limits.get(plan_type, AuthConfig.DEFAULT_RATE_LIMIT)
+        resolved_plan = normalize_plan_type(plan_type, default=None)
+        if resolved_plan is None:
+            return AuthConfig.DEFAULT_RATE_LIMIT
+
+        return limits.get(resolved_plan, AuthConfig.DEFAULT_RATE_LIMIT)
 
 
 # ============================================================================

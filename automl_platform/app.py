@@ -71,7 +71,8 @@ from automl_platform.prompts import PromptTemplates, PromptOptimizer
 
 # Infrastructure and billing
 from automl_platform.api.infrastructure import TenantManager, SecurityManager, DeploymentManager
-from automl_platform.api.billing import BillingManager, UsageTracker, PlanType, BillingPeriod
+from automl_platform.api.billing import BillingManager, UsageTracker, BillingPeriod
+from automl_platform.plans import PlanType
 
 # Data connectors
 from automl_platform.api.connectors import ConnectorFactory, ConnectionConfig
@@ -1021,7 +1022,10 @@ async def start_training(
     if train_request.use_gpu and not tenant["limits"]["gpu_access"]:
         raise HTTPException(
             status_code=403,
-            detail=f"GPU access not available for {tenant['plan']} plan. Please upgrade to Pro or Enterprise."
+            detail=(
+                f"GPU access not available for {tenant['plan']} plan. "
+                "Please upgrade to the Professional tier or higher."
+            ),
         )
     
     # Load dataset
@@ -1291,8 +1295,15 @@ async def start_streaming(
     """Start streaming pipeline for real-time predictions"""
     
     # Check if streaming is enabled for plan
-    if tenant["plan"] not in [PlanType.PRO.value, PlanType.ENTERPRISE.value]:
-        raise HTTPException(403, "Streaming requires Pro or Enterprise plan")
+    if tenant["plan"] not in [
+        PlanType.PRO.value,
+        PlanType.PROFESSIONAL.value,
+        PlanType.ENTERPRISE.value,
+    ]:
+        raise HTTPException(
+            403,
+            "Streaming requires Professional tier or higher",
+        )
     
     # Load model
     try:

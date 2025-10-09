@@ -20,7 +20,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from ..api.billing import BillingManager, PlanType, UsageTracker
+from ..api.billing import BillingManager, UsageTracker
+from ..plans import PlanType, normalize_plan_type, plan_level
 from ..api.auth import get_current_user
 from ..scheduler import PLAN_LIMITS
 
@@ -327,20 +328,14 @@ class BillingEnforcer:
                 if not subscription:
                     plan_type = PlanType.FREE
                 else:
-                    plan_type = PlanType(subscription['plan'])
-                
-                # Check plan hierarchy
-                plan_hierarchy = {
-                    PlanType.FREE: 0,
-                    PlanType.TRIAL: 1,
-                    PlanType.PRO: 2,
-                    PlanType.ENTERPRISE: 3
-                }
-                
-                if plan_hierarchy.get(plan_type, 0) < plan_hierarchy.get(min_plan, 0):
+                    plan_type = normalize_plan_type(subscription['plan'], default=PlanType.FREE)
+
+                if plan_level(plan_type) < plan_level(min_plan):
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"This feature requires {min_plan.value} plan or higher"
+                        detail=(
+                            f"This feature requires the {normalize_plan_type(min_plan).value} plan or higher"
+                        )
                     )
                 
                 return await func(*args, **kwargs)

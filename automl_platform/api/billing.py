@@ -42,15 +42,7 @@ logger = logging.getLogger(__name__)
 Base = declarative_base() if SQLALCHEMY_AVAILABLE else None
 
 
-class PlanType(Enum):
-    """Subscription plan types."""
-    FREE = "free"
-    TRIAL = "trial"
-    STARTER = "starter"
-    PRO = "pro"
-    PROFESSIONAL = "professional"
-    ENTERPRISE = "enterprise"
-    CUSTOM = "custom"
+from automl_platform.plans import PlanType
 
 
 class BillingPeriod(Enum):
