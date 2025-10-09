@@ -22,7 +22,7 @@ from starlette.types import ASGIApp
 
 from ..api.billing import BillingManager, UsageTracker
 from ..plans import PlanType, normalize_plan_type, plan_level
-from ..api.auth import get_current_user
+from automl_platform.auth import get_current_user
 from ..scheduler import PLAN_LIMITS
 
 logger = logging.getLogger(__name__)
