@@ -13,7 +13,8 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import logging
 
-from .billing import BillingManager, PlanType, UsageTracker
+from .billing import BillingManager, UsageTracker
+from automl_platform.plans import PlanType, normalize_plan_type, plan_level
 from .billing_middleware import InvoiceGenerator
 from .auth import get_current_user, User, require_permission
 from ..scheduler import SchedulerFactory
@@ -266,7 +267,7 @@ async def upgrade_plan(
     
     # Validate plan
     try:
-        new_plan = PlanType(request.new_plan)
+        new_plan = normalize_plan_type(request.new_plan, default=None)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -276,17 +277,9 @@ async def upgrade_plan(
     # Check if upgrade is valid
     current_subscription = billing_manager.get_subscription(current_user.tenant_id)
     if current_subscription:
-        current_plan = PlanType(current_subscription['plan'])
-        
-        # Define plan hierarchy
-        plan_hierarchy = {
-            PlanType.FREE: 0,
-            PlanType.TRIAL: 1,
-            PlanType.PRO: 2,
-            PlanType.ENTERPRISE: 3
-        }
-        
-        if plan_hierarchy[new_plan] <= plan_hierarchy[current_plan]:
+        current_plan = normalize_plan_type(current_subscription['plan'], default=None)
+
+        if plan_level(new_plan) <= plan_level(current_plan):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Can only upgrade to a higher plan"

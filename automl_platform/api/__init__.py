@@ -43,14 +43,15 @@ except ImportError:
     BatchScheduler = None
 
 # Billing
+from automl_platform.plans import PlanType
+
 try:
-    from .billing import BillingManager, PlanType, UsageTracker
+    from .billing import BillingManager, UsageTracker
     from .billing_routes import billing_router
     BILLING_AVAILABLE = True
 except ImportError:
     BILLING_AVAILABLE = False
     BillingManager = None
-    PlanType = None
     UsageTracker = None
     billing_router = None
 

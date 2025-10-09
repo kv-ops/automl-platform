@@ -585,11 +585,19 @@ class TestQuotaService:
         free_limits = quota_service._get_plan_limits(PlanType.FREE.value)
         assert free_limits["workers"] == 1
         assert free_limits["storage_gb"] == 10
-        
+
+        starter_limits = quota_service._get_plan_limits(PlanType.STARTER.value)
+        assert starter_limits["workers"] == 3
+        assert starter_limits["api_calls"] == 30000
+
         pro_limits = quota_service._get_plan_limits(PlanType.PRO.value)
         assert pro_limits["workers"] == 4
         assert pro_limits["storage_gb"] == 100
-        
+
+        professional_limits = quota_service._get_plan_limits(PlanType.PROFESSIONAL.value)
+        assert professional_limits["workers"] == 8
+        assert professional_limits["api_calls"] == 500000
+
         enterprise_limits = quota_service._get_plan_limits(PlanType.ENTERPRISE.value)
         assert enterprise_limits["workers"] == 999999  # Unlimited
 
@@ -702,8 +710,11 @@ class TestRateLimiter:
         """Test getting rate limit by plan type."""
         assert rate_limiter._get_rate_limit(PlanType.FREE.value) == 10
         assert rate_limiter._get_rate_limit(PlanType.TRIAL.value) == 60
+        assert rate_limiter._get_rate_limit(PlanType.STARTER.value) == 250
         assert rate_limiter._get_rate_limit(PlanType.PRO.value) == 300
+        assert rate_limiter._get_rate_limit(PlanType.PROFESSIONAL.value) == 500
         assert rate_limiter._get_rate_limit(PlanType.ENTERPRISE.value) == 9999
+        assert rate_limiter._get_rate_limit(PlanType.CUSTOM.value) == 9999
 
 
 # ============================================================================

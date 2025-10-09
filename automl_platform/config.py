@@ -11,10 +11,7 @@ import os
 from datetime import timedelta
 from enum import Enum
 
-try:
-    from automl_platform.api.billing import PlanType as BillingPlanType
-except ImportError:  # pragma: no cover - fallback when billing module unavailable
-    BillingPlanType = None
+from automl_platform.plans import PlanType
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,17 +31,6 @@ def _coerce_bool(value: Any) -> Optional[bool]:
         if lowered in {"false", "0", "no", "off"}:
             return False
     return bool(value)
-
-
-class PlanType(Enum):
-    """Subscription plans"""
-    FREE = "free"
-    TRIAL = "trial"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
-    STARTER = "starter"
-    PROFESSIONAL = "professional"
-    CUSTOM = "custom"
 
 
 @dataclass
@@ -1467,19 +1453,13 @@ class AutoMLConfig:
             
             # Validate billing config
             if self.billing.enabled:
-                allowed_plan_types = set()
+                allowed_plan_types = {plan.value.lower() for plan in PlanType}
 
                 if getattr(self.billing, "quotas", None):
                     allowed_plan_types.update(
                         (plan_key.value if isinstance(plan_key, Enum) else str(plan_key)).lower()
                         for plan_key in self.billing.quotas.keys()
                     )
-
-                if BillingPlanType is not None:
-                    allowed_plan_types.update(plan.value.lower() for plan in BillingPlanType)
-
-                if not allowed_plan_types:
-                    allowed_plan_types.update(plan.value.lower() for plan in PlanType)
 
                 plan_value = self.billing.plan_type
                 if isinstance(plan_value, Enum):

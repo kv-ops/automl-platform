@@ -46,7 +46,8 @@ except ImportError:
 
 # Internal imports
 from .config import AutoMLConfig, WorkerConfig, BillingConfig
-from .api.billing import BillingManager, PlanType
+from .api.billing import BillingManager
+from .plans import PlanType
 
 logger = logging.getLogger(__name__)
 
