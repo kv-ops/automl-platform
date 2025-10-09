@@ -6,6 +6,7 @@ Place in: automl_platform/api/billing_middleware.py
 Implements request-level quota checking, usage tracking, and billing enforcement.
 """
 
+import os
 import uuid  # AJOUT: Import manquant
 import time
 import json
@@ -22,10 +23,22 @@ from starlette.types import ASGIApp
 
 from ..api.billing import BillingManager, UsageTracker
 from ..plans import PlanType, normalize_plan_type, plan_level
-from automl_platform.auth import get_current_user
 from ..scheduler import PLAN_LIMITS
 
+try:  # pragma: no cover - optional dependency
+    from ..auth import get_current_user  # type: ignore
+except ImportError:  # pragma: no cover - middleware must remain optional
+    get_current_user = None  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
+
+_ALLOW_NO_AUTH_ENV = "AUTOML_BILLING_ALLOW_NO_AUTH"
+
+
+def _allow_unauthenticated_fallback() -> bool:
+    """Return True when the operator explicitly opted-in to run without auth."""
+
+    return os.getenv(_ALLOW_NO_AUTH_ENV, "false").lower() in {"1", "true", "yes", "on"}
 
 
 class BillingMiddleware(BaseHTTPMiddleware):
@@ -35,6 +48,19 @@ class BillingMiddleware(BaseHTTPMiddleware):
     """
     
     def __init__(self, app: ASGIApp, billing_manager: BillingManager):
+        if get_current_user is None and not _allow_unauthenticated_fallback():
+            raise RuntimeError(
+                "BillingMiddleware requires the auth module to be installed. "
+                "Set AUTOML_BILLING_ALLOW_NO_AUTH=1 to explicitly opt-in to the header-based fallback."
+            )
+
+        if get_current_user is None:
+            logger.warning(
+                "Auth module not available; billing middleware will rely on header metadata for tenant context. "
+                "Set %s=0 (default) to fail-fast instead of falling back.",
+                _ALLOW_NO_AUTH_ENV,
+            )
+
         super().__init__(app)
         self.billing_manager = billing_manager
         self.usage_tracker = billing_manager.usage_tracker
