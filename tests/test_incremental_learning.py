@@ -381,10 +381,11 @@ class TestIncrementalPipeline(unittest.TestCase):
         self.pipeline = IncrementalPipeline(self.config)
         
         # Create mock model
-        self.model = Mock(spec=IncrementalModel)
+        self.model = Mock()
         self.model.n_samples_seen = 0
         self.model.partial_fit = Mock()
         self.model.predict = Mock(return_value=np.array([0, 1, 0]))
+        self.model.predict_proba = Mock(return_value=np.array([[0.6, 0.4]]))
     
     def test_set_model(self):
         """Test setting model in pipeline."""
@@ -409,7 +410,7 @@ class TestIncrementalPipeline(unittest.TestCase):
         self.assertEqual(stats['n_samples'], 30)
         self.assertEqual(stats['n_batches'], 3)
         self.assertEqual(self.model.partial_fit.call_count, 3)
-    
+
     def test_evaluate_prequential(self):
         """Test prequential evaluation (test-then-train)."""
         self.pipeline.set_model(self.model)
@@ -446,6 +447,112 @@ class TestIncrementalPipeline(unittest.TestCase):
         
         # Should stop at 50 samples
         self.assertEqual(stats['n_samples'], 50)
+
+    def test_predict_incremental_with_external_pipeline(self):
+        """Pipeline should delegate incremental predictions to provided pipeline."""
+        self.pipeline.set_model(self.model)
+        X = pd.DataFrame(np.random.randn(10, 3))
+
+        external_pipeline = Mock()
+        external_pipeline.predict = Mock(side_effect=[
+            np.zeros(4),
+            np.ones(4),
+            np.full(2, 2)
+        ])
+
+        predictions = self.pipeline.predict_incremental(external_pipeline, X, batch_size=4)
+
+        self.assertEqual(external_pipeline.predict.call_count, 3)
+        self.model.predict.assert_not_called()
+        np.testing.assert_array_equal(predictions, np.concatenate([
+            np.zeros(4),
+            np.ones(4),
+            np.full(2, 2)
+        ]))
+
+    def test_predict_incremental_prefers_pipeline_incremental_method(self):
+        """When available the pipeline's incremental method should be used first."""
+        self.pipeline.set_model(self.model)
+        X = pd.DataFrame(np.random.randn(8, 3))
+
+        outputs = [
+            np.zeros(3),
+            np.ones(3),
+            np.full(2, 2)
+        ]
+
+        external_pipeline = Mock()
+        external_pipeline.predict_incremental = Mock(side_effect=outputs)
+        external_pipeline.predict = Mock(side_effect=AssertionError("Should not call standard predict"))
+
+        predictions = self.pipeline.predict_incremental(external_pipeline, X, batch_size=3)
+
+        self.assertEqual(external_pipeline.predict_incremental.call_count, 3)
+        external_pipeline.predict.assert_not_called()
+        np.testing.assert_array_equal(predictions, np.concatenate(outputs))
+
+    def test_predict_incremental_defaults_to_internal_model(self):
+        """If no external pipeline is provided, use the internal incremental model."""
+        outputs = [
+            np.arange(4),
+            np.arange(4, 8),
+            np.arange(8, 10)
+        ]
+        self.model.predict = Mock(side_effect=outputs)
+        self.pipeline.set_model(self.model)
+
+        X = np.random.randn(10, 2)
+
+        predictions = self.pipeline.predict_incremental(None, X, batch_size=4)
+
+        self.assertEqual(self.model.predict.call_count, 3)
+        np.testing.assert_array_equal(predictions, np.concatenate(outputs))
+
+    def test_predict_proba_incremental_with_external_pipeline(self):
+        """Probability predictions should be batched with external pipelines."""
+        self.pipeline.set_model(self.model)
+        X = pd.DataFrame(np.random.randn(9, 3))
+
+        external_pipeline = Mock()
+        external_pipeline.predict_proba = Mock(side_effect=[
+            np.full((4, 2), 0.5),
+            np.full((4, 2), 0.25),
+            np.full((1, 2), 0.75)
+        ])
+
+        probas = self.pipeline.predict_proba_incremental(external_pipeline, X, batch_size=4)
+
+        self.assertEqual(external_pipeline.predict_proba.call_count, 3)
+        self.assertEqual(probas.shape, (9, 2))
+        self.model.predict_proba.assert_not_called()
+
+    def test_predict_proba_incremental_prefers_pipeline_incremental_method(self):
+        """Probability flow should prioritise dedicated incremental API when present."""
+        self.pipeline.set_model(self.model)
+        X = pd.DataFrame(np.random.randn(7, 3))
+
+        outputs = [
+            np.full((3, 2), 0.4),
+            np.full((3, 2), 0.6),
+            np.full((1, 2), 0.8)
+        ]
+
+        external_pipeline = Mock()
+        external_pipeline.predict_proba_incremental = Mock(side_effect=outputs)
+        external_pipeline.predict_proba = Mock(side_effect=AssertionError("Should not call standard predict_proba"))
+
+        probas = self.pipeline.predict_proba_incremental(external_pipeline, X, batch_size=3)
+
+        self.assertEqual(external_pipeline.predict_proba_incremental.call_count, 3)
+        external_pipeline.predict_proba.assert_not_called()
+        np.testing.assert_array_equal(probas, np.vstack(outputs))
+
+    def test_predict_proba_incremental_requires_predictor(self):
+        """An error should be raised when no probability predictor is available."""
+        X = np.random.randn(5, 2)
+
+        with self.assertRaises(ValueError):
+            self.pipeline.predict_proba_incremental(None, X)
 
 
 class TestDriftDetection(unittest.TestCase):
