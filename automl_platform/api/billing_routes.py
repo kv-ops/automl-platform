@@ -16,7 +16,7 @@ import logging
 from .billing import BillingManager, UsageTracker
 from automl_platform.plans import PlanType, normalize_plan_type, plan_level
 from .billing_middleware import InvoiceGenerator
-from .auth import get_current_user, User, require_permission
+from automl_platform.auth import get_current_user, User, require_permission
 from ..scheduler import SchedulerFactory
 
 logger = logging.getLogger(__name__)
