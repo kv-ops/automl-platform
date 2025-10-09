@@ -9,6 +9,7 @@ from sklearn.datasets import make_classification, make_regression
 import sys
 import os
 import builtins
+from unittest.mock import Mock
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Try importing the module, skip tests if not available
@@ -245,6 +246,67 @@ class TestOrchestrator:
             
             assert probabilities.shape == (len(X), 2)
             assert np.allclose(probabilities.sum(axis=1), 1.0)
+
+    def test_incremental_predict_uses_incremental_learner(self, monkeypatch):
+        """Large datasets with incremental flag should use incremental learner."""
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+
+        orchestrator = AutoMLOrchestrator(self.config)
+        orchestrator.config.incremental_learning = True
+
+        mock_pipeline = Mock()
+        mock_pipeline.predict = Mock()
+        orchestrator.best_pipeline = mock_pipeline
+
+        incremental_mock = Mock()
+        incremental_mock.predict_incremental.return_value = np.zeros(10001)
+        orchestrator.incremental_learner = incremental_mock
+
+        X = pd.DataFrame(np.random.randn(10001, 3))
+
+        predictions = orchestrator.predict(X, use_incremental=True)
+
+        incremental_mock.predict_incremental.assert_called_once_with(mock_pipeline, X)
+        mock_pipeline.predict.assert_not_called()
+        assert len(predictions) == len(X)
+
+    def test_incremental_predict_proba_uses_incremental_learner(self, monkeypatch):
+        """Probability predictions should route through incremental learner when enabled."""
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+
+        orchestrator = AutoMLOrchestrator(self.config)
+        orchestrator.config.incremental_learning = True
+
+        mock_pipeline = Mock()
+        mock_pipeline.predict = Mock()
+        mock_pipeline.predict_proba = Mock(return_value=np.zeros((1, 2)))
+        orchestrator.best_pipeline = mock_pipeline
+
+        incremental_mock = Mock()
+        incremental_mock.predict_proba_incremental.return_value = np.zeros((10001, 2))
+        orchestrator.incremental_learner = incremental_mock
+
+        X = pd.DataFrame(np.random.randn(10001, 4))
+
+        probabilities = orchestrator.predict_proba(X, use_incremental=True)
+
+        incremental_mock.predict_proba_incremental.assert_called_once_with(mock_pipeline, X)
+        mock_pipeline.predict_proba.assert_not_called()
+        assert probabilities.shape == (len(X), 2)
     
     def test_predict_without_fit(self):
         """Test that prediction fails without fitting."""

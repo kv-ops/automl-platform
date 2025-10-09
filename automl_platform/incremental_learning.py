@@ -663,7 +663,7 @@ class StreamingEnsemble:
 
 class IncrementalPipeline:
     """Complete incremental learning pipeline."""
-    
+
     def __init__(self, config: IncrementalConfig):
         """Initialize incremental pipeline."""
         self.config = config
@@ -678,6 +678,78 @@ class IncrementalPipeline:
             'total_time': 0,
             'avg_batch_time': 0
         }
+
+    @staticmethod
+    def _prepare_batches(X: Union[pd.DataFrame, np.ndarray, List[Any]],
+                         batch_size: int):
+        """Yield batches from the provided dataset preserving the original type."""
+        if isinstance(X, (pd.DataFrame, pd.Series)):
+            total = len(X)
+            for start in range(0, total, batch_size):
+                yield X.iloc[start:start + batch_size]
+        else:
+            X_array = np.asarray(X)
+            total = X_array.shape[0]
+            for start in range(0, total, batch_size):
+                yield X_array[start:start + batch_size]
+
+    @staticmethod
+    def _to_numpy(data: Any) -> np.ndarray:
+        """Convert prediction output to numpy array without losing structure."""
+        if isinstance(data, pd.DataFrame):
+            return data.to_numpy()
+        if isinstance(data, pd.Series):
+            return data.to_numpy()
+        if isinstance(data, np.ndarray):
+            return data
+        return np.asarray(data)
+
+    @staticmethod
+    def _stack_batches(batches: List[np.ndarray]) -> np.ndarray:
+        """Combine prediction batches into a single numpy array."""
+        if not batches:
+            return np.array([])
+
+        first = batches[0]
+        if first.ndim <= 1:
+            return np.concatenate([batch.ravel() for batch in batches], axis=0)
+
+        return np.vstack(batches)
+
+    def _resolve_predict_function(self,
+                                  pipeline: Optional[Any],
+                                  proba: bool = False):
+        """Resolve the prediction function to use for incremental inference."""
+        methods_to_try: List[Tuple[Any, str]] = []
+
+        if pipeline is not None:
+            if proba:
+                methods_to_try.append((pipeline, 'predict_proba_incremental'))
+                methods_to_try.append((pipeline, 'predict_proba'))
+            else:
+                methods_to_try.append((pipeline, 'predict_incremental'))
+                methods_to_try.append((pipeline, 'predict'))
+
+        if self.model is not None:
+            methods_to_try.append((self.model, 'predict_proba' if proba else 'predict'))
+
+        for candidate, method_name in methods_to_try:
+            if hasattr(candidate, method_name):
+                method = getattr(candidate, method_name)
+                return method, candidate is self.model
+
+        raise ValueError("No suitable model available for prediction")
+
+    def _prepare_batch_for_model(self, batch: Any, use_internal_model: bool) -> Any:
+        """Prepare batch input depending on whether the internal model is used."""
+        if not use_internal_model:
+            return batch
+
+        if isinstance(batch, pd.DataFrame):
+            return batch.to_numpy()
+        if isinstance(batch, pd.Series):
+            return batch.to_numpy()
+        return np.asarray(batch)
     
     def set_model(self, model: IncrementalModel):
         """Set the incremental model."""
@@ -733,6 +805,46 @@ class IncrementalPipeline:
                 break
         
         return self.stream_stats
+
+    def predict_incremental(self,
+                             pipeline: Optional[Any],
+                             X: Union[pd.DataFrame, np.ndarray, List[Any]],
+                             batch_size: Optional[int] = None) -> np.ndarray:
+        """Generate predictions using incremental batching."""
+        if X is None:
+            raise ValueError("Input features X must be provided")
+
+        batch_size = batch_size or self.config.batch_size or len(X)
+        batch_size = max(int(batch_size), 1)
+        method, using_internal = self._resolve_predict_function(pipeline, proba=False)
+
+        predictions: List[np.ndarray] = []
+        for X_batch in self._prepare_batches(X, batch_size):
+            batch_input = self._prepare_batch_for_model(X_batch, using_internal)
+            batch_pred = method(batch_input)
+            predictions.append(self._to_numpy(batch_pred))
+
+        return self._stack_batches(predictions)
+
+    def predict_proba_incremental(self,
+                                  pipeline: Optional[Any],
+                                  X: Union[pd.DataFrame, np.ndarray, List[Any]],
+                                  batch_size: Optional[int] = None) -> np.ndarray:
+        """Generate probability predictions using incremental batching."""
+        if X is None:
+            raise ValueError("Input features X must be provided")
+
+        batch_size = batch_size or self.config.batch_size or len(X)
+        batch_size = max(int(batch_size), 1)
+        method, using_internal = self._resolve_predict_function(pipeline, proba=True)
+
+        predictions: List[np.ndarray] = []
+        for X_batch in self._prepare_batches(X, batch_size):
+            batch_input = self._prepare_batch_for_model(X_batch, using_internal)
+            batch_pred = method(batch_input)
+            predictions.append(self._to_numpy(batch_pred))
+
+        return self._stack_batches(predictions)
     
     def evaluate_prequential(self,
                             data_generator,
