@@ -6,24 +6,54 @@ Tests for model registry, retraining, export, and A/B testing endpoints.
 
 import pytest
 import json
+import importlib
+import types
 from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
+from dataclasses import dataclass
+from enum import Enum
+from starlette.responses import Response
 import numpy as np
 import pandas as pd
 import sys
 import os
+from typing import Dict, Any
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Minimal configuration stub to satisfy storage initialisation during import
+
+
+@dataclass
+class _StubStorageConfig:
+    backend: str = "local"
+    local_base_path: str = "/tmp"
+
+
+class _StubAutoMLConfig:
+    def __init__(self):
+        self.storage = _StubStorageConfig()
+
+
 # Mock dependencies before importing
+_stub_config_module = types.ModuleType("automl_platform.config")
+_stub_config_module.AutoMLConfig = _StubAutoMLConfig
+
+
+def _stub_load_config(*args, **kwargs):
+    return _StubAutoMLConfig()
+
+
+_stub_config_module.load_config = _stub_load_config
+
 with patch.dict('sys.modules', {
     'automl_platform.mlflow_registry': MagicMock(),
     'automl_platform.retraining_service': MagicMock(),
     'automl_platform.export_service': MagicMock(),
     'automl_platform.orchestrator': MagicMock(),
-    'automl_platform.config': MagicMock(),
+    'automl_platform.config': _stub_config_module,
     'automl_platform.storage': MagicMock(),
     'automl_platform.monitoring': MagicMock(),
 }):
@@ -347,28 +377,32 @@ class TestModelExportEndpoints:
     def test_download_exported_model(self, client):
         """Test downloading exported model"""
         with patch('automl_platform.api.mlops_endpoints.Path') as mock_path:
-            mock_file = Mock()
+            mock_export_dir = MagicMock()
+            mock_file = MagicMock()
             mock_file.exists.return_value = True
             mock_file.name = "test_model.onnx"
-            mock_path.return_value = mock_file
-            
+            mock_export_dir.__truediv__.return_value = mock_file
+            mock_path.return_value = mock_export_dir
+
             with patch('automl_platform.api.mlops_endpoints.FileResponse') as mock_response:
-                mock_response.return_value = Mock()
-                
+                mock_response.return_value = Response(media_type="application/octet-stream")
+
                 response = client.get("/api/v1/mlops/models/export/test_model/1/download?format=onnx")
-                
+
                 # FileResponse would be called
                 assert mock_response.called
     
     def test_download_exported_model_not_found(self, client):
         """Test downloading non-existent exported model"""
         with patch('automl_platform.api.mlops_endpoints.Path') as mock_path:
-            mock_file = Mock()
+            mock_export_dir = MagicMock()
+            mock_file = MagicMock()
             mock_file.exists.return_value = False
-            mock_path.return_value.__truediv__.return_value = mock_file
-            
+            mock_export_dir.__truediv__.return_value = mock_file
+            mock_path.return_value = mock_export_dir
+
             response = client.get("/api/v1/mlops/models/export/test_model/1/download")
-            
+
             assert response.status_code == 404
             assert "Exported model not found" in response.json()["detail"]
 
@@ -539,21 +573,21 @@ class TestPredictionWithMLOps:
 
 class TestHealthCheck:
     """Tests for MLOps health check endpoint"""
-    
+
     @pytest.fixture
     def client(self):
         """Create test client"""
         return TestClient(app)
-    
+
     def test_mlops_health_check(self, client):
         """Test MLOps services health check"""
         with patch('automl_platform.api.mlops_endpoints.registry') as mock_registry:
             with patch('automl_platform.api.mlops_endpoints.ab_testing') as mock_ab:
                 mock_registry.client = Mock()
                 mock_ab.active_tests = []
-                
+
                 response = client.get("/api/v1/mlops/health")
-                
+
                 assert response.status_code == 200
                 data = response.json()
                 assert data["status"] == "healthy"
@@ -561,6 +595,161 @@ class TestHealthCheck:
                 assert data["services"]["mlflow"] is True
                 assert data["services"]["export"] is True
                 assert "timestamp" in data
+
+
+def test_storage_service_initialization_uses_storage_config():
+    """Ensure StorageService receives the storage configuration details."""
+
+    module_name = "automl_platform.api.mlops_endpoints"
+    dependencies = [
+        module_name,
+        "automl_platform.config",
+        "automl_platform.storage",
+        "automl_platform.mlflow_registry",
+        "automl_platform.retraining_service",
+        "automl_platform.export_service",
+        "automl_platform.orchestrator",
+        "automl_platform.monitoring",
+    ]
+
+    saved_modules = {name: sys.modules.get(name) for name in dependencies}
+    for name in dependencies:
+        if name in sys.modules:
+            del sys.modules[name]
+
+    storage_call: Dict[str, Any] = {}
+
+    @dataclass
+    class DummyStorageConfig:
+        backend: str = "s3"
+        endpoint: str = "s3.amazonaws.com"
+        access_key: str = "AKIAEXAMPLE"
+        secret_key: str = "SECRETKEY"
+        secure: bool = True
+        region: str = "eu-west-3"
+        local_base_path: str = "/mnt/mlops"
+        project_id: str = "demo-project"
+        credentials_path: str = "/secure/creds.json"
+        models_bucket: str = "models"
+        datasets_bucket: str = "datasets"
+        artifacts_bucket: str = "artifacts"
+        knowledge_bucket: str = "knowledge"
+        enable_feature_store: bool = True
+        feature_cache_size: int = 128
+        auto_versioning: bool = True
+        max_versions_per_model: int = 5
+        cleanup_old_versions: bool = False
+        enable_multi_tenant: bool = True
+        default_tenant_id: str = "tenant-a"
+        isolate_buckets_per_tenant: bool = True
+
+    class DummyAutoMLConfig:
+        def __init__(self):
+            self.storage = DummyStorageConfig()
+            # Sensitive fields may be attached dynamically in production.
+            setattr(self.storage, "encryption_key", "very-secret")
+
+    class DummyStorageService:
+        def __init__(self, *args, **kwargs):
+            storage_call["args"] = args
+            if "backend" in kwargs:
+                storage_call["backend"] = kwargs["backend"]
+            elif args:
+                storage_call["backend"] = args[0]
+            else:
+                storage_call["backend"] = None
+            sanitized_kwargs = dict(kwargs)
+            sanitized_kwargs.pop("backend", None)
+            storage_call["kwargs"] = sanitized_kwargs
+
+    config_module = types.ModuleType("automl_platform.config")
+    config_module.AutoMLConfig = DummyAutoMLConfig
+
+    storage_module = types.ModuleType("automl_platform.storage")
+    storage_module.StorageService = DummyStorageService
+
+    mlflow_module = types.ModuleType("automl_platform.mlflow_registry")
+
+    class DummyMLflowRegistry:
+        def __init__(self, config):
+            self.config = config
+
+    class DummyABTestingService:
+        def __init__(self, registry):
+            self.registry = registry
+
+    mlflow_module.MLflowRegistry = DummyMLflowRegistry
+    mlflow_module.ABTestingService = DummyABTestingService
+    mlflow_module.ModelStage = Enum("ModelStage", "NONE")
+
+    retraining_module = types.ModuleType("automl_platform.retraining_service")
+
+    class DummyRetrainingService:
+        def __init__(self, config, registry, monitor, storage):
+            self.args = (config, registry, monitor, storage)
+
+    retraining_module.RetrainingService = DummyRetrainingService
+    retraining_module.RetrainingConfig = object
+
+    export_module = types.ModuleType("automl_platform.export_service")
+
+    class DummyModelExporter:
+        def __init__(self):
+            pass
+
+    export_module.ModelExporter = DummyModelExporter
+    export_module.ExportConfig = object
+
+    orchestrator_module = types.ModuleType("automl_platform.orchestrator")
+    orchestrator_module.AutoMLOrchestrator = object
+
+    monitoring_module = types.ModuleType("automl_platform.monitoring")
+
+    class DummyModelMonitor:
+        def __init__(self, config):
+            self.config = config
+
+    monitoring_module.ModelMonitor = DummyModelMonitor
+
+    try:
+        with patch.dict(
+            sys.modules,
+            {
+                "automl_platform.config": config_module,
+                "automl_platform.storage": storage_module,
+                "automl_platform.mlflow_registry": mlflow_module,
+                "automl_platform.retraining_service": retraining_module,
+                "automl_platform.export_service": export_module,
+                "automl_platform.orchestrator": orchestrator_module,
+                "automl_platform.monitoring": monitoring_module,
+            },
+        ):
+            importlib.import_module(module_name)
+
+            assert storage_call["args"] == ()
+            assert storage_call["backend"] == "s3"
+            kwargs = storage_call["kwargs"]
+            assert kwargs["endpoint"] == "s3.amazonaws.com"
+            assert kwargs["access_key"] == "AKIAEXAMPLE"
+            assert kwargs["secret_key"] == "SECRETKEY"
+            assert kwargs["secure"] is True
+            assert kwargs["region"] == "eu-west-3"
+            assert kwargs["encryption_key"] == b"very-secret"
+            assert "local_base_path" not in kwargs
+            assert "project_id" not in kwargs
+            assert "credentials_path" not in kwargs
+            assert "models_bucket" not in kwargs
+            assert "datasets_bucket" not in kwargs
+            assert "artifacts_bucket" not in kwargs
+            assert "knowledge_bucket" not in kwargs
+    finally:
+        for name in dependencies:
+            if name in sys.modules:
+                del sys.modules[name]
+
+        for name, module in saved_modules.items():
+            if module is not None:
+                sys.modules[name] = module
 
 
 if __name__ == "__main__":
