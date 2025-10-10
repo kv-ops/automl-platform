@@ -466,6 +466,16 @@ Les données sont persistées dans des volumes Docker :
 - `minio_data` : Fichiers et modèles
 - `shared_models` : Modèles partagés entre services
 
+### Désactiver la persistance
+
+Pour des environnements éphémères (CI, notebooks temporaires, démonstrations),
+il est possible de désactiver complètement la persistance des artefacts en
+configurant `storage.backend: none`. Dans ce mode, la plateforme instancie un
+``StorageManager`` spécial qui lève immédiatement une erreur explicite si une
+opération de sauvegarde ou de chargement est invoquée. Cela permet de détecter
+rapidement les usages qui supposent une persistance tout en évitant de créer
+des dossiers temporaires non désirés.
+
 ### Configuration Google Cloud Storage
 
 L'option `storage.backend: gcs` permet de déléguer le stockage des modèles et des jeux de données à Google Cloud Storage. Pour un déploiement sécurisé :

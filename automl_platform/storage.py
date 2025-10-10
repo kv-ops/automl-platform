@@ -61,6 +61,10 @@ PMML_AVAILABLE = sklearn2pmml is not None
 logger = logging.getLogger(__name__)
 
 
+class StorageDisabledError(RuntimeError):
+    """Raised when persistence is requested while storage is disabled."""
+
+
 @dataclass
 class ModelMetadata:
     """Model metadata for versioning and tracking."""
@@ -107,6 +111,60 @@ class StorageBackend:
     
     def delete_model(self, model_id: str, version: str = None) -> bool:
         raise NotImplementedError
+
+
+class NullStorage(StorageBackend):
+    """Storage backend that disables persistence when `backend` is set to ``"none"``.
+
+    The orchestrator and higher level services can use this backend to operate in
+    environments where persisting artefacts is either unsupported or explicitly
+    disabled.  Any persistence method invoked on this backend fails fast with a
+    :class:`StorageDisabledError` to avoid silently discarding user artefacts.
+    """
+
+    _MESSAGE = (
+        "Persistent storage is disabled (storage.backend='none'); the %s operation "
+        "is unavailable. Configure a supported backend such as 'local' or 's3' to "
+        "enable persistence."
+    )
+
+    def _raise(self, operation: str) -> None:
+        raise StorageDisabledError(self._MESSAGE % operation)
+
+    def save_model(self, model: Any, metadata: ModelMetadata) -> str:
+        self._raise("save_model")
+
+    def load_model(
+        self,
+        model_id: str,
+        version: str = None,
+        tenant_id: str = "default",
+    ) -> tuple:
+        self._raise("load_model")
+
+    def save_dataset(
+        self,
+        data: pd.DataFrame,
+        dataset_id: str,
+        tenant_id: str = "default",
+        format: str = "parquet",
+        compression: str = "snappy",
+    ) -> str:
+        self._raise("save_dataset")
+
+    def load_dataset(self, dataset_id: str, tenant_id: str = "default") -> pd.DataFrame:
+        self._raise("load_dataset")
+
+    def list_models(self, tenant_id: str = None) -> List[Dict]:
+        self._raise("list_models")
+
+    def delete_model(
+        self,
+        model_id: str,
+        version: str = None,
+        tenant_id: str = "default",
+    ) -> bool:
+        self._raise("delete_model")
 
 
 class MinIOStorage(StorageBackend):
@@ -1051,23 +1109,27 @@ class StorageManager:
     def __init__(self, backend: str = "local", **kwargs):
         """
         Initialize storage manager
-        
+
         Args:
-            backend: Storage backend type ('local', 'minio', 's3', 'gcs')
+            backend: Storage backend type ('local', 'minio', 's3', 'gcs', 'none')
             **kwargs: Backend-specific configuration
         """
         self.backend_type = backend
-        
+
         # Get encryption key from infrastructure if available
         encryption_key = kwargs.pop('encryption_key', None)
-        
-        if backend == "minio" or backend == "s3":
+
+        if backend == "none":
+            # Null backend to explicitly disable persistence while keeping a
+            # consistent StorageManager interface for downstream services.
+            self.backend = NullStorage()
+        elif backend in {"minio", "s3"}:
             self.backend = MinIOStorage(encryption_key=encryption_key, **kwargs)
         elif backend == "gcs":
             self.backend = GCSStorage(encryption_key=encryption_key, **kwargs)
         else:
             self.backend = LocalStorage(encryption_key=encryption_key, **kwargs)
-        
+
         # Initialize connectors
         self.connectors = {}
         self._connector_config_type = None

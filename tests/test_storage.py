@@ -23,7 +23,8 @@ from automl_platform.storage import (
     ModelMetadata,
     LocalStorage,
     MinIOStorage,
-    FeatureStore
+    FeatureStore,
+    StorageDisabledError
 )
 
 
@@ -457,6 +458,28 @@ class TestStorageManager:
         assert captured['query'] == 'legacy'
         assert captured['config'].connection_type == 'dummy'
         assert captured['config'].tenant_id == 'tenant_123'
+
+    def test_none_backend_fails_fast(self):
+        """The 'none' storage backend should raise a descriptive error."""
+
+        manager = StorageManager(backend="none")
+        metadata = {
+            "model_id": "noop",
+            "model_type": "noop",
+            "algorithm": "noop",
+            "metrics": {},
+            "parameters": {},
+            "feature_names": [],
+            "target_name": "target",
+            "dataset_hash": "noop",
+            "pipeline_hash": "noop",
+        }
+
+        with pytest.raises(StorageDisabledError, match="storage.backend='none'"):
+            manager.save_model(object(), metadata)
+
+        with pytest.raises(StorageDisabledError, match="storage.backend='none'"):
+            manager.load_model("noop")
 
     def test_get_model_history(self, storage_manager):
         """Test getting model version history."""

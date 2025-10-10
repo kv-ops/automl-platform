@@ -606,7 +606,17 @@ class FeatureStoreConfig:
 @dataclass
 class StorageConfig:
     """Storage configuration for model versioning and datasets."""
-    backend: str = "local"  # "local", "minio", "s3", "gcs", "none"
+
+    backend: str = "local"
+    """Storage backend identifier.
+
+    Supported values are ``"local"``, ``"minio"``, ``"s3"``, ``"gcs"`` and
+    ``"none"``.  The ``"none"`` option disables persistent storage entirely.
+    When selected, any attempt to call :class:`~automl_platform.storage.StorageManager`
+    methods that persist or retrieve artefacts raises a descriptive
+    ``StorageDisabledError`` so that callers can fail fast instead of silently
+    discarding data.
+    """
     
     # Local storage
     local_base_path: str = "./ml_storage"
