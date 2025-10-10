@@ -758,6 +758,13 @@ df = df[(df['price'] >= Q1 - 1.5 * IQR) & (df['price'] <= Q3 + 1.5 * IQR)]
 
         ensure_safe_cleaning_code(code)
 
+    def test_ensure_safe_cleaning_code_allows_non_executable_substrings(self):
+        """Column names containing exec/eval substrings should not be rejected."""
+
+        code = "df['execution_time'] = df['execution_time'].fillna(df['evaluator'])"
+
+        ensure_safe_cleaning_code(code)
+
     def test_apply_cleaning_with_error(self, cleaning_agent, sample_df):
         """Test applying cleaning with error handling"""
         cleaning_agent.cleaning_actions.append({
