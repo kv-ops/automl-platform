@@ -237,15 +237,57 @@ class TestOrchestrator:
         )
         X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(10)])
         y = pd.Series(y)
-        
+
         orchestrator = AutoMLOrchestrator(self.config)
         orchestrator.fit(X, y)
-        
+
         if hasattr(orchestrator.best_pipeline, 'predict_proba'):
             probabilities = orchestrator.predict_proba(X)
-            
+
             assert probabilities.shape == (len(X), 2)
             assert np.allclose(probabilities.sum(axis=1), 1.0)
+
+    def test_create_ab_test_handles_missing_challenger_version(self, monkeypatch, caplog):
+        """A/B test creation should abort gracefully when registry returns no version."""
+
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                self.client = Mock()
+                self.promote_model = Mock()
+
+            def register_model(self, *args, **kwargs):
+                return None
+
+        ab_service_mock = Mock()
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.ABTestingService',
+            lambda registry: ab_service_mock
+        )
+
+        orchestrator = AutoMLOrchestrator(self.config)
+        registry_instance = orchestrator.registry
+
+        caplog.set_level('ERROR')
+
+        result = orchestrator.create_ab_test(
+            challenger_pipeline=Mock(),
+            model_name="test-model",
+            traffic_split=0.2
+        )
+
+        assert result is None
+        assert not ab_service_mock.create_ab_test.called
+        registry_instance.client.get_latest_versions.assert_not_called()
+        registry_instance.promote_model.assert_not_called()
+        assert any(
+            "challenger version is missing" in message
+            for message in caplog.messages
+        )
 
     def test_incremental_predict_uses_incremental_learner(self, monkeypatch):
         """Large datasets with incremental flag should use incremental learner."""

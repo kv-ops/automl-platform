@@ -500,13 +500,25 @@ class AutoMLOrchestrator:
                     }
                 )
                 
-                logger.info(f"Registered model {model_name} version {model_version.version}")
-                
-                self.training_metadata["registered_model"] = {
-                    "name": model_name,
-                    "version": model_version.version,
-                    "run_id": model_version.run_id
-                }
+                model_version_number = getattr(model_version, "version", None)
+
+                if model_version_number is None:
+                    logger.error(
+                        "Failed to register model %s: missing model version information",
+                        model_name,
+                    )
+                else:
+                    logger.info(
+                        "Registered model %s version %s",
+                        model_name,
+                        model_version_number,
+                    )
+
+                    self.training_metadata["registered_model"] = {
+                        "name": model_name,
+                        "version": model_version_number,
+                        "run_id": getattr(model_version, "run_id", None)
+                    }
         
         self.training_metadata["end_time"] = datetime.utcnow().isoformat()
         
@@ -631,26 +643,42 @@ class AutoMLOrchestrator:
             params={},
             description="Challenger model for A/B test"
         )
-        
+
+        challenger_version_number = getattr(challenger_version, "version", None)
+        if challenger_version_number is None:
+            logger.error(
+                "Cannot create A/B test for model %s because challenger version is missing",
+                model_name,
+            )
+            return None
+
         # Get current production version
         prod_versions = self.registry.client.get_latest_versions(
             model_name,
             stages=[ModelStage.PRODUCTION.value]
         ) if self.registry.client else []
-        
+
         if not prod_versions:
             self.registry.promote_model(
                 model_name,
-                challenger_version.version,
+                challenger_version_number,
                 ModelStage.PRODUCTION
             )
             return None
-        
+
+        champion_version_number = getattr(prod_versions[0], "version", None)
+        if champion_version_number is None:
+            logger.error(
+                "Cannot create A/B test for model %s because champion version is missing",
+                model_name,
+            )
+            return None
+
         # Create A/B test
         test_id = self.ab_testing.create_ab_test(
             model_name=model_name,
-            champion_version=prod_versions[0].version,
-            challenger_version=challenger_version.version,
+            champion_version=champion_version_number,
+            challenger_version=challenger_version_number,
             traffic_split=traffic_split
         )
         
