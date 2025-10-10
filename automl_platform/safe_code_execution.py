@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from typing import Iterable, Optional, Set, Tuple, Union
 
@@ -54,13 +55,16 @@ _FORBIDDEN_CALLS: Iterable[_ForbiddenPattern] = (
     _ForbiddenPattern("subprocess.run", "Subprocess execution is not permitted."),
 )
 
-_FORBIDDEN_STRINGS = {
+_FORBIDDEN_EXACT_STRINGS = {
     "__builtins__",
     "__import__",
+}
+
+_FORBIDDEN_WORDS = (
     "eval",
     "exec",
     "pickle",
-}
+)
 
 _ALLOWED_NODE_TYPES: Tuple[type, ...] = (
     ast.Module,
@@ -202,11 +206,21 @@ def _check_forbidden_names(name: str, message: str) -> None:
         raise UnsafeCodeExecutionError(message)
 
 
+def _contains_forbidden_word(text: str, word: str) -> bool:
+    pattern = rf"\b{re.escape(word)}\b"
+    return re.search(pattern, text) is not None
+
+
 def _check_constant(value: Union[str, bytes, int, float, complex, None, bool]) -> None:
     if isinstance(value, str):
         lowered = value.lower()
-        for forbidden in _FORBIDDEN_STRINGS:
-            if forbidden in lowered:
+        if lowered in _FORBIDDEN_EXACT_STRINGS:
+            raise UnsafeCodeExecutionError(
+                "Suspicious string literal detected in generated code."
+            )
+
+        for forbidden in _FORBIDDEN_WORDS:
+            if _contains_forbidden_word(lowered, forbidden):
                 raise UnsafeCodeExecutionError(
                     "Suspicious string literal detected in generated code."
                 )
