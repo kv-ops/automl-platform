@@ -50,7 +50,7 @@ class TestOrchestrator:
     def test_fit_classification_binary(self):
         """Test fitting on binary classification task."""
         X, y = make_classification(
-            n_samples=100, n_features=10, n_classes=2, 
+            n_samples=100, n_features=10, n_classes=2,
             n_informative=5, random_state=42
         )
         X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(10)])
@@ -82,7 +82,7 @@ class TestOrchestrator:
         
         assert orchestrator.best_pipeline is not None
         assert orchestrator.task == 'classification'
-    
+
     def test_fit_regression(self):
         """Test fitting on regression task."""
         X, y = make_regression(
@@ -237,15 +237,115 @@ class TestOrchestrator:
         )
         X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(10)])
         y = pd.Series(y)
-        
+
         orchestrator = AutoMLOrchestrator(self.config)
         orchestrator.fit(X, y)
-        
+
         if hasattr(orchestrator.best_pipeline, 'predict_proba'):
             probabilities = orchestrator.predict_proba(X)
-            
+
             assert probabilities.shape == (len(X), 2)
             assert np.allclose(probabilities.sum(axis=1), 1.0)
+
+    def test_fit_register_model_handles_missing_version(self, monkeypatch, caplog):
+        """Registration returning None should not break the training flow."""
+
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                self.register_model = Mock(return_value=None)
+                self.client = None
+
+        class IdentityPreprocessor:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def fit(self, X, y=None):
+                return self
+
+            def transform(self, X):
+                return X
+
+            def fit_transform(self, X, y=None):
+                return X
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.DataPreprocessor',
+            IdentityPreprocessor
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.cross_val_score',
+            lambda estimator, X, y, cv, scoring, n_jobs=-1: np.array([0.8])
+        )
+
+        X, y = make_classification(
+            n_samples=60,
+            n_features=6,
+            n_informative=3,
+            n_classes=2,
+            random_state=42,
+        )
+        X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(6)])
+        y = pd.Series(y)
+
+        orchestrator = AutoMLOrchestrator(self.config)
+
+        caplog.set_level('WARNING', logger='automl_platform.orchestrator')
+
+        orchestrator.fit(X, y)
+
+        assert orchestrator.best_pipeline is not None
+        assert orchestrator.leaderboard
+        assert 'registered_model' not in orchestrator.training_metadata
+        assert any(
+            'registry returned no version' in message
+            for message in caplog.messages
+        )
+
+    def test_create_ab_test_handles_missing_challenger_version(self, monkeypatch, caplog):
+        """A/B test creation should abort gracefully when registry returns no version."""
+
+        class DummyRegistry:
+            def __init__(self, *_args, **_kwargs):
+                self.client = Mock()
+                self.promote_model = Mock()
+
+            def register_model(self, *args, **kwargs):
+                return None
+
+        ab_service_mock = Mock()
+
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.MLflowRegistry',
+            DummyRegistry
+        )
+        monkeypatch.setattr(
+            'automl_platform.orchestrator.ABTestingService',
+            lambda registry: ab_service_mock
+        )
+
+        orchestrator = AutoMLOrchestrator(self.config)
+        registry_instance = orchestrator.registry
+
+        caplog.set_level('WARNING', logger='automl_platform.orchestrator')
+
+        result = orchestrator.create_ab_test(
+            challenger_pipeline=Mock(),
+            model_name="test-model",
+            traffic_split=0.2
+        )
+
+        assert result is None
+        assert not ab_service_mock.create_ab_test.called
+        registry_instance.client.get_latest_versions.assert_not_called()
+        registry_instance.promote_model.assert_not_called()
+        assert any(
+            "challenger version is missing" in message
+            for message in caplog.messages
+        )
 
     def test_incremental_predict_uses_incremental_learner(self, monkeypatch):
         """Large datasets with incremental flag should use incremental learner."""

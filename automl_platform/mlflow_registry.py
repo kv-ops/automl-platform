@@ -121,28 +121,35 @@ class MLflowRegistry:
             run_id = run.info.run_id
         
         # Get latest version
-        latest_version = self.client.get_latest_versions(
+        latest_versions = self.client.get_latest_versions(
             model_name,
             stages=["None"]
-        )[0] if self.client.get_latest_versions(model_name, stages=["None"]) else None
-        
-        if latest_version:
+        )
+
+        if latest_versions:
+            latest_version = latest_versions[0]
             # Update description
             self.client.update_model_version(
                 name=model_name,
                 version=latest_version.version,
                 description=description
             )
-            
+
             logger.info(f"Model {model_name} version {latest_version.version} registered")
-            
+
             # Store additional metadata
             latest_version.run_id = run_id
             latest_version.model_name = model_name
             latest_version.stage = ModelStage.NONE
-            
+
             return latest_version
-        
+
+        logger.warning(
+            "Model registration for %s (run %s) did not return any version",
+            model_name,
+            run_id,
+        )
+
         return None
     
     def promote_model(self,
