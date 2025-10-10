@@ -9,7 +9,7 @@ automated retraining, exports, and A/B testing.
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, File, UploadFile, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -18,6 +18,7 @@ import json
 import io
 import logging
 from pathlib import Path
+from dataclasses import asdict, is_dataclass
 
 # Import MLOps components
 from ..mlflow_registry import MLflowRegistry, ABTestingService, ModelStage
@@ -40,13 +41,77 @@ except Exception as exc:  # pragma: no cover - defensive fallback for optional d
     logger.warning("Failed to load AutoML configuration: %s", exc)
     config = None
 
+def _extract_storage_parameters(storage_config: Any) -> Tuple[str, Dict[str, Any]]:
+    """Return backend identifier and keyword arguments for the storage service.
+
+    The backend string is returned separately so that the caller can pass it as
+    an explicit ``backend=`` keyword argument to :class:`StorageService`
+    (a.k.a. :class:`StorageManager`). This avoids relying on positional
+    arguments while still ensuring that the backend is the first parameter the
+    manager receives. The accompanying dictionary contains only the options
+    relevant for the chosen backend.
+    """
+
+    if storage_config is None:
+        return "local", {}
+
+    if is_dataclass(storage_config):
+        storage_dict = asdict(storage_config)
+    elif isinstance(storage_config, dict):
+        storage_dict = dict(storage_config)
+    else:
+        storage_dict = {
+            key: value
+            for key, value in vars(storage_config).items()
+            if not key.startswith("__")
+        }
+
+    backend = storage_dict.pop("backend", getattr(storage_config, "backend", "local"))
+
+    sanitized_kwargs = {
+        key: value
+        for key, value in storage_dict.items()
+        if value is not None
+    }
+
+    # Ensure sensitive fields that might not be part of the dataclass (e.g. dynamically
+    # attached encryption keys) are propagated correctly.
+    if "encryption_key" not in sanitized_kwargs and hasattr(storage_config, "encryption_key"):
+        encryption_value = getattr(storage_config, "encryption_key")
+        if encryption_value is not None:
+            sanitized_kwargs["encryption_key"] = encryption_value
+
+    encryption_key = sanitized_kwargs.get("encryption_key")
+    if isinstance(encryption_key, str):
+        sanitized_kwargs["encryption_key"] = encryption_key.encode()
+
+    backend_key = str(backend).lower()
+    allowed_kwargs = {
+        "local": {"local_base_path", "encryption_key"},
+        "minio": {"endpoint", "access_key", "secret_key", "secure", "region", "encryption_key"},
+        "s3": {"endpoint", "access_key", "secret_key", "secure", "region", "encryption_key"},
+        "gcs": {"project_id", "credentials_path", "models_bucket", "datasets_bucket", "artifacts_bucket", "encryption_key"},
+    }
+
+    allowed = allowed_kwargs.get(backend_key)
+    if allowed is not None:
+        sanitized_kwargs = {key: value for key, value in sanitized_kwargs.items() if key in allowed}
+
+    if backend_key == "local":
+        base_path = sanitized_kwargs.pop("local_base_path", None)
+        if base_path is not None:
+            sanitized_kwargs["base_path"] = base_path
+
+    return backend, sanitized_kwargs
+
 try:
     if config is None:
         raise RuntimeError("Configuration unavailable")
     registry = MLflowRegistry(config)
     exporter = ModelExporter()
     ab_testing = ABTestingService(registry)
-    storage = StorageService(config)
+    storage_backend, storage_kwargs = _extract_storage_parameters(config.storage)
+    storage = StorageService(backend=storage_backend, **storage_kwargs)
     monitor = ModelMonitor(config)
     retraining_service = RetrainingService(config, registry, monitor, storage)
 except Exception as exc:  # pragma: no cover - defensive fallback for optional deps
@@ -368,15 +433,17 @@ async def get_ab_test_results(test_id: str):
 
     try:
         results = ab_testing.get_test_results(test_id)
-        
-        if not results:
-            raise HTTPException(status_code=404, detail="Test not found")
-        
-        return results
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get A/B test results: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    if not results:
+        raise HTTPException(status_code=404, detail="Test not found")
+
+    return results
 
 
 @router.post(
@@ -535,7 +602,9 @@ async def download_exported_model(
             filename=file_path.name,
             media_type="application/octet-stream"
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to download model: {e}")
         raise HTTPException(status_code=500, detail=str(e))
