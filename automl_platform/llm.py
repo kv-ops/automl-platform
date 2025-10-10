@@ -19,6 +19,12 @@ from pathlib import Path
 import re
 from functools import lru_cache
 
+from .safe_code_execution import (
+    UnsafeCodeExecutionError,
+    ensure_safe_cleaning_code,
+    execution_not_allowed_message,
+)
+
 # LLM providers
 import importlib.util
 from typing import TYPE_CHECKING, Any
@@ -760,13 +766,17 @@ class EnhancedDataCleaningAgent:
             
             # Apply cleaning steps
             for step in analysis.get('cleaning_steps', [])[:3]:  # Apply top 3 steps per iteration
+                code = step.get('code', '')
+                if not code or not self._validate_code(code):
+                    continue
+
                 try:
-                    code = step.get('code', '')
-                    if code and self._validate_code(code):
-                        exec(code, {"df": df_cleaned, "pd": pd, "np": np})
-                        logger.info(f"Applied: {step.get('action', 'cleaning step')}")
-                except Exception as e:
-                    logger.error(f"Failed to apply cleaning step: {e}")
+                    ensure_safe_cleaning_code(code)
+                except UnsafeCodeExecutionError as exc:
+                    logger.error(f"Unsafe cleaning step rejected: {exc}")
+                    raise
+
+                logger.warning(execution_not_allowed_message())
         
         return df_cleaned
     

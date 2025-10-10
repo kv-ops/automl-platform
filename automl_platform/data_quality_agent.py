@@ -18,6 +18,11 @@ from enum import Enum
 import re
 
 from .risk import RiskLevel
+from .safe_code_execution import (
+    UnsafeCodeExecutionError,
+    ensure_safe_cleaning_code,
+    execution_not_allowed_message,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -335,30 +340,25 @@ Return only executable Python code.
         df_preview = df.copy()
         
         try:
-            # Execute code on preview
-            local_vars = {"df": df_preview, "pd": pd, "np": np}
-            exec(code, {}, local_vars)
-            df_after = local_vars.get("df", df_preview)
-            
-            # Calculate changes
-            changes = {
-                "affected_rows": (df != df_after).any(axis=1).sum() if df.shape == df_after.shape else abs(len(df) - len(df_after)),
-                "affected_columns": list(set(df.columns) ^ set(df_after.columns)) or 
-                                   [col for col in df.columns if not df[col].equals(df_after[col])],
-                "sample_changes": df_after.head(3).to_dict('records'),
-                "shape_before": df.shape,
-                "shape_after": df_after.shape
-            }
-            
-        except Exception as e:
-            changes = {
-                "error": str(e),
+            ensure_safe_cleaning_code(code)
+        except UnsafeCodeExecutionError as exc:
+            return {
+                "error": str(exc),
                 "affected_rows": 0,
                 "affected_columns": [],
-                "sample_changes": {}
+                "sample_changes": {},
+                "shape_before": df.shape,
+                "shape_after": df.shape,
             }
-        
-        return changes
+
+        return {
+            "error": execution_not_allowed_message(),
+            "affected_rows": 0,
+            "affected_columns": [],
+            "sample_changes": {},
+            "shape_before": df.shape,
+            "shape_after": df.shape,
+        }
     
     def apply_cleaning(self, df: pd.DataFrame, action_index: int = -1) -> pd.DataFrame:
         """Apply a cleaning action from history."""
@@ -368,26 +368,11 @@ Return only executable Python code.
         
         action = self.cleaning_actions[action_index]
         
-        # Save state for undo
-        self.undo_stack.append(df.copy())
-        
-        # Apply cleaning
-        try:
-            local_vars = {"df": df.copy(), "pd": pd, "np": np}
-            exec(action["code"], {}, local_vars)
-            df_cleaned = local_vars.get("df", df)
-            
-            logger.info(f"Applied cleaning: {action['intent']['description']}")
-            
-            # Log ML context if present
-            if action.get("ml_context"):
-                logger.info(f"ML Context: {action['ml_context']['problem_type']}")
-            
-            return df_cleaned
-            
-        except Exception as e:
-            logger.error(f"Failed to apply cleaning: {e}")
-            return df
+        ensure_safe_cleaning_code(action["code"])
+
+        message = execution_not_allowed_message()
+        logger.error(message)
+        raise UnsafeCodeExecutionError(message)
     
     def undo_last_action(self, df: pd.DataFrame) -> pd.DataFrame:
         """Undo the last cleaning action."""
