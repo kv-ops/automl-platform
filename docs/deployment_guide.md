@@ -138,6 +138,7 @@ POSTGRES_PORT=5432
 REDIS_PASSWORD=your-redis-password-here
 REDIS_HOST=redis
 REDIS_PORT=6379
+REDIS_URL=redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/0  # Utilisé par le middleware d'authentification
 
 # =============================================================================
 # Stockage MinIO (S3-compatible)

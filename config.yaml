@@ -60,6 +60,7 @@ api:
   jwt_secret: your-secret-key
   jwt_algorithm: HS256
   jwt_expiration_minutes: 60
+  redis_url: redis://localhost:6379  # Obligatoire pour le cache d'authentification (modifiable via REDIS_URL)
   
   # Rate limiting
   enable_rate_limit: true
