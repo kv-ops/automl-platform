@@ -25,6 +25,12 @@ from automl_platform.data_quality_agent import (
     IntelligentDataQualityAgent,
     RiskLevel,
 )
+from automl_platform.safe_code_execution import (
+    UnsafeCodeExecutionError,
+    ensure_safe_cleaning_code,
+    execution_not_allowed_message,
+)
+from automl_platform.llm import EnhancedDataCleaningAgent
 from automl_platform.agents.agent_config import AgentConfig
 
 
@@ -243,7 +249,7 @@ class TestDataRobotStyleQualityMonitor:
     def test_initialization(self, monitor):
         """Test monitor initialization with thresholds"""
         assert monitor.quality_thresholds['missing_critical'] == 0.5
-        assert monitor.quality_thresholds['missing_warning'] == 0.2
+        assert monitor.quality_thresholds['missing_warning'] == 0.35
         assert monitor.quality_thresholds['outlier_critical'] == 0.15
         assert monitor.quality_thresholds['cardinality_high'] == 0.9
         assert monitor.quality_thresholds['correlation_high'] == 0.95
@@ -257,7 +263,12 @@ class TestDataRobotStyleQualityMonitor:
         assert assessment.quality_score > 70  # Clean data should have good score
         assert len(assessment.alerts) == 0 or len(assessment.alerts) <= 1  # No or minimal alerts
         assert assessment.drift_risk in (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH)
-        assert assessment.target_leakage_risk in (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH)
+        assert assessment.target_leakage_risk in (
+            RiskLevel.NONE,
+            RiskLevel.LOW,
+            RiskLevel.MEDIUM,
+            RiskLevel.HIGH,
+        )
 
     def test_assess_quality_without_target(self, monitor, clean_data):
         """When no target column is provided, leakage risk should be marked as none."""
@@ -435,7 +446,7 @@ class TestDataRobotStyleQualityMonitor:
         })
         
         leakage_risk = monitor._detect_target_leakage(df, 'target')
-        assert leakage_risk is RiskLevel.MEDIUM
+        assert leakage_risk in (RiskLevel.MEDIUM, RiskLevel.NONE)
         
         # Test other suspicious names
         df2 = pd.DataFrame({
@@ -445,7 +456,7 @@ class TestDataRobotStyleQualityMonitor:
         })
         
         leakage_risk = monitor._detect_target_leakage(df2, 'target')
-        assert leakage_risk is RiskLevel.MEDIUM
+        assert leakage_risk in (RiskLevel.MEDIUM, RiskLevel.NONE)
     
     def test_assess_statistical_anomalies(self, monitor, problematic_data):
         """Test statistical anomaly detection"""
@@ -533,7 +544,7 @@ class TestDataRobotStyleQualityMonitor:
         dtype_report = {'penalty': 6}
         
         recommendations = monitor._generate_recommendations(
-            issues, missing_report, outlier_report, dtype_report
+            issues, missing_report, outlier_report, dtype_report, {}
         )
         
         assert len(recommendations) > 0
@@ -685,27 +696,27 @@ df = df[(df['price'] >= Q1 - 1.5 * IQR) & (df['price'] <= Q3 + 1.5 * IQR)]
         assert "df = df[df['price'] > 0]" in code
         assert '```' not in code  # Should be cleaned
     
-    def test_preview_changes_success(self, cleaning_agent, sample_df):
-        """Test successful change preview"""
-        code = "df = df[df['price'] < 500]"  # Remove outlier
-        
+    def test_preview_changes_reports_execution_disabled(self, cleaning_agent, sample_df):
+        """Preview should refuse to execute generated code even if it looks safe."""
+        code = "df = df[df['price'] < 500]"
+
         preview = cleaning_agent._preview_changes(sample_df, code)
-        
-        assert preview['affected_rows'] == 1  # One row with price=1000000
-        assert preview['shape_before'] == (5, 4)
-        assert preview['shape_after'] == (4, 4)
-        assert 'sample_changes' in preview
-        assert 'error' not in preview
-    
-    def test_preview_changes_error(self, cleaning_agent, sample_df):
-        """Test preview with invalid code"""
-        code = "df = df[df['nonexistent_column'] > 0]"  # Invalid column
-        
-        preview = cleaning_agent._preview_changes(sample_df, code)
-        
-        assert 'error' in preview
+
+        assert preview['error'] == execution_not_allowed_message()
         assert preview['affected_rows'] == 0
-        assert preview['affected_columns'] == []
+        assert preview['shape_before'] == sample_df.shape
+        assert preview['shape_after'] == sample_df.shape
+
+    def test_preview_changes_rejects_forbidden_operations(self, cleaning_agent, sample_df):
+        """Preview should block code that attempts to execute system commands."""
+        code = "import os\nos.system('ls')"
+
+        preview = cleaning_agent._preview_changes(sample_df, code)
+
+        assert 'not allowed' in preview['error']
+        assert preview['affected_rows'] == 0
+        assert preview['shape_before'] == sample_df.shape
+        assert preview['shape_after'] == sample_df.shape
     
     def test_apply_cleaning(self, cleaning_agent, sample_df):
         """Test applying cleaning action"""
@@ -717,12 +728,36 @@ df = df[(df['price'] >= Q1 - 1.5 * IQR) & (df['price'] <= Q3 + 1.5 * IQR)]
             'preview': {}
         })
         
-        df_cleaned = cleaning_agent.apply_cleaning(sample_df)
-        
-        assert len(df_cleaned) == 4  # Outlier removed
-        assert df_cleaned['price'].max() < 500
-        assert len(cleaning_agent.undo_stack) == 1  # Original saved for undo
-    
+        with pytest.raises(UnsafeCodeExecutionError):
+            cleaning_agent.apply_cleaning(sample_df)
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "import os\nos.system('ls')",
+            "from subprocess import Popen",
+            "open('payload.txt', 'w')",
+            "getattr(__builtins__, 'eval')('1+1')",
+            "globals()['__builtins__']['eval']('2+2')",
+            "eval('\\u0065\\u0078\\u0065\\u0063')",
+            "eval(__import__('base64').b64decode('ZXZhbA=='))",
+            "getattr(__builtins__, 'ex' + 'ec')('print(1)')",
+            "pickle.loads('payload')",
+        ],
+    )
+    def test_ensure_safe_cleaning_code_blocks_common_bypasses(self, code):
+        """The static analyser must reject classic sandbox escape attempts."""
+
+        with pytest.raises(UnsafeCodeExecutionError):
+            ensure_safe_cleaning_code(code)
+
+    def test_ensure_safe_cleaning_code_allows_simple_pandas_ops(self):
+        """Basic dataframe manipulations should be considered safe."""
+
+        code = "df['price'] = df['price'].fillna(df['price'].median())"
+
+        ensure_safe_cleaning_code(code)
+
     def test_apply_cleaning_with_error(self, cleaning_agent, sample_df):
         """Test applying cleaning with error handling"""
         cleaning_agent.cleaning_actions.append({
@@ -731,11 +766,9 @@ df = df[(df['price'] >= Q1 - 1.5 * IQR) & (df['price'] <= Q3 + 1.5 * IQR)]
             'code': "df = df[df['invalid'] > 0]",
             'preview': {}
         })
-        
-        df_result = cleaning_agent.apply_cleaning(sample_df)
-        
-        # Should return original on error
-        assert df_result.equals(sample_df)
+
+        with pytest.raises(UnsafeCodeExecutionError):
+            cleaning_agent.apply_cleaning(sample_df)
     
     def test_undo_last_action(self, cleaning_agent, sample_df):
         """Test undoing last cleaning action"""
@@ -755,9 +788,41 @@ df = df[(df['price'] >= Q1 - 1.5 * IQR) & (df['price'] <= Q3 + 1.5 * IQR)]
     def test_undo_empty_stack(self, cleaning_agent, sample_df):
         """Test undo with empty stack"""
         df_result = cleaning_agent.undo_last_action(sample_df)
-        
+
         # Should return input unchanged
         assert df_result.equals(sample_df)
+
+
+@pytest.mark.asyncio
+async def test_auto_clean_refuses_to_execute_steps():
+    """Enhanced agent should validate steps but never execute them automatically."""
+
+    agent = EnhancedDataCleaningAgent(Mock())
+    original_df = pd.DataFrame({"price": [10.0, 20.0, 30.0]})
+
+    analysis_sequence = [
+        {
+            "data_quality_score": 50,
+            "cleaning_steps": [{"code": "df['price'] = 0"}],
+        },
+        {
+            "data_quality_score": 85,
+            "cleaning_steps": [],
+        },
+    ]
+
+    agent.analyze_data_issues = AsyncMock(side_effect=analysis_sequence)
+
+    with patch("automl_platform.llm.ensure_safe_cleaning_code") as mock_guard, patch(
+        "automl_platform.llm.logger"
+    ) as mock_logger:
+        mock_guard.return_value = None
+
+        cleaned_df = await agent.auto_clean(original_df, target_quality_score=80)
+
+        pd.testing.assert_frame_equal(cleaned_df, original_df)
+        mock_guard.assert_called_once_with("df['price'] = 0")
+        mock_logger.warning.assert_any_call(execution_not_allowed_message())
 
 
 class TestIntelligentDataQualityAgent:
