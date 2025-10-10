@@ -27,6 +27,8 @@ from types import SimpleNamespace, ModuleType
 import importlib
 from collections.abc import MutableMapping
 
+logger = logging.getLogger(__name__)
+
 try:
     import psycopg2  # type: ignore[import]
     from psycopg2.extras import RealDictCursor  # type: ignore[import]
@@ -98,9 +100,75 @@ def _ensure_psycopg2() -> None:
         )
 
 # Métriques Prometheus
-from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
+try:
+    from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
+    _PROMETHEUS_METRICS_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    _PROMETHEUS_METRICS_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+    class _NoopMetric:
+        """Fallback metric with a Prometheus-like interface."""
+
+        def labels(self, *args, **kwargs):
+            return self
+
+        def inc(self, *args, **kwargs):
+            return None
+
+        def dec(self, *args, **kwargs):
+            return None
+
+        def observe(self, *args, **kwargs):
+            return None
+
+        def set(self, *args, **kwargs):
+            return None
+
+    class _NoopCollectorRegistry:
+        """Minimal stub for CollectorRegistry when Prometheus is unavailable."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def register(self, collector):
+            """Mimic CollectorRegistry.register without storing collectors."""
+
+            return collector
+
+        def unregister(self, collector):
+            """Mimic CollectorRegistry.unregister."""
+
+            return None
+
+        def collect(self):
+            """Return an empty iterator of metrics."""
+
+            return []
+
+        def get_sample_value(self, *args, **kwargs):
+            """Always return None for sample lookups."""
+
+            return None
+
+        def clear(self):  # pragma: no cover - parity with CollectorRegistry
+            """Provide a clear method for compatibility."""
+
+            return None
+
+        def __iter__(self):
+            return iter(())
+
+    def _noop_metric_factory(*args, **kwargs):
+        return _NoopMetric()
+
+    Counter = _noop_metric_factory  # type: ignore[assignment]
+    Histogram = _noop_metric_factory  # type: ignore[assignment]
+    Gauge = _noop_metric_factory  # type: ignore[assignment]
+    CollectorRegistry = _NoopCollectorRegistry  # type: ignore[assignment]
+
+    logger.warning(
+        "prometheus_client is not installed; connector metrics will be disabled."
+    )
 
 # Créer un registre local pour les métriques des connecteurs
 connector_registry = CollectorRegistry()

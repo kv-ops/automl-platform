@@ -9,10 +9,15 @@ import numpy as np
 import tempfile
 import os
 import json
+import logging
+import importlib
+import sys
+import builtins
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
 import io
 from datetime import datetime
+from types import SimpleNamespace
 
 # Import des modules à tester
 from automl_platform.api.connectors import (
@@ -42,6 +47,98 @@ from automl_platform.api.connectors import (
     ml_connectors_active_connections,
     ml_connectors_data_volume_bytes
 )
+
+
+def test_connectors_import_without_prometheus(caplog):
+    """Importer les connecteurs doit fonctionner sans prometheus_client."""
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith('prometheus_client'):
+            raise ImportError("No module named 'prometheus_client'")
+        return real_import(name, *args, **kwargs)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        with patch('builtins.__import__', side_effect=fake_import):
+            sys.modules.pop('automl_platform.api.connectors', None)
+            reloaded_connectors = importlib.import_module('automl_platform.api.connectors')
+
+            assert any(
+                "prometheus_client is not installed" in record.message
+                for record in caplog.records
+            )
+
+            metric = reloaded_connectors.ml_connectors_requests_total.labels(
+                tenant_id='tenant', connector_type='stub', operation='query'
+            )
+            metric.inc()
+
+            # CollectorRegistry doit être présent même en mode stub
+            assert isinstance(
+                reloaded_connectors.connector_registry,
+                reloaded_connectors.CollectorRegistry,
+            )
+
+            # Le StorageManager doit toujours s'initialiser
+            sys.modules.pop('automl_platform.storage', None)
+            storage_module = importlib.import_module('automl_platform.storage')
+            manager = storage_module.StorageManager()
+
+            assert 'postgresql' in manager.connectors
+
+            # Un connecteur concret doit pouvoir exécuter une requête complète
+            class _StubQueryResult:
+                def to_dataframe(self, create_bqstorage_client=False):
+                    return pd.DataFrame({'value': [1]})
+
+            class _StubQueryJob:
+                def __init__(self, query):
+                    self.query = query
+
+                def result(self):
+                    return _StubQueryResult()
+
+            class _StubBigQueryClient:
+                def __init__(self, **kwargs):
+                    self.kwargs = kwargs
+                    self.closed = False
+
+                def query(self, query, job_config=None):
+                    return _StubQueryJob(query)
+
+                def close(self):
+                    self.closed = True
+
+            class _StubBigQueryModule:
+                Client = _StubBigQueryClient
+                QueryJobConfig = lambda *args, **kwargs: None
+                ScalarQueryParameter = lambda *args, **kwargs: None
+                LoadJobConfig = lambda *args, **kwargs: None
+                WriteDisposition = SimpleNamespace(
+                    WRITE_TRUNCATE='WRITE_TRUNCATE',
+                    WRITE_APPEND='WRITE_APPEND',
+                )
+
+            reloaded_connectors.bigquery = _StubBigQueryModule
+
+            config = reloaded_connectors.ConnectionConfig(
+                connection_type='bigquery',
+                project_id='proj',
+                tenant_id='tenant-test',
+            )
+
+            connector = reloaded_connectors.BigQueryConnector(config)
+
+            df = connector.query('SELECT 1 AS value')
+
+            assert df.equals(pd.DataFrame({'value': [1]}))
+
+    sys.modules.pop('automl_platform.api.connectors', None)
+    importlib.import_module('automl_platform.api.connectors')
+    sys.modules.pop('automl_platform.storage', None)
+    importlib.import_module('automl_platform.storage')
 
 
 class TestConnectionConfig:
