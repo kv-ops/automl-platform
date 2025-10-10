@@ -626,10 +626,10 @@ class ModelMonitor:
     def check_drift(self, current_data: pd.DataFrame) -> Dict:
         """
         Check for data drift
-        
+
         Args:
             current_data: Current production data
-            
+
         Returns:
             Drift detection results
         """
@@ -701,8 +701,119 @@ class ModelMonitor:
         drift_events = [m for m in recent_metrics if m.data_drift_detected]
         summary["drift_events"] = len(drift_events)
         summary["drift_rate"] = len(drift_events) / len(recent_metrics) if recent_metrics else 0
-        
+
         return summary
+
+    def _filter_metrics_dict(self, metrics: ModelPerformanceMetrics) -> Dict[str, Any]:
+        """Convert ModelPerformanceMetrics to a clean dictionary."""
+        metrics_dict = metrics.to_dict()
+        # Remove fields with None values for clarity
+        metrics_dict = {k: v for k, v in metrics_dict.items() if v is not None}
+
+        # Provide friendly aliases expected by other services
+        if "auc_roc" in metrics_dict and "auc" not in metrics_dict:
+            metrics_dict["auc"] = metrics_dict["auc_roc"]
+
+        return metrics_dict
+
+    def get_current_performance(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """Return the most recent performance metrics for this monitor."""
+        if model_name and model_name != self.model_id:
+            return {}
+
+        if not self.performance_history:
+            return {}
+
+        latest_metrics = self.performance_history[-1]
+        return self._filter_metrics_dict(latest_metrics)
+
+    def get_baseline_performance(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """Return the earliest recorded performance metrics for this monitor."""
+        if model_name and model_name != self.model_id:
+            return {}
+
+        if not self.performance_history:
+            return {}
+
+        baseline_metrics = self.performance_history[0]
+        return self._filter_metrics_dict(baseline_metrics)
+
+    def get_drift_score(self, model_name: Optional[str] = None) -> float:
+        """Return the latest drift score aggregated across monitored features."""
+        if model_name and model_name != self.model_id:
+            return 0.0
+
+        if not self.drift_detector.drift_history:
+            return 0.0
+
+        last_check = self.drift_detector.drift_history[-1]
+        drift_scores = last_check.get("drift_scores", {}) or {}
+
+        if drift_scores:
+            return float(max(drift_scores.values()))
+
+        # Fallback when Evidently reports drift without feature scores
+        return 1.0 if last_check.get("drift_detected") else 0.0
+
+    def get_new_data_count(self, model_name: Optional[str] = None) -> int:
+        """Return the number of new data points logged since monitoring started."""
+        if model_name and model_name != self.model_id:
+            return 0
+
+        total_records = 0
+        for record in self.prediction_history:
+            if isinstance(record.get("predictions"), list):
+                total_records += len(record["predictions"])
+            elif isinstance(record.get("features"), list):
+                total_records += len(record["features"])
+            elif isinstance(record.get("actuals"), list):
+                total_records += len(record["actuals"])
+            else:
+                total_records += int(record.get("prediction_count", 1))
+
+        if total_records == 0:
+            total_records = int(self.total_predictions)
+
+        return total_records
+
+    def get_performance_metrics(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """Return baseline and current performance metrics with degradations."""
+        if model_name and model_name != self.model_id:
+            return {}
+
+        baseline = self.get_baseline_performance()
+        current = self.get_current_performance()
+
+        metrics: Dict[str, Any] = {
+            "model_id": self.model_id,
+            "baseline_metrics": baseline,
+            "current_metrics": current,
+        }
+
+        key_pairs = [
+            ("accuracy", "baseline_accuracy", "current_accuracy"),
+            ("auc", "baseline_auc", "current_auc"),
+            ("f1", "baseline_f1", "current_f1"),
+            ("precision", "baseline_precision", "current_precision"),
+            ("recall", "baseline_recall", "current_recall"),
+            ("r2", "baseline_r2", "current_r2"),
+            ("rmse", "baseline_rmse", "current_rmse"),
+            ("mae", "baseline_mae", "current_mae"),
+        ]
+
+        for key, baseline_key, current_key in key_pairs:
+            baseline_value = baseline.get(key) if baseline else None
+            current_value = current.get(key) if current else None
+
+            if baseline_value is not None:
+                metrics[baseline_key] = baseline_value
+            if current_value is not None:
+                metrics[current_key] = current_value
+
+            if baseline_value is not None and current_value is not None:
+                metrics[f"{key}_degradation"] = baseline_value - current_value
+
+        return metrics
     
     def export_metrics(self) -> bytes:
         """Export metrics in Prometheus format"""

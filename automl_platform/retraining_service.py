@@ -141,23 +141,57 @@ class RetrainingService:
         if drift_score and drift_score > self.retrain_config.drift_threshold:
             reasons.append(f"High drift detected: {drift_score:.2f}")
         
-        # Check performance degradation
-        perf_metrics = self.monitor.get_performance_metrics(model_name)
-        if perf_metrics:
-            baseline = perf_metrics.get('baseline_accuracy', 1.0)
-            current = perf_metrics.get('current_accuracy', 1.0)
-            degradation = (baseline - current) / baseline if baseline > 0 else 0
-            
-            metrics['baseline_accuracy'] = baseline
-            metrics['current_accuracy'] = current
+        # Check performance degradation using monitor helpers
+        perf_metrics = self.monitor.get_performance_metrics(model_name) or {}
+        baseline_metrics = perf_metrics.get('baseline_metrics') or {}
+        current_metrics = perf_metrics.get('current_metrics') or {}
+
+        # Always retrieve detailed snapshots to avoid AttributeError regressions
+        detailed_baseline = self.monitor.get_baseline_performance(model_name) or {}
+        detailed_current = self.monitor.get_current_performance(model_name) or {}
+
+        if detailed_baseline:
+            baseline_metrics = {**detailed_baseline, **baseline_metrics}
+        if detailed_current:
+            current_metrics = {**detailed_current, **current_metrics}
+
+        baseline_accuracy = (
+            perf_metrics.get('baseline_accuracy')
+            if 'baseline_accuracy' in perf_metrics else baseline_metrics.get('accuracy')
+        )
+        current_accuracy = (
+            perf_metrics.get('current_accuracy')
+            if 'current_accuracy' in perf_metrics else current_metrics.get('accuracy')
+        )
+
+        if baseline_accuracy is not None and current_accuracy is not None:
+            degradation = (
+                (baseline_accuracy - current_accuracy) / baseline_accuracy
+                if baseline_accuracy > 0 else 0
+            )
+
+            metrics['baseline_accuracy'] = baseline_accuracy
+            metrics['current_accuracy'] = current_accuracy
             metrics['degradation'] = degradation
-            
+
             if degradation > self.retrain_config.performance_degradation_threshold:
                 reasons.append(f"Performance degradation: {degradation:.2%}")
-            
-            # Check absolute performance
-            if current < self.retrain_config.min_accuracy_threshold:
-                reasons.append(f"Accuracy below threshold: {current:.2f}")
+
+            if current_accuracy < self.retrain_config.min_accuracy_threshold:
+                reasons.append(f"Accuracy below threshold: {current_accuracy:.2f}")
+
+        # Track additional degradation insights for observability
+        degradation_metrics = {}
+        for metric_name in ['auc', 'f1', 'precision', 'recall', 'r2', 'rmse', 'mae']:
+            baseline_value = baseline_metrics.get(metric_name)
+            current_value = current_metrics.get(metric_name)
+            if baseline_value is None or current_value is None:
+                continue
+
+            degradation_metrics[f'{metric_name}_degradation'] = baseline_value - current_value
+
+        if degradation_metrics:
+            metrics.update(degradation_metrics)
         
         # Check data volume
         new_data_count = self.monitor.get_new_data_count(model_name)
