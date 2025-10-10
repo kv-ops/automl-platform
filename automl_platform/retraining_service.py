@@ -42,6 +42,11 @@ except ImportError:
     PREFECT_AVAILABLE = False
     logging.warning("Prefect not installed. Install with: pip install prefect")
 
+try:
+    import requests  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    requests = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,11 +134,28 @@ class RetrainingService:
         reasons = []
         metrics = {}
         
-        # Get current production model
-        prod_model = self.registry.get_production_model(model_name)
-        if not prod_model:
+        # Get current production model metadata
+        prod_version = None
+        metadata_fn = getattr(self.registry, "get_production_model_metadata", None)
+        if callable(metadata_fn):
+            prod_version = metadata_fn(model_name)
+        else:
+            get_version_fn = getattr(self.registry, "get_latest_production_version", None)
+            if callable(get_version_fn):
+                prod_version = get_version_fn(model_name)
+            else:
+                # Fallback for older registries that only expose the loaded model helper
+                prod_model = getattr(self.registry, "get_production_model", lambda *_: None)(model_name)
+                if prod_model:
+                    metrics['production_model_loaded'] = True
+
+        if prod_version is None and not metrics.get('production_model_loaded'):
             return False, "No production model found", {}
-        
+
+        if prod_version is not None:
+            metrics['production_version'] = str(getattr(prod_version, 'version', ''))
+            metrics['production_stage'] = getattr(prod_version, 'current_stage', None)
+
         # Check drift
         drift_score = self.monitor.get_drift_score(model_name)
         metrics['drift_score'] = drift_score
@@ -201,24 +223,32 @@ class RetrainingService:
             reasons.append(f"Sufficient new data: {new_data_count} samples")
         
         # Check time since last training
-        model_history = self.registry.get_model_history(model_name, limit=1)
-        if model_history:
-            history_entry = model_history[0]
-            last_training = None
-            for field in ('created_at', 'creation_timestamp', 'creation_time'):
-                last_training = self._parse_timestamp(history_entry.get(field))
-                if last_training:
-                    break
-            if last_training:
-                days_since_training = (datetime.utcnow() - last_training).days
-                metrics['days_since_training'] = days_since_training
+        last_training = None
+        if prod_version is not None:
+            last_training = self._parse_timestamp(
+                getattr(prod_version, 'last_updated_timestamp', None)
+                or getattr(prod_version, 'creation_timestamp', None)
+            )
 
-                if days_since_training > 30:  # Retrain monthly at minimum
-                    reasons.append(f"Model is {days_since_training} days old")
-        
+        if last_training is None:
+            model_history = self.registry.get_model_history(model_name, limit=1)
+            if model_history:
+                history_entry = model_history[0]
+                for field in ('created_at', 'creation_timestamp', 'creation_time'):
+                    last_training = self._parse_timestamp(history_entry.get(field))
+                    if last_training:
+                        break
+
+        if last_training:
+            days_since_training = (datetime.utcnow() - last_training).days
+            metrics['days_since_training'] = days_since_training
+
+            if days_since_training > 30:  # Retrain monthly at minimum
+                reasons.append(f"Model is {days_since_training} days old")
+
         should_retrain = len(reasons) > 0
         reason_text = "; ".join(reasons) if reasons else "No retraining needed"
-        
+
         return should_retrain, reason_text, metrics
     
     async def retrain_model(self, 
@@ -382,13 +412,22 @@ class RetrainingService:
         
         # Send to Slack if configured
         if self.retrain_config.slack_webhook:
-            try:
-                import requests
-                requests.post(self.retrain_config.slack_webhook, 
-                            json={"text": message})
-            except:
-                pass
-        
+            requests_module = requests
+            if requests_module is None:
+                try:
+                    import requests as requests_module  # type: ignore
+                except ImportError:
+                    requests_module = None
+
+            if requests_module is not None:
+                try:
+                    requests_module.post(
+                        self.retrain_config.slack_webhook,
+                        json={"text": message}
+                    )
+                except Exception:
+                    pass
+
         # Log notification
         logger.info(f"Notification: {message}")
     

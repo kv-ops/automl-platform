@@ -1307,7 +1307,7 @@ async def start_streaming(
     
     # Load model
     try:
-        model = app.state.mlflow_registry.get_production_model(model_id)
+        model = app.state.mlflow_registry.load_production_model(model_id)
         if not model:
             raise FileNotFoundError()
     except:

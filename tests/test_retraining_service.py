@@ -23,6 +23,24 @@ from automl_platform.retraining_service import (
 from automl_platform.mlflow_registry import ModelStage
 
 
+@pytest.fixture
+def mock_dependencies():
+    """Create mock dependencies for RetrainingService"""
+    config = Mock()
+    registry = Mock()
+    monitor = Mock()
+    storage_service = Mock()
+
+    production_version = MagicMock()
+    production_version.version = "1"
+    production_version.current_stage = "Production"
+    production_version.last_updated_timestamp = datetime.utcnow().timestamp() * 1000
+    registry.get_production_model_metadata = Mock(return_value=production_version)
+    registry.get_latest_production_version = Mock(return_value=production_version)
+
+    return config, registry, monitor, storage_service
+
+
 class TestRetrainingConfig:
     """Tests for RetrainingConfig class"""
     
@@ -59,17 +77,7 @@ class TestRetrainingConfig:
 
 class TestRetrainingService:
     """Tests for RetrainingService class"""
-    
-    @pytest.fixture
-    def mock_dependencies(self):
-        """Create mock dependencies for RetrainingService"""
-        config = Mock()
-        registry = Mock()
-        monitor = Mock()
-        storage_service = Mock()
-        
-        return config, registry, monitor, storage_service
-    
+
     @pytest.fixture
     def retraining_service(self, mock_dependencies):
         """Create RetrainingService instance with mocks"""
@@ -86,7 +94,6 @@ class TestRetrainingService:
     def test_should_retrain_high_drift(self, retraining_service):
         """Test retraining triggered by high drift"""
         # Setup mocks
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.7)  # Above threshold
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
@@ -97,11 +104,18 @@ class TestRetrainingService:
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
         retraining_service.registry.get_model_history = Mock(return_value=[])
 
+        stale_version = MagicMock()
+        stale_version.version = "1"
+        stale_version.current_stage = "Production"
+        stale_version.last_updated_timestamp = (datetime.utcnow() - timedelta(days=45)).timestamp() * 1000
+        retraining_service.registry.get_production_model_metadata.return_value = stale_version
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
 
         assert should_retrain is True
         assert 'High drift detected' in reason
         assert metrics['drift_score'] == 0.7
+        retraining_service.registry.get_production_model_metadata.assert_called_once_with('test_model')
         retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
         retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
         retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
@@ -111,7 +125,6 @@ class TestRetrainingService:
     def test_should_retrain_performance_degradation(self, retraining_service):
         """Test retraining triggered by performance degradation"""
         # Setup mocks
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.3)  # Below threshold
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
@@ -136,7 +149,6 @@ class TestRetrainingService:
     def test_should_retrain_low_accuracy(self, retraining_service):
         """Test retraining triggered by low absolute accuracy"""
         # Setup mocks
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.3)
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.85,
@@ -161,7 +173,6 @@ class TestRetrainingService:
     def test_should_retrain_sufficient_new_data(self, retraining_service):
         """Test retraining triggered by sufficient new data"""
         # Setup mocks
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.3)
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
@@ -186,7 +197,6 @@ class TestRetrainingService:
     def test_should_retrain_old_model(self, retraining_service):
         """Test retraining triggered by model age"""
         # Setup mocks
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.3)
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
@@ -195,6 +205,12 @@ class TestRetrainingService:
         retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
         retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
+
+        stale_version = MagicMock()
+        stale_version.version = "1"
+        stale_version.current_stage = "Production"
+        stale_version.last_updated_timestamp = (datetime.utcnow() - timedelta(days=45)).timestamp() * 1000
+        retraining_service.registry.get_production_model_metadata.return_value = stale_version
 
         # Model trained 40 days ago
         old_date = (datetime.utcnow() - timedelta(days=40)).isoformat()
@@ -215,7 +231,6 @@ class TestRetrainingService:
 
     def test_should_handle_integer_timestamps(self, retraining_service):
         """Ensure integer timestamps from MLflow history are parsed safely."""
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.3)
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
@@ -224,6 +239,8 @@ class TestRetrainingService:
         retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
         retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
+
+        retraining_service.registry.get_production_model_metadata.return_value.last_updated_timestamp = None
 
         old_datetime = datetime.utcnow() - timedelta(days=35)
         integer_timestamp = int(old_datetime.timestamp() * 1000)  # milliseconds since epoch
@@ -245,7 +262,6 @@ class TestRetrainingService:
     def test_should_not_retrain(self, retraining_service):
         """Test when retraining should not be triggered"""
         # Setup mocks - all conditions are good
-        retraining_service.registry.get_production_model = Mock(return_value={'id': 'model_123'})
         retraining_service.monitor.get_drift_score = Mock(return_value=0.3)
         retraining_service.monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
@@ -256,6 +272,8 @@ class TestRetrainingService:
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
 
         # Model trained recently
+        retraining_service.registry.get_production_model_metadata.return_value.last_updated_timestamp = None
+
         recent_date = (datetime.utcnow() - timedelta(days=5)).isoformat()
         retraining_service.registry.get_model_history = Mock(return_value=[
             {'created_at': recent_date}
@@ -308,13 +326,15 @@ class TestRetrainingService:
     
     def test_should_retrain_no_production_model(self, retraining_service):
         """Test when no production model exists"""
-        retraining_service.registry.get_production_model = Mock(return_value=None)
-        
+        retraining_service.registry.get_production_model_metadata.return_value = None
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
         assert should_retrain is False
         assert reason == "No production model found"
         assert metrics == {}
+        retraining_service.registry.get_production_model_metadata.assert_called_once_with('test_model')
+        retraining_service.monitor.get_drift_score.assert_not_called()
     
     @pytest.mark.asyncio
     async def test_retrain_model_success(self, retraining_service):
@@ -333,7 +353,7 @@ class TestRetrainingService:
         ))
         
         # Mock orchestrator
-        with patch('automl_platform.retraining_service.AutoMLOrchestrator') as mock_orchestrator:
+        with patch('automl_platform.orchestrator.AutoMLOrchestrator') as mock_orchestrator:
             mock_instance = Mock()
             mock_instance.best_pipeline = Mock()
             mock_instance.get_leaderboard = Mock(return_value=pd.DataFrame({
@@ -375,7 +395,7 @@ class TestRetrainingService:
         y_train = pd.Series(np.random.randint(0, 2, 100))
         
         # Setup mocks for failed validation
-        with patch('automl_platform.retraining_service.AutoMLOrchestrator') as mock_orchestrator:
+        with patch('automl_platform.orchestrator.AutoMLOrchestrator') as mock_orchestrator:
             mock_instance = Mock()
             mock_instance.best_pipeline = Mock()
             mock_instance.get_leaderboard = Mock(return_value=pd.DataFrame({
@@ -410,13 +430,16 @@ class TestRetrainingService:
         """Test model retraining with exception"""
         X_train = pd.DataFrame(np.random.randn(100, 5))
         y_train = pd.Series(np.random.randint(0, 2, 100))
-        
+
         # Setup mocks to raise exception
-        with patch('automl_platform.retraining_service.AutoMLOrchestrator') as mock_orchestrator:
+        retraining_service.registry.client = Mock()
+        retraining_service.registry.client.get_latest_versions = Mock(return_value=[])
+
+        with patch('automl_platform.orchestrator.AutoMLOrchestrator') as mock_orchestrator:
             mock_orchestrator.side_effect = Exception("Training failed")
-            
+
             retraining_service._send_notification = AsyncMock()
-            
+
             result = await retraining_service.retrain_model(
                 'test_model',
                 X_train,
@@ -494,7 +517,7 @@ class TestRetrainingService:
         }
         
         # Mock requests for Slack
-        with patch('automl_platform.retraining_service.requests') as mock_requests:
+        with patch('automl_platform.retraining_service.requests', create=True) as mock_requests:
             retraining_service.retrain_config.slack_webhook = 'https://hooks.slack.com/test'
             
             await retraining_service._send_notification(result)
@@ -560,29 +583,33 @@ class TestSchedulingIntegration:
         return service
     
     @patch('automl_platform.retraining_service.AIRFLOW_AVAILABLE', True)
-    @patch('automl_platform.retraining_service.DAG')
-    @patch('automl_platform.retraining_service.PythonOperator')
-    def test_create_airflow_dag(self, mock_operator, mock_dag, service_with_scheduler):
+    @patch('automl_platform.retraining_service.DAG', create=True)
+    @patch('automl_platform.retraining_service.PythonOperator', create=True)
+    @patch('automl_platform.retraining_service.days_ago', create=True)
+    def test_create_airflow_dag(self, mock_days_ago, mock_operator, mock_dag, service_with_scheduler):
         """Test Airflow DAG creation"""
         service_with_scheduler.retrain_config.check_frequency = 'daily'
         
         dag = service_with_scheduler.create_retraining_schedule()
-        
+
         # Verify DAG was created
         mock_dag.assert_called_once()
-        dag_args = mock_dag.call_args[1]
-        assert dag_args['dag_id'] == 'model_retraining'
-        assert dag_args['schedule_interval'] == '@daily'
+        args, kwargs = mock_dag.call_args
+        assert args[0] == 'model_retraining'
+        assert kwargs['schedule_interval'] == '@daily'
         
         # Verify operators were created
         assert mock_operator.call_count >= 3  # At least 3 tasks
     
     @patch('automl_platform.retraining_service.PREFECT_AVAILABLE', True)
     @patch('automl_platform.retraining_service.AIRFLOW_AVAILABLE', False)
-    @patch('automl_platform.retraining_service.flow')
-    @patch('automl_platform.retraining_service.task')
-    @patch('automl_platform.retraining_service.Deployment')
-    def test_create_prefect_flow(self, mock_deployment, mock_task, mock_flow, service_with_scheduler):
+    @patch('automl_platform.retraining_service.flow', create=True)
+    @patch('automl_platform.retraining_service.task', create=True)
+    @patch('automl_platform.retraining_service.Deployment', create=True)
+    @patch('automl_platform.retraining_service.ConcurrentTaskRunner', create=True)
+    @patch('automl_platform.retraining_service.CronSchedule', create=True)
+    @patch('automl_platform.retraining_service.IntervalSchedule', create=True)
+    def test_create_prefect_flow(self, mock_interval, mock_cron, mock_runner, mock_deployment, mock_task, mock_flow, service_with_scheduler):
         """Test Prefect flow creation"""
         service_with_scheduler.retrain_config.check_frequency = 'weekly'
         
@@ -618,12 +645,19 @@ class TestRetrainingConfigInterpretation:
         service.retrain_config.min_data_points = 500
         
         # Setup mocks
-        registry.get_production_model = Mock(return_value={'id': 'model_123'})
+        production_version = MagicMock()
+        production_version.version = "2"
+        production_version.current_stage = "Production"
+        production_version.last_updated_timestamp = datetime.utcnow().timestamp() * 1000
+        registry.get_production_model_metadata = Mock(return_value=production_version)
+        registry.get_latest_production_version = Mock(return_value=production_version)
         monitor.get_drift_score = Mock(return_value=0.35)  # Above new threshold
         monitor.get_performance_metrics = Mock(return_value={
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.84  # 6.7% degradation, above new threshold
         })
+        monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        monitor.get_current_performance = Mock(return_value={'accuracy': 0.84})
         monitor.get_new_data_count = Mock(return_value=600)  # Above new threshold
         registry.get_model_history = Mock(return_value=[])
         

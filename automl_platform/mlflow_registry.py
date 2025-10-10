@@ -8,8 +8,10 @@ Provides MLflow model registry with A/B testing support.
 
 import mlflow
 import mlflow.sklearn
+import mlflow.pyfunc
 from mlflow.tracking import MlflowClient
 from mlflow.models import ModelSignature, infer_signature
+from mlflow.entities.model_registry import ModelVersion
 from typing import Dict, Any, Optional, List
 import logging
 import os
@@ -382,6 +384,65 @@ class MLflowRegistry:
         except Exception as e:
             logger.error(f"Failed to delete model version: {e}")
             return False
+
+    def get_latest_production_version(self, model_name: str) -> Optional[ModelVersion]:
+        """Return the latest production model version metadata if available."""
+
+        if not self.client:
+            logger.warning("MLflow client not initialized - cannot fetch production version")
+            return None
+
+        try:
+            versions = self.client.get_latest_versions(
+                model_name,
+                stages=[ModelStage.PRODUCTION.value]
+            )
+
+            if not versions:
+                logger.info("No production version found for model %s", model_name)
+                return None
+
+            return versions[0]
+
+        except Exception as exc:
+            logger.error("Failed to fetch production version for %s: %s", model_name, exc)
+            return None
+
+    def get_production_model_metadata(self, model_name: str) -> Optional[ModelVersion]:
+        """Return metadata for the latest production model version if available."""
+
+        return self.get_latest_production_version(model_name)
+
+    def load_production_model(self, model_name: str) -> Optional[Any]:
+        """Load the current production model for the provided model name."""
+
+        version = self.get_production_model_metadata(model_name)
+        if not version:
+            return None
+
+        model_uri = f"models:/{model_name}/{version.version}"
+
+        try:
+            model = mlflow.pyfunc.load_model(model_uri)
+            logger.info(
+                "Loaded production model for %s (version %s)",
+                model_name,
+                version.version,
+            )
+            return model
+        except Exception as exc:
+            logger.error(
+                "Failed to load production model %s (version %s): %s",
+                model_name,
+                version.version,
+                exc,
+            )
+            return None
+
+    def get_production_model(self, model_name: str) -> Optional[Any]:
+        """Backward compatible alias for :meth:`load_production_model`."""
+
+        return self.load_production_model(model_name)
     
     def search_models(self,
                      filter_string: str = "",
