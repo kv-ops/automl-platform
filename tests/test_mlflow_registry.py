@@ -115,15 +115,89 @@ class TestMLflowRegistry(unittest.TestCase):
     def test_promote_model_failure(self):
         """Test model promotion failure handling."""
         self.registry.client.transition_model_version_stage.side_effect = Exception("Promotion failed")
-        
+
         result = self.registry.promote_model(
             model_name="test_model",
             version=1,
             stage=ModelStage.PRODUCTION
         )
-        
+
         self.assertFalse(result)
-    
+
+    def test_get_latest_production_version(self):
+        """Test retrieving the latest production version metadata."""
+        mock_version = Mock()
+        mock_version.version = "5"
+        self.registry.client.get_latest_versions.return_value = [mock_version]
+
+        result = self.registry.get_latest_production_version("test_model")
+
+        self.assertEqual(result, mock_version)
+        self.registry.client.get_latest_versions.assert_called_once_with(
+            "test_model",
+            stages=[ModelStage.PRODUCTION.value]
+        )
+
+    def test_get_latest_production_version_none(self):
+        """Test retrieving production version when none exists."""
+        self.registry.client.get_latest_versions.return_value = []
+
+        result = self.registry.get_latest_production_version("test_model")
+
+        self.assertIsNone(result)
+
+    def test_get_production_model_metadata(self):
+        """Test retrieving production metadata through the helper."""
+        mock_version = Mock()
+        mock_version.version = "9"
+        self.registry.client.get_latest_versions.return_value = [mock_version]
+
+        result = self.registry.get_production_model_metadata("test_model")
+
+        self.assertEqual(result, mock_version)
+        self.registry.client.get_latest_versions.assert_called_once_with(
+            "test_model",
+            stages=[ModelStage.PRODUCTION.value]
+        )
+
+    @patch('automl_platform.mlflow_registry.mlflow.pyfunc.load_model')
+    def test_load_production_model(self, mock_load_model):
+        """Test loading the production model using MLflow."""
+        mock_version = Mock()
+        mock_version.version = "7"
+        self.registry.client.get_latest_versions.return_value = [mock_version]
+        mock_model = Mock()
+        mock_load_model.return_value = mock_model
+
+        result = self.registry.load_production_model("test_model")
+
+        self.assertEqual(result, mock_model)
+        mock_load_model.assert_called_once_with("models:/test_model/7")
+
+    @patch('automl_platform.mlflow_registry.mlflow.pyfunc.load_model')
+    def test_load_production_model_no_version(self, mock_load_model):
+        """Test loading production model when no production version exists."""
+        self.registry.client.get_latest_versions.return_value = []
+
+        result = self.registry.load_production_model("test_model")
+
+        self.assertIsNone(result)
+        mock_load_model.assert_not_called()
+
+    @patch('automl_platform.mlflow_registry.mlflow.pyfunc.load_model')
+    def test_get_production_model_alias(self, mock_load_model):
+        """Ensure the legacy helper remains functional via the alias."""
+        mock_version = Mock()
+        mock_version.version = "3"
+        self.registry.client.get_latest_versions.return_value = [mock_version]
+        mock_model = Mock()
+        mock_load_model.return_value = mock_model
+
+        result = self.registry.get_production_model("test_model")
+
+        self.assertEqual(result, mock_model)
+        mock_load_model.assert_called_once_with("models:/test_model/3")
+
     def test_get_model_history(self):
         """Test retrieving model version history."""
         # Create mock versions
@@ -204,7 +278,7 @@ class TestMLflowRegistry(unittest.TestCase):
         self.assertIn('metrics_diff', comparison)
         self.assertEqual(comparison['version1']['metrics']['accuracy'], 0.90)
         self.assertEqual(comparison['version2']['metrics']['accuracy'], 0.95)
-        self.assertEqual(comparison['metrics_diff']['accuracy']['diff'], 0.05)
+        self.assertAlmostEqual(comparison['metrics_diff']['accuracy']['diff'], 0.05)
         self.assertAlmostEqual(comparison['metrics_diff']['accuracy']['pct_change'], 5.56, places=1)
     
     def test_rollback_model(self):
