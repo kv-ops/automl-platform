@@ -164,21 +164,25 @@ class RetrainingService:
             if 'current_accuracy' in perf_metrics else current_metrics.get('accuracy')
         )
 
-        if baseline_accuracy is not None and current_accuracy is not None:
-            degradation = (
-                (baseline_accuracy - current_accuracy) / baseline_accuracy
-                if baseline_accuracy > 0 else 0
-            )
-
+        if baseline_accuracy is not None:
             metrics['baseline_accuracy'] = baseline_accuracy
-            metrics['current_accuracy'] = current_accuracy
-            metrics['degradation'] = degradation
 
-            if degradation > self.retrain_config.performance_degradation_threshold:
-                reasons.append(f"Performance degradation: {degradation:.2%}")
+        if current_accuracy is not None:
+            metrics['current_accuracy'] = current_accuracy
 
             if current_accuracy < self.retrain_config.min_accuracy_threshold:
                 reasons.append(f"Accuracy below threshold: {current_accuracy:.2f}")
+
+            if baseline_accuracy is not None:
+                degradation = (
+                    (baseline_accuracy - current_accuracy) / baseline_accuracy
+                    if baseline_accuracy > 0 else 0
+                )
+
+                metrics['degradation'] = degradation
+
+                if degradation > self.retrain_config.performance_degradation_threshold:
+                    reasons.append(f"Performance degradation: {degradation:.2%}")
 
         # Track additional degradation insights for observability
         degradation_metrics = {}
