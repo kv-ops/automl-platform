@@ -503,8 +503,8 @@ class AutoMLOrchestrator:
                 model_version_number = getattr(model_version, "version", None)
 
                 if model_version_number is None:
-                    logger.error(
-                        "Failed to register model %s: missing model version information",
+                    logger.warning(
+                        "Skipping metadata update because registry returned no version for model %s",
                         model_name,
                     )
                 else:
@@ -630,7 +630,7 @@ class AutoMLOrchestrator:
     def create_ab_test(self,
                        challenger_pipeline: Any,
                        model_name: str,
-                       traffic_split: float = 0.1) -> str:
+                       traffic_split: float = 0.1) -> Optional[str]:
         """
         Create A/B test between current production model and challenger
         """
@@ -646,8 +646,8 @@ class AutoMLOrchestrator:
 
         challenger_version_number = getattr(challenger_version, "version", None)
         if challenger_version_number is None:
-            logger.error(
-                "Cannot create A/B test for model %s because challenger version is missing",
+            logger.warning(
+                "Skipping A/B test creation for model %s because challenger version is missing",
                 model_name,
             )
             return None
@@ -668,8 +668,8 @@ class AutoMLOrchestrator:
 
         champion_version_number = getattr(prod_versions[0], "version", None)
         if champion_version_number is None:
-            logger.error(
-                "Cannot create A/B test for model %s because champion version is missing",
+            logger.warning(
+                "Skipping A/B test creation for model %s because champion version is missing",
                 model_name,
             )
             return None
