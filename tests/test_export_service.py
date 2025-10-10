@@ -6,6 +6,7 @@ Tests for ONNX export, quantization, and edge deployment
 
 import unittest
 from unittest.mock import Mock, patch, MagicMock, mock_open, call
+from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -72,19 +73,28 @@ class TestModelExporter(unittest.TestCase):
         })
     
     @patch('automl_platform.export_service.ONNX_AVAILABLE', True)
-    @patch('automl_platform.export_service.convert_sklearn')
-    @patch('automl_platform.export_service.onnx.checker.check_model')
+    @patch('automl_platform.export_service.convert_sklearn', create=True)
+    @patch('automl_platform.export_service.FloatTensorType', create=True)
+    @patch('automl_platform.export_service.onnx', create=True)
     @patch('builtins.open', new_callable=mock_open)
     @patch('automl_platform.export_service.Path.stat')
-    def test_export_to_onnx_success(self, mock_stat, mock_file, mock_check, mock_convert):
+    def test_export_to_onnx_success(self, mock_stat, mock_file, mock_onnx_module, mock_float_type, mock_convert):
         """Test successful ONNX export."""
         # Setup mocks
-        mock_onnx_model = Mock()
-        mock_onnx_model.SerializeToString.return_value = b"onnx_model_bytes"
-        mock_onnx_model.graph.input = [Mock()]
-        mock_onnx_model.graph.output = [Mock()]
+        mock_float_type.side_effect = lambda shape: SimpleNamespace(shape=shape)
+
+        class FakeModelProto:
+            def __init__(self):
+                self.graph = SimpleNamespace(input=[Mock()], output=[Mock()])
+
+            def SerializeToString(self):
+                return b"onnx_model_bytes"
+
+        mock_onnx_module.ModelProto = FakeModelProto
+        mock_onnx_model = FakeModelProto()
         mock_convert.return_value = mock_onnx_model
-        
+        mock_check = mock_onnx_module.checker.check_model
+
         mock_stat_obj = Mock()
         mock_stat_obj.st_size = 1024 * 1024  # 1 MB
         mock_stat.return_value = mock_stat_obj
@@ -121,11 +131,33 @@ class TestModelExporter(unittest.TestCase):
         self.assertEqual(result['opset_version'], 13)
         self.assertEqual(result['quantized_path'], "/tmp/test_models/model_quantized.onnx")
         self.assertEqual(result['quantized_size_mb'], 0.25)
-        
+
         # Check ONNX conversion was called correctly
         mock_convert.assert_called_once()
         call_args = mock_convert.call_args[1]
         self.assertEqual(call_args['target_opset'], 13)
+
+        # Ensure the ONNX checker validates the in-memory model
+        mock_check.assert_called_once_with(mock_onnx_model)
+
+    @patch('automl_platform.export_service.ONNX_AVAILABLE', True)
+    @patch('automl_platform.export_service.convert_sklearn', create=True)
+    @patch('automl_platform.export_service.FloatTensorType', create=True)
+    @patch('automl_platform.export_service.onnx', create=True)
+    def test_export_to_onnx_invalid_type(self, mock_onnx_module, mock_float_type, mock_convert):
+        """Ensure we fail fast when the converter returns an unexpected type."""
+        mock_float_type.side_effect = lambda shape: SimpleNamespace(shape=shape)
+        mock_onnx_module.ModelProto = type('FakeModelProto', (), {})
+        mock_convert.return_value = object()
+
+        result = self.exporter.export_to_onnx(
+            model=self.mock_model,
+            sample_input=self.sample_input,
+            model_name="test_model"
+        )
+
+        self.assertFalse(result['success'])
+        self.assertIn('expected onnx.ModelProto', result['error'])
     
     @patch('automl_platform.export_service.ONNX_AVAILABLE', False)
     def test_export_to_onnx_not_available(self):
