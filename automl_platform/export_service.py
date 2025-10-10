@@ -133,7 +133,18 @@ class ModelExporter:
                 initial_types=initial_types,
                 target_opset=self.config.target_opset
             )
-            
+
+            # Ensure we received a proper ONNX ModelProto before continuing. skl2onnx
+            # should always return an instance of onnx.ModelProto, but in practice we
+            # observed that the checker can be invoked with an incorrect payload when
+            # mocks or alternative converters are provided. Guarding here keeps the
+            # runtime error message clear for real executions as well as tests.
+            if hasattr(onnx, "ModelProto") and not isinstance(onnx_model, onnx.ModelProto):
+                raise TypeError(
+                    "convert_sklearn returned an unexpected type "
+                    f"({type(onnx_model)!r}); expected onnx.ModelProto"
+                )
+
             # Update input/output names if provided
             if input_names:
                 for i, name in enumerate(input_names):
@@ -162,7 +173,9 @@ class ModelExporter:
                 f.write(onnx_model.SerializeToString())
             
             # Validate the model
-            onnx.checker.check_model(str(output_path))
+            # TODO(#export-onnx-validation): Replace the mock-based verification with an
+            # integration test once the ONNX toolchain is available in CI.
+            onnx.checker.check_model(onnx_model)
             
             # Get model size
             model_size = output_path.stat().st_size / (1024 * 1024)  # MB
