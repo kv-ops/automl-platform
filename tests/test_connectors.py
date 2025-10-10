@@ -19,7 +19,66 @@ import io
 from datetime import datetime
 from types import SimpleNamespace
 
+
+def _strip_double_quoted_segments(sql: str) -> str:
+    """Remove content enclosed in double quotes from a SQL string."""
+
+    result_chars = []
+    in_quotes = False
+    i = 0
+
+    while i < len(sql):
+        ch = sql[i]
+        if ch == '"':
+            if in_quotes and i + 1 < len(sql) and sql[i + 1] == '"':
+                i += 2
+                continue
+            in_quotes = not in_quotes
+            i += 1
+            continue
+
+        if not in_quotes:
+            result_chars.append(ch)
+
+        i += 1
+
+    return ''.join(result_chars)
+
+
+def _strip_backtick_segments(sql: str) -> str:
+    """Remove content enclosed in backticks from a SQL string."""
+
+    result_chars = []
+    in_backticks = False
+    i = 0
+
+    while i < len(sql):
+        ch = sql[i]
+        if ch == '`':
+            if in_backticks and i + 1 < len(sql) and sql[i + 1] == '`':
+                i += 2
+                continue
+            in_backticks = not in_backticks
+            i += 1
+            continue
+
+        if not in_backticks:
+            result_chars.append(ch)
+
+        i += 1
+
+    return ''.join(result_chars)
+
 # Import des modules à tester
+SQL_INJECTION_IDENTIFIERS = {
+    "schema_payload": "public'; SELECT * FROM secrets; --",
+    "drop_table": "users'; DROP TABLE users; --",
+    "boolean": "1' OR '1'='1",
+    "union": 'admin" UNION SELECT password FROM users--',
+    "command": "test`; DELETE FROM secrets; #",
+}
+
+
 from automl_platform.api.connectors import (
     # Classes de base
     BaseConnector,
@@ -489,7 +548,7 @@ class TestPostgreSQLConnector:
         args = mock_read_sql.call_args
         assert 'pg_tables' in args[0][0]
         assert 'schemaname' in args[0][0]
-    
+
     @patch('automl_platform.api.connectors.psycopg2')
     @patch('pandas.read_sql')
     def test_get_table_info(self, mock_read_sql, mock_psycopg2):
@@ -518,6 +577,57 @@ class TestPostgreSQLConnector:
         assert info['row_count'] == 100
         assert len(info['columns']) == 3
         assert info['columns'][0]['column_name'] == 'id'
+
+    def test_read_table_with_special_identifiers(self):
+        """Les identifiants spéciaux doivent être correctement quotés."""
+
+        connector = PostgreSQLConnector(self.config)
+        connector.connected = True
+        connector.connection = None
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl('sales "2024"', 'marketing-team')
+
+        mock_exec.assert_called_once()
+        query_obj = mock_exec.call_args[0][0]
+        rendered_query = connector._render_sql_query(query_obj)
+        assert rendered_query == 'SELECT * FROM "marketing-team"."sales ""2024"""'
+        # Vérifier que les guillemets sont doublés
+        assert '"sales ""2024"""' in rendered_query
+
+    @pytest.mark.parametrize(
+        "schema_name, table_name",
+        [
+            (
+                SQL_INJECTION_IDENTIFIERS["schema_payload"],
+                SQL_INJECTION_IDENTIFIERS["drop_table"],
+            ),
+            ("analytics", SQL_INJECTION_IDENTIFIERS["boolean"]),
+            ("finance", SQL_INJECTION_IDENTIFIERS["union"]),
+            ("reporting", SQL_INJECTION_IDENTIFIERS["command"]),
+        ],
+    )
+    def test_read_table_blocks_injection_payloads(
+        self, schema_name, table_name
+    ):
+        """Les payloads d'injection doivent être neutralisés par le quoting SQL."""
+
+        connector = PostgreSQLConnector(self.config)
+        connector.connected = True
+        connector.connection = None
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl(table_name, schema_name)
+
+        mock_exec.assert_called_once()
+        query_obj = mock_exec.call_args[0][0]
+        rendered_query = connector._render_sql_query(query_obj)
+
+        stripped = _strip_double_quoted_segments(rendered_query)
+        assert ';' not in stripped
+        assert '--' not in stripped
+        assert '/*' not in stripped
+        assert '*/' not in stripped
 
 
 class TestSnowflakeConnector:
@@ -601,20 +711,89 @@ class TestSnowflakeConnector:
         mock_cursor = Mock()
         mock_cursor.description = [('ID',), ('VALUE',)]
         mock_cursor.fetchall.return_value = [(1, 10), (2, 20)]
-        
+
         mock_connection = Mock()
         mock_connection.cursor.return_value = mock_cursor
         mock_snowflake.connect.return_value = mock_connection
-        
+        mock_snowflake.sql_text = lambda query: query
+
         self.config.max_rows = 100
         connector = SnowflakeConnector(self.config)
         result = connector._read_table_impl('test_table', 'test_schema')
-        
-        # Vérifier que LIMIT est ajouté
+
+        # Vérifier que la requête utilise les paramètres sécurisés
         calls = mock_cursor.execute.call_args_list
-        query_call = [c for c in calls if 'SELECT' in str(c)][0]
-        assert 'LIMIT 100' in query_call[0][0]
-    
+        query_call = [c for c in calls if isinstance(c[0][0], str) and 'identifier' in c[0][0].lower()][0]
+        assert query_call[0][0] == 'SELECT * FROM identifier(:table_identifier) LIMIT :limit'
+        assert query_call[0][1] == {
+            'table_identifier': 'test_schema.test_table',
+            'limit': 100,
+        }
+
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_read_table_with_special_identifiers(self, mock_snowflake):
+        """Les noms de schémas et de tables avec caractères spéciaux doivent être sécurisés."""
+
+        mock_snowflake.connect.return_value = Mock()
+        mock_snowflake.sql_text = lambda query: query
+
+        connector = SnowflakeConnector(self.config)
+        connector.config.max_rows = 50
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl('sales "2024"', 'marketing-team')
+
+        mock_exec.assert_called_once()
+        query_arg = mock_exec.call_args[0][0]
+        params = mock_exec.call_args[0][1]
+        assert query_arg == 'SELECT * FROM identifier(:table_identifier) LIMIT :limit'
+        assert params == {
+            'table_identifier': 'marketing-team.sales "2024"',
+            'limit': 50,
+        }
+        # Le nom de table ne doit pas apparaître littéralement dans la requête
+        assert 'sales "2024"' not in query_arg
+
+    @pytest.mark.parametrize(
+        "schema_name, table_name",
+        [
+            (
+                SQL_INJECTION_IDENTIFIERS["schema_payload"],
+                SQL_INJECTION_IDENTIFIERS["drop_table"],
+            ),
+            ("analytics", SQL_INJECTION_IDENTIFIERS["boolean"]),
+            ("finance", SQL_INJECTION_IDENTIFIERS["union"]),
+            ("reporting", SQL_INJECTION_IDENTIFIERS["command"]),
+        ],
+    )
+    @patch('automl_platform.api.connectors.snowflake.connector')
+    def test_read_table_blocks_injection_payloads(
+        self, mock_snowflake, schema_name, table_name
+    ):
+        """Les payloads d'injection SQL doivent être transmis uniquement via les paramètres."""
+
+        mock_snowflake.connect.return_value = Mock()
+        mock_snowflake.sql_text = lambda query: query
+
+        connector = SnowflakeConnector(self.config)
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl(table_name, schema_name)
+
+        mock_exec.assert_called_once()
+        query_arg, params = mock_exec.call_args[0][:2]
+
+        assert query_arg == 'SELECT * FROM identifier(:table_identifier)'
+        assert 'DROP TABLE' not in query_arg
+        assert '--' not in query_arg
+
+        expected_identifier = (
+            f"{schema_name}.{table_name}"
+            if schema_name
+            else table_name
+        )
+        assert params['table_identifier'] == expected_identifier
+
     @patch('automl_platform.api.connectors.snowflake.connector')
     @patch('automl_platform.api.connectors.snowflake.connector.pandas_tools.write_pandas')
     def test_write_table(self, mock_write_pandas, mock_snowflake):
@@ -654,11 +833,174 @@ class TestSnowflakeConnector:
         
         connector = SnowflakeConnector(self.config)
         tables = connector.list_tables('test_schema')
-        
+
         assert tables == ['table1', 'table2', 'table3']
         mock_cursor.execute.assert_any_call("SHOW TABLES IN SCHEMA test_schema")
 
 
+class TestBigQueryConnectorSecurity:
+    """Tests ciblés sur la sécurisation des identifiants BigQuery."""
+
+    def setup_method(self):
+        self.config = ConnectionConfig(
+            connection_type='bigquery',
+            project_id='demo-project',
+            dataset_id='marketing',
+            tenant_id='tenant-test',
+        )
+
+    @patch('automl_platform.api.connectors.bigquery')
+    def test_read_table_with_partition_suffix(self, mock_bigquery):
+        """Les partitions doivent être supportées sans exposer les identifiants."""
+
+        mock_bigquery.Client.return_value = Mock()
+        connector = BigQueryConnector(self.config)
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl('sales_2024$20240101', 'marketing')
+
+        query_arg = mock_exec.call_args[0][0]
+        assert query_arg == 'SELECT * FROM `marketing.sales_2024$20240101`'
+
+    @patch('automl_platform.api.connectors.bigquery')
+    def test_read_table_allows_fully_qualified_names(self, mock_bigquery):
+        """Un nom fully-qualified doit être conservé en respectant le quoting."""
+
+        mock_bigquery.Client.return_value = Mock()
+        connector = BigQueryConnector(self.config)
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl('analytics.sales_events', None)
+
+        query_arg = mock_exec.call_args[0][0]
+        assert query_arg == 'SELECT * FROM `demo-project.analytics.sales_events`'
+
+    @pytest.mark.parametrize(
+        "schema_name, table_name",
+        [
+            (SQL_INJECTION_IDENTIFIERS["schema_payload"], 'sales'),
+            ('marketing', SQL_INJECTION_IDENTIFIERS["drop_table"]),
+            ('marketing', SQL_INJECTION_IDENTIFIERS["boolean"].replace("'", '"')),
+            ('marketing', SQL_INJECTION_IDENTIFIERS["command"]),
+        ],
+    )
+    @patch('automl_platform.api.connectors.bigquery')
+    def test_read_table_rejects_injection_payloads(
+        self, mock_bigquery, schema_name, table_name
+    ):
+        """Les identifiants contenant des payloads d'injection doivent être refusés."""
+
+        mock_bigquery.Client.return_value = Mock()
+        connector = BigQueryConnector(self.config)
+
+        with pytest.raises(ValueError):
+            connector._read_table_impl(table_name, schema_name)
+
+
+class TestDatabricksConnectorSecurity:
+    """Tests de sécurisation pour Databricks."""
+
+    def setup_method(self):
+        self.config = ConnectionConfig(
+            connection_type='databricks',
+            host='adb.example.com',
+            http_path='/sql/endpoint',
+            token='secret-token',
+            schema='analytics',
+            catalog='main',
+            tenant_id='tenant-test',
+        )
+
+    @pytest.mark.parametrize(
+        "schema_name, table_name",
+        [
+            (
+                SQL_INJECTION_IDENTIFIERS["schema_payload"],
+                SQL_INJECTION_IDENTIFIERS["drop_table"],
+            ),
+            ('analytics', SQL_INJECTION_IDENTIFIERS["boolean"]),
+            ('analytics', SQL_INJECTION_IDENTIFIERS["union"]),
+            ('finance', SQL_INJECTION_IDENTIFIERS["command"]),
+        ],
+    )
+    @patch('automl_platform.api.connectors.databricks_sql')
+    def test_read_table_blocks_injection_payloads(
+        self, mock_databricks_sql, schema_name, table_name
+    ):
+        """Les noms fournis doivent être intégralement quotés avec des backticks."""
+
+        fake_connection = MagicMock()
+        fake_connection.cursor.return_value = MagicMock()
+        mock_databricks_sql.connect.return_value = fake_connection
+
+        connector = DatabricksConnector(self.config)
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl(table_name, schema_name)
+
+        mock_exec.assert_called_once()
+        query_arg = mock_exec.call_args[0][0]
+        assert query_arg.startswith('SELECT * FROM `')
+
+        stripped = _strip_backtick_segments(query_arg)
+        assert 'DROP TABLE' not in stripped
+        assert ';' not in stripped
+        assert '--' not in stripped
+        assert '/*' not in stripped
+        assert '*/' not in stripped
+
+
+class TestMongoDBConnectorSecurity:
+    """Tests de sécurité pour le connecteur MongoDB."""
+
+    def setup_method(self):
+        self.config = ConnectionConfig(
+            connection_type='mongodb',
+            host='localhost',
+            database='analytics',
+        )
+
+    def test_read_table_passes_through_collection_payload(self):
+        """Les noms de collection malveillants restent traités comme des clés simples."""
+
+        with patch('automl_platform.api.connectors.pymongo'):
+            connector = MongoDBConnector(self.config)
+
+        payload = SQL_INJECTION_IDENTIFIERS["drop_table"]
+        connector.connected = True
+        connector.database = MagicMock()
+
+        with patch.object(connector, '_execute_query', return_value=pd.DataFrame()) as mock_exec:
+            connector._read_table_impl(payload)
+
+        mock_exec.assert_called_once()
+        assert mock_exec.call_args.kwargs == {
+            'query': '{}',
+            'params': {
+                'collection': payload,
+                'filter': {},
+                'limit': None,
+            },
+        }
+
+    def test_execute_query_rejects_non_json_filters(self):
+        """Un payload SQL classique n'est pas un filtre JSON valide."""
+
+        with patch('automl_platform.api.connectors.pymongo'):
+            connector = MongoDBConnector(self.config)
+
+        connector.connected = True
+        connector.database = MagicMock()
+        collection = MagicMock()
+        connector.database.__getitem__.return_value = collection
+
+        payload = SQL_INJECTION_IDENTIFIERS["drop_table"]
+
+        with pytest.raises(ValueError):
+            connector._execute_query(payload, params={'collection': 'sales'})
+
+        connector.database.__getitem__.assert_called_once_with('sales')
+        collection.find.assert_not_called()
 class TestExcelConnector:
     """Tests pour le connecteur Excel."""
     
