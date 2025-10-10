@@ -823,6 +823,19 @@ class APIConfig:
     sso_client_id: Optional[str] = os.getenv("SSO_CLIENT_ID")
     sso_client_secret: Optional[str] = os.getenv("SSO_CLIENT_SECRET")
     sso_realm_url: Optional[str] = os.getenv("SSO_REALM_URL")
+    redis_url: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Resolve Redis URL from configuration or environment and validate it."""
+        if not self.redis_url:
+            env_redis_url = os.getenv("REDIS_URL")
+            if env_redis_url:
+                self.redis_url = env_redis_url
+
+        if self.redis_url and not self.redis_url.startswith(("redis://", "rediss://")):
+            raise ValueError(
+                "api.redis_url must start with 'redis://' or 'rediss://'"
+            )
     
     # Rate limiting - PER PLAN
     enable_rate_limit: bool = True

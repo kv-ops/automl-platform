@@ -10,6 +10,7 @@ into a unified FastAPI middleware for complete authentication and compliance.
 import logging
 import time
 import json
+import os
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -63,9 +64,13 @@ class UnifiedAuthMiddleware(BaseHTTPMiddleware):
         self.config = config or AutoMLConfig()
         
         # Initialize Redis
-        self.redis_client = redis_client or redis.from_url(
-            self.config.api.sso_realm_url or "redis://localhost:6379"
-        )
+        redis_url = self.config.api.redis_url or os.getenv("REDIS_URL")
+        if not redis_url:
+            raise RuntimeError(
+                "Redis URL is required. Set api.redis_url in the configuration or provide the REDIS_URL environment variable."
+            )
+
+        self.redis_client = redis_client or redis.from_url(redis_url)
         
         # Initialize services
         self.token_service = TokenService()
