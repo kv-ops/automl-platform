@@ -47,6 +47,19 @@ def test_billing_config_accepts_default_plan_alias():
     assert config.default_plan is None
 
 
+def test_automl_config_validate_allows_none_storage_backend(tmp_path):
+    """Validation should accept storage backend set to 'none'."""
+    config = AutoMLConfig(
+        storage=StorageConfig(backend="none"),
+        output_dir=str(tmp_path / "outputs"),
+    )
+    config.monitoring.report_output_dir = str(tmp_path / "reports")
+    config.agent_first.knowledge_base_path = str(tmp_path / "kb")
+    config.agent_first.yaml_output_dir = str(tmp_path / "agent_yaml")
+
+    assert config.validate() is True
+
+
 class TestConfigManager:
     """Test suite for ConfigManager."""
     

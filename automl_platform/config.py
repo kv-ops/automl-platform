@@ -606,7 +606,7 @@ class FeatureStoreConfig:
 @dataclass
 class StorageConfig:
     """Storage configuration for model versioning and datasets."""
-    backend: str = "local"  # "local", "minio", "s3", "gcs"
+    backend: str = "local"  # "local", "minio", "s3", "gcs", "none"
     
     # Local storage
     local_base_path: str = "./ml_storage"
@@ -1435,7 +1435,7 @@ class AutoMLConfig:
             assert self.security.secret_key, "security.secret_key must be defined"
             
             # Validate storage config
-            assert self.storage.backend in ["local", "minio", "s3", "gcs"], f"Invalid storage backend: {self.storage.backend}"
+            assert self.storage.backend in ["local", "minio", "s3", "gcs", "none"], f"Invalid storage backend: {self.storage.backend}"
             if self.storage.backend == "gcs" and self.storage.credentials_path:
                 credentials_file = Path(self.storage.credentials_path).expanduser()
                 assert credentials_file.exists(), (
