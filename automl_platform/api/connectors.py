@@ -14,6 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import json
+import re
 import os
 import sys
 import time
@@ -32,9 +33,11 @@ logger = logging.getLogger(__name__)
 try:
     import psycopg2  # type: ignore[import]
     from psycopg2.extras import RealDictCursor  # type: ignore[import]
+    from psycopg2 import sql as psycopg2_sql  # type: ignore[import]
 except ImportError:  # pragma: no cover - optional dependency
     psycopg2 = None  # type: ignore[assignment]
     RealDictCursor = None  # type: ignore[assignment]
+    psycopg2_sql = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency
     from google.cloud import bigquery  # type: ignore[import]
@@ -71,6 +74,20 @@ if _snowflake_connector is None:
     _snowflake_connector = ModuleType('snowflake.connector')
     pandas_tools_module = ModuleType('snowflake.connector.pandas_tools')
     pandas_tools_module.write_pandas = lambda *args, **kwargs: (True, 0, 0, "")
+    # Provide minimal helpers so that quoting utilities are available during tests
+    if not hasattr(_snowflake_connector, 'sql_text'):
+        _snowflake_connector.sql_text = lambda query: query
+
+    if not hasattr(_snowflake_connector, 'Identifier'):
+        class _Identifier(str):
+            """Simple Identifier helper used when the real Snowflake SDK is unavailable."""
+
+            def __new__(cls, value: str):
+                escaped = value.replace('"', '""')
+                return str.__new__(cls, f'"{escaped}"')
+
+        _snowflake_connector.Identifier = _Identifier
+
     _snowflake_connector.pandas_tools = pandas_tools_module
     snowflake_module.connector = _snowflake_connector
     sys.modules.setdefault('snowflake', snowflake_module)
@@ -84,6 +101,15 @@ else:
         pandas_tools_module = ModuleType('snowflake.connector.pandas_tools')
         pandas_tools_module.write_pandas = lambda *args, **kwargs: (True, 0, 0, "")
         _snowflake_connector.pandas_tools = pandas_tools_module
+    if not hasattr(_snowflake_connector, 'sql_text'):
+        _snowflake_connector.sql_text = lambda query: query
+    if not hasattr(_snowflake_connector, 'Identifier'):
+        class _Identifier(str):
+            def __new__(cls, value: str):
+                escaped = value.replace('"', '""')
+                return str.__new__(cls, f'"{escaped}"')
+
+        _snowflake_connector.Identifier = _Identifier
     sys.modules['snowflake.connector'] = _snowflake_connector
     sys.modules['snowflake.connector.pandas_tools'] = pandas_tools_module
 
@@ -545,6 +571,12 @@ class BaseConnector(ABC):
 class BigQueryConnector(BaseConnector):
     """Google BigQuery data warehouse connector."""
 
+    _PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9-:]+$")
+    _DATASET_ID_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    _TABLE_ID_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\$(?:[A-Za-z0-9_]+))?$")
+    _DISALLOWED_IDENTIFIER_PATTERN = re.compile(r"""[\s'"`;]""")
+    _DISALLOWED_COMMENT_PATTERN = re.compile(r"--|/\*|\*/")
+
     def __init__(self, config: ConnectionConfig):
         if config.requests_per_minute is None:
             config.requests_per_minute = 60  # BigQuery default quota-friendly limit
@@ -622,15 +654,37 @@ class BigQueryConnector(BaseConnector):
         return df
 
     def _read_table_impl(self, table_name: str, schema: str = None) -> pd.DataFrame:
-        dataset = schema or self.config.dataset_id
+        dataset = (schema or self.config.dataset_id or "").strip()
         if not dataset:
             raise ValueError("dataset_id must be provided to read from BigQuery")
 
-        table_fqn = self._format_table_for_query(table_name, dataset)
-        query = f"SELECT * FROM {table_fqn}"
+        project, dataset_id = self._split_dataset(self._strip_identifier_quotes(dataset))
+        self._ensure_safe_dataset_id(dataset_id)
+        if project:
+            self._ensure_safe_project_id(project)
+
+        table_project, table_dataset, table_id = self._split_table_reference(
+            self._strip_identifier_quotes(table_name)
+        )
+
+        if table_project:
+            self._ensure_safe_project_id(table_project)
+            project = table_project
+
+        if table_dataset:
+            self._ensure_safe_dataset_id(table_dataset)
+            dataset_id = table_dataset
+
+        self._ensure_safe_table_id(table_id)
+
+        table_identifier = ".".join(
+            part for part in [project, dataset_id, table_id] if part
+        )
+
+        query = f"SELECT * FROM `{table_identifier}`"
 
         if self.config.max_rows:
-            query += f" LIMIT {self.config.max_rows}"
+            query += f" LIMIT {int(self.config.max_rows)}"
 
         return self._execute_query(query)
 
@@ -742,6 +796,73 @@ class BigQueryConnector(BaseConnector):
         if identifier.startswith("`") and identifier.endswith("`"):
             return identifier
         return f"`{identifier}`"
+
+    @classmethod
+    def _strip_identifier_quotes(cls, value: Optional[str]) -> str:
+        if value is None:
+            return ""
+
+        stripped = value.strip()
+        if len(stripped) >= 2 and (
+            (stripped.startswith("`") and stripped.endswith("`"))
+            or (stripped.startswith('"') and stripped.endswith('"'))
+        ):
+            return stripped[1:-1]
+
+        return stripped
+
+    @classmethod
+    def _split_table_reference(
+        cls, table_name: str
+    ) -> Tuple[Optional[str], Optional[str], str]:
+        parts = [part for part in table_name.split(".") if part]
+        if not parts:
+            raise ValueError("table_name must be provided for BigQuery reads")
+
+        if len(parts) == 3:
+            return parts[0], parts[1], parts[2]
+
+        if len(parts) == 2:
+            return None, parts[0], parts[1]
+
+        if len(parts) == 1:
+            return None, None, parts[0]
+
+        raise ValueError("Invalid BigQuery table identifier provided")
+
+    @classmethod
+    def _ensure_safe_project_id(cls, project_id: str) -> None:
+        cls._ensure_identifier_is_safe(project_id)
+        if not cls._PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise ValueError("Invalid BigQuery project identifier")
+
+    @classmethod
+    def _ensure_safe_dataset_id(cls, dataset_id: str) -> None:
+        cls._ensure_identifier_is_safe(dataset_id)
+        if not cls._DATASET_ID_PATTERN.fullmatch(dataset_id):
+            raise ValueError("Invalid BigQuery dataset identifier")
+
+    @classmethod
+    def _ensure_safe_table_id(cls, table_id: str) -> None:
+        cls._ensure_identifier_is_safe(table_id, allow_dollar=True)
+        if not cls._TABLE_ID_PATTERN.fullmatch(table_id):
+            raise ValueError("Invalid BigQuery table identifier")
+
+    @classmethod
+    def _ensure_identifier_is_safe(
+        cls, identifier: str, allow_dollar: bool = False
+    ) -> None:
+        if not identifier:
+            raise ValueError("Identifier must be provided for BigQuery operations")
+
+        if cls._DISALLOWED_IDENTIFIER_PATTERN.search(identifier):
+            raise ValueError("Identifier contains unsafe characters")
+
+        if cls._DISALLOWED_COMMENT_PATTERN.search(identifier):
+            raise ValueError("Identifier contains SQL comment markers")
+
+        if not allow_dollar and "$" in identifier:
+            raise ValueError("Identifier contains unsupported '$' characters")
 
     @staticmethod
     def _map_python_type_to_bigquery(value: Any) -> str:
@@ -868,12 +989,38 @@ class SnowflakeConnector(BaseConnector):
     def _read_table_impl(self, table_name: str, schema: str = None) -> pd.DataFrame:
         """Read Snowflake table."""
         schema = schema or self.config.schema
-        query = f"SELECT * FROM {schema}.{table_name}" if schema else f"SELECT * FROM {table_name}"
-        
+        sql_text = getattr(self.snowflake, 'sql_text', None)
+
+        if callable(sql_text):
+            table_identifier = f"{schema}.{table_name}" if schema else table_name
+            base_query = "SELECT * FROM identifier(:table_identifier)"
+            params: Dict[str, Any] = {"table_identifier": table_identifier}
+
+            if self.config.max_rows:
+                base_query += " LIMIT :limit"
+                params["limit"] = int(self.config.max_rows)
+
+            query_obj = sql_text(base_query)
+            return self._execute_query(query_obj, params)
+
+        table_reference = self._format_table_reference(schema, table_name)
+        query = f"SELECT * FROM {table_reference}"
+
         if self.config.max_rows:
-            query += f" LIMIT {self.config.max_rows}"
-        
+            query += f" LIMIT {int(self.config.max_rows)}"
+
         return self._execute_query(query)
+
+    @staticmethod
+    def _quote_identifier(identifier: str) -> str:
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
+
+    def _format_table_reference(self, schema: Optional[str], table_name: str) -> str:
+        parts = [self._quote_identifier(table_name)]
+        if schema:
+            parts.insert(0, self._quote_identifier(schema))
+        return ".".join(parts)
     
     def _write_table_impl(self, df: pd.DataFrame, table_name: str, schema: str = None, if_exists: str = 'append'):
         """Write to Snowflake table."""
@@ -1193,6 +1340,7 @@ class PostgreSQLConnector(BaseConnector):
         _ensure_psycopg2()
         self.psycopg2 = psycopg2
         self.RealDictCursor = RealDictCursor
+        self.sql_module = psycopg2_sql
     
     def connect(self):
         """Connect to PostgreSQL."""
@@ -1216,34 +1364,88 @@ class PostgreSQLConnector(BaseConnector):
             self.connected = False
             logger.info("Disconnected from PostgreSQL")
     
-    def _execute_query(self, query: str, params: Dict = None) -> pd.DataFrame:
+    def _execute_query(self, query, params: Dict = None) -> pd.DataFrame:
         """Execute PostgreSQL query."""
         self.connect()
-        
+
+        query_text = self._render_sql_query(query)
+
         try:
             if params:
-                df = pd.read_sql(query, self.connection, params=params)
+                df = pd.read_sql(query_text, self.connection, params=params)
             else:
-                df = pd.read_sql(query, self.connection)
-            
+                df = pd.read_sql(query_text, self.connection)
+
             if self.config.max_rows and len(df) > self.config.max_rows:
                 df = df.head(self.config.max_rows)
-            
+
             return df
             
         except Exception as e:
             logger.error(f"Query failed: {e}")
             self.connection.rollback()
             raise
-    
+
+    def _render_sql_query(self, query) -> str:
+        if isinstance(query, str):
+            return query
+
+        sql_module = self.sql_module
+        if sql_module is None:
+            return str(query)
+
+        if isinstance(query, sql_module.Composed):
+            return self._render_composed_sql(query)
+
+        return str(query)
+
+    def _render_composed_sql(self, composed) -> str:
+        sql_module = self.sql_module
+        if sql_module is None:
+            return str(composed)
+
+        connection = getattr(self, 'connection', None)
+        if connection is not None:
+            try:
+                return composed.as_string(connection)
+            except Exception:
+                pass
+
+        def render_item(item) -> str:
+            if isinstance(item, sql_module.Composed):
+                return ''.join(render_item(part) for part in item._wrapped)
+            if isinstance(item, sql_module.SQL):
+                return item.string
+            if isinstance(item, sql_module.Identifier):
+                return '.'.join(self._quote_identifier_part(part) for part in item._wrapped)
+            if isinstance(item, sql_module.Literal):
+                return str(item._wrapped)
+            return str(item)
+
+        return render_item(composed)
+
+    @staticmethod
+    def _quote_identifier_part(part: str) -> str:
+        escaped = part.replace('"', '""')
+        return f'"{escaped}"'
+
     def _read_table_impl(self, table_name: str, schema: str = None) -> pd.DataFrame:
         """Read PostgreSQL table."""
         schema = schema or self.config.schema or 'public'
-        query = f'SELECT * FROM "{schema}"."{table_name}"'
-        
+
+        sql_module = self.sql_module
+        if sql_module is None:
+            raise RuntimeError('psycopg2.sql module is required for PostgreSQL queries')
+
+        identifier_parts = (schema, table_name) if schema else (table_name,)
+        table_identifier = sql_module.Identifier(*identifier_parts)
+        query = sql_module.SQL('SELECT * FROM {}').format(table_identifier)
+
         if self.config.max_rows:
-            query += f" LIMIT {self.config.max_rows}"
-        
+            query += sql_module.SQL(' LIMIT {}').format(
+                sql_module.Literal(int(self.config.max_rows))
+            )
+
         return self._execute_query(query)
     
     def _write_table_impl(self, df: pd.DataFrame, table_name: str, schema: str = None, if_exists: str = 'append'):
@@ -1300,7 +1502,15 @@ class PostgreSQLConnector(BaseConnector):
         
         columns_df = self._execute_query(columns_query, {'schema': schema, 'table': table_name})
         
-        count_query = f'SELECT COUNT(*) as row_count FROM "{schema}"."{table_name}"'
+        sql_module = self.sql_module
+        if sql_module is None:
+            raise RuntimeError('psycopg2.sql module is required for PostgreSQL queries')
+
+        identifier_parts = (schema, table_name) if schema else (table_name,)
+        table_identifier = sql_module.Identifier(*identifier_parts)
+        count_query = sql_module.SQL('SELECT COUNT(*) as row_count FROM {}').format(
+            table_identifier
+        )
         count_df = self._execute_query(count_query)
         
         return {
