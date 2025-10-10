@@ -92,15 +92,22 @@ class TestRetrainingService:
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.88
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
         retraining_service.registry.get_model_history = Mock(return_value=[])
-        
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
         assert should_retrain is True
         assert 'High drift detected' in reason
         assert metrics['drift_score'] == 0.7
-    
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
+
     def test_should_retrain_performance_degradation(self, retraining_service):
         """Test retraining triggered by performance degradation"""
         # Setup mocks
@@ -110,15 +117,22 @@ class TestRetrainingService:
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.75  # 16.7% degradation
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.75})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
         retraining_service.registry.get_model_history = Mock(return_value=[])
-        
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
         assert should_retrain is True
         assert 'Performance degradation' in reason
         assert metrics['degradation'] > 0.1
-    
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
+
     def test_should_retrain_low_accuracy(self, retraining_service):
         """Test retraining triggered by low absolute accuracy"""
         # Setup mocks
@@ -128,15 +142,22 @@ class TestRetrainingService:
             'baseline_accuracy': 0.85,
             'current_accuracy': 0.7  # Below min threshold
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.85})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.7})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
         retraining_service.registry.get_model_history = Mock(return_value=[])
-        
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
         assert should_retrain is True
         assert 'Accuracy below threshold' in reason
         assert metrics['current_accuracy'] == 0.7
-    
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
+
     def test_should_retrain_sufficient_new_data(self, retraining_service):
         """Test retraining triggered by sufficient new data"""
         # Setup mocks
@@ -146,15 +167,22 @@ class TestRetrainingService:
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.88
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=1500)  # Above threshold
         retraining_service.registry.get_model_history = Mock(return_value=[])
-        
+
         should_retrain, reason, metrics = retraining_service.should_retrain('test_model')
-        
+
         assert should_retrain is True
         assert 'Sufficient new data' in reason
         assert metrics['new_data_count'] == 1500
-    
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
+
     def test_should_retrain_old_model(self, retraining_service):
         """Test retraining triggered by model age"""
         # Setup mocks
@@ -164,8 +192,10 @@ class TestRetrainingService:
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.88
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
-        
+
         # Model trained 40 days ago
         old_date = (datetime.utcnow() - timedelta(days=40)).isoformat()
         retraining_service.registry.get_model_history = Mock(return_value=[
@@ -177,6 +207,11 @@ class TestRetrainingService:
         assert should_retrain is True
         assert 'days old' in reason
         assert metrics['days_since_training'] >= 30
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
 
     def test_should_handle_integer_timestamps(self, retraining_service):
         """Ensure integer timestamps from MLflow history are parsed safely."""
@@ -186,6 +221,8 @@ class TestRetrainingService:
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.88
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
 
         old_datetime = datetime.utcnow() - timedelta(days=35)
@@ -199,7 +236,12 @@ class TestRetrainingService:
         assert should_retrain is True
         assert 'days old' in reason
         assert metrics['days_since_training'] >= 30
-    
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
+
     def test_should_not_retrain(self, retraining_service):
         """Test when retraining should not be triggered"""
         # Setup mocks - all conditions are good
@@ -209,8 +251,10 @@ class TestRetrainingService:
             'baseline_accuracy': 0.9,
             'current_accuracy': 0.88
         })
+        retraining_service.monitor.get_baseline_performance = Mock(return_value={'accuracy': 0.9})
+        retraining_service.monitor.get_current_performance = Mock(return_value={'accuracy': 0.88})
         retraining_service.monitor.get_new_data_count = Mock(return_value=500)
-        
+
         # Model trained recently
         recent_date = (datetime.utcnow() - timedelta(days=5)).isoformat()
         retraining_service.registry.get_model_history = Mock(return_value=[
@@ -221,6 +265,11 @@ class TestRetrainingService:
 
         assert should_retrain is False
         assert reason == "No retraining needed"
+        retraining_service.monitor.get_drift_score.assert_called_once_with('test_model')
+        retraining_service.monitor.get_performance_metrics.assert_called_once_with('test_model')
+        retraining_service.monitor.get_baseline_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_current_performance.assert_called_once_with('test_model')
+        retraining_service.monitor.get_new_data_count.assert_called_once_with('test_model')
 
     @pytest.mark.asyncio
     async def test_retrain_model_promotes_with_valid_stage(self):
@@ -579,11 +628,14 @@ class TestRetrainingConfigInterpretation:
         registry.get_model_history = Mock(return_value=[])
         
         should_retrain, reason, metrics = service.should_retrain('test_model')
-        
+
         assert should_retrain is True
         assert 'High drift detected' in reason
         assert 'Performance degradation' in reason
         assert 'Sufficient new data' in reason
+        monitor.get_drift_score.assert_called_once_with('test_model')
+        monitor.get_performance_metrics.assert_called_once_with('test_model')
+        monitor.get_new_data_count.assert_called_once_with('test_model')
     
     def test_config_max_retrain_per_day(self):
         """Test that max_retrain_per_day is respected"""

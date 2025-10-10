@@ -221,28 +221,40 @@ class TestRetrainingService:
         """Test retraining triggered by performance degradation"""
         monitor.get_current_performance.return_value = {"accuracy": 0.75}
         monitor.get_baseline_performance.return_value = {"accuracy": 0.90}
-        
+
         needs_retraining = await service.check_retraining_needed("test_model")
-        
+
         assert needs_retraining is True
+        monitor.get_current_performance.assert_called_once_with("test_model")
+        monitor.get_baseline_performance.assert_called_once_with("test_model")
+        monitor.get_drift_score.assert_not_called()
+        monitor.get_new_data_count.assert_not_called()
     
     @pytest.mark.asyncio
     async def test_check_retraining_needed_drift(self, service, monitor):
         """Test retraining triggered by drift"""
         monitor.get_drift_score.return_value = 0.6
-        
+
         needs_retraining = await service.check_retraining_needed("test_model")
-        
+
         assert needs_retraining is True
+        monitor.get_current_performance.assert_called_once_with("test_model")
+        monitor.get_baseline_performance.assert_called_once_with("test_model")
+        monitor.get_drift_score.assert_called_once_with("test_model")
+        monitor.get_new_data_count.assert_called_once_with("test_model")
     
     @pytest.mark.asyncio
     async def test_check_retraining_needed_data_volume(self, service, monitor):
         """Test retraining triggered by data volume"""
         monitor.get_new_data_count.return_value = 1500
-        
+
         needs_retraining = await service.check_retraining_needed("test_model")
-        
+
         assert needs_retraining is True
+        monitor.get_current_performance.assert_called_once_with("test_model")
+        monitor.get_baseline_performance.assert_called_once_with("test_model")
+        monitor.get_drift_score.assert_called_once_with("test_model")
+        monitor.get_new_data_count.assert_called_once_with("test_model")
     
     @pytest.mark.asyncio
     async def test_check_retraining_not_needed(self, service, monitor):
@@ -251,10 +263,14 @@ class TestRetrainingService:
         monitor.get_baseline_performance.return_value = {"accuracy": 0.90}
         monitor.get_drift_score.return_value = 0.3
         monitor.get_new_data_count.return_value = 500
-        
+
         needs_retraining = await service.check_retraining_needed("test_model")
-        
+
         assert needs_retraining is False
+        monitor.get_current_performance.assert_called_once_with("test_model")
+        monitor.get_baseline_performance.assert_called_once_with("test_model")
+        monitor.get_drift_score.assert_called_once_with("test_model")
+        monitor.get_new_data_count.assert_called_once_with("test_model")
     
     @pytest.mark.asyncio
     @patch('automl_platform.mlops_service.AutoMLOrchestrator')

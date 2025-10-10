@@ -229,10 +229,16 @@ class RetrainingService:
         # Initialize optimization components
         self.incremental_learner = None
         if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'incremental_learning') and config.incremental_learning:
-            self.incremental_learner = IncrementalLearner(
-                max_memory_mb=getattr(config, 'max_memory_mb', 1000)
-            )
-        
+            try:
+                self.incremental_learner = IncrementalLearner(
+                    max_memory_mb=getattr(config, 'max_memory_mb', 1000)
+                )
+            except TypeError as exc:
+                logger.warning(
+                    "Incremental learner could not be initialized: %s", exc
+                )
+                self.incremental_learner = None
+
         self.distributed_trainer = None
         if OPTIMIZATIONS_AVAILABLE and hasattr(config, 'distributed_training') and config.distributed_training:
             dist_config = DistributedConfig(
@@ -247,8 +253,8 @@ class RetrainingService:
     async def check_retraining_needed(self, model_name: str) -> bool:
         """Check if model needs retraining"""
         # Get current performance
-        current_metrics = self.monitor.get_current_performance()
-        baseline_metrics = self.monitor.get_baseline_performance()
+        current_metrics = self.monitor.get_current_performance(model_name)
+        baseline_metrics = self.monitor.get_baseline_performance(model_name)
         
         # Check for performance degradation
         for metric_name in ['accuracy', 'auc', 'f1']:
@@ -259,13 +265,13 @@ class RetrainingService:
                     return True
         
         # Check for drift
-        drift_score = self.monitor.get_drift_score()
+        drift_score = self.monitor.get_drift_score(model_name)
         if drift_score > self.drift_threshold:
             logger.warning(f"Data drift detected: score = {drift_score:.3f}")
             return True
-        
+
         # Check data volume
-        new_data_count = self.monitor.get_new_data_count()
+        new_data_count = self.monitor.get_new_data_count(model_name)
         if new_data_count >= self.min_data_points:
             logger.info(f"Sufficient new data for retraining: {new_data_count} samples")
             return True
