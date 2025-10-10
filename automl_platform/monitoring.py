@@ -497,7 +497,8 @@ class ModelMonitor:
             'predictions': predictions.tolist() if len(predictions) < 100 else predictions.mean(),
             'actuals': actuals.tolist() if actuals is not None and len(actuals) < 100 else None,
             'prediction_time': prediction_time,
-            'tenant_id': self.tenant_id
+            'tenant_id': self.tenant_id,
+            'prediction_count': int(len(predictions))
         }
         
         self.prediction_history.append(prediction_record)
@@ -762,6 +763,10 @@ class ModelMonitor:
 
         total_records = 0
         for record in self.prediction_history:
+            if record.get("prediction_count") is not None:
+                total_records += int(record["prediction_count"])
+                continue
+
             if isinstance(record.get("predictions"), list):
                 total_records += len(record["predictions"])
             elif isinstance(record.get("features"), list):
@@ -769,7 +774,7 @@ class ModelMonitor:
             elif isinstance(record.get("actuals"), list):
                 total_records += len(record["actuals"])
             else:
-                total_records += int(record.get("prediction_count", 1))
+                total_records += 1
 
         if total_records == 0:
             total_records = int(self.total_predictions)

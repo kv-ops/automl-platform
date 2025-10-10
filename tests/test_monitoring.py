@@ -246,27 +246,60 @@ class TestModelMonitor(unittest.TestCase):
         })
         predictions = np.array([0, 1])
         actuals = np.array([0, 1])
-        
+
         self.monitor.log_prediction(
             features=features,
             predictions=predictions,
             actuals=actuals,
             prediction_time=0.5
         )
-        
+
         self.assertEqual(self.monitor.total_predictions, 2)
         self.assertEqual(self.monitor.total_api_calls, 1)
         self.assertEqual(self.monitor.total_compute_time, 0.5)
-        
+
         # Check billing tracking
         self.billing_tracker.track_predictions.assert_called_once_with("tenant_123", 2)
         self.billing_tracker.track_api_call.assert_called_once_with("tenant_123", "prediction")
-    
+
+    def test_get_new_data_count_uses_prediction_count(self):
+        """Ensure aggregated prediction batches are counted accurately."""
+        small_features = pd.DataFrame({
+            'feature1': np.random.randn(5),
+            'feature2': np.random.randn(5)
+        })
+        small_predictions = np.array([0, 1, 0, 1, 0])
+        small_actuals = np.array([0, 1, 0, 0, 0])
+
+        self.monitor.log_prediction(
+            features=small_features,
+            predictions=small_predictions,
+            actuals=small_actuals
+        )
+
+        large_features = pd.DataFrame({
+            'feature1': np.random.randn(150),
+            'feature2': np.random.randn(150)
+        })
+        large_predictions = np.random.randint(0, 2, size=150)
+
+        self.monitor.log_prediction(
+            features=large_features,
+            predictions=large_predictions
+        )
+
+        # Ensure the aggregated record persisted the batch size
+        self.assertEqual(self.monitor.prediction_history[-1]['prediction_count'], 150)
+
+        total_records = self.monitor.get_new_data_count(self.monitor.model_id)
+
+        self.assertEqual(total_records, len(small_predictions) + len(large_predictions))
+
     def test_calculate_performance_classification(self):
         """Test performance calculation for classification."""
         predictions = np.array([0, 1, 0, 1, 1, 0])
         actuals = np.array([0, 1, 0, 0, 1, 0])
-        
+
         metrics = self.monitor.calculate_performance(predictions, actuals)
         
         self.assertIsNotNone(metrics.accuracy)
