@@ -5,6 +5,7 @@ WITH PROMETHEUS METRICS INTEGRATION
 Place in: automl_platform/api/feature_store.py
 """
 
+import os
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Optional, List, Union, Tuple
@@ -21,6 +22,8 @@ import sqlite3
 import pyarrow as pa
 import pyarrow.parquet as pq
 import time
+
+from automl_platform.config import InsecureEnvironmentVariableError, validate_secret_value
 
 # Métriques Prometheus
 from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
@@ -302,23 +305,41 @@ class FeatureStore:
     def _init_object_storage(self, config: Dict[str, Any]):
         """Initialize object storage (S3/MinIO)."""
         if self.backend == "minio" and MINIO_AVAILABLE:
+            access_key = config.get("access_key") or os.getenv("MINIO_ACCESS_KEY")
+            secret_key = config.get("secret_key") or os.getenv("MINIO_SECRET_KEY")
+            if not access_key or not secret_key:
+                raise RuntimeError("MinIO credentials must be configured for the feature store.")
+            try:
+                validate_secret_value("MINIO_ACCESS_KEY", access_key)
+                validate_secret_value("MINIO_SECRET_KEY", secret_key)
+            except InsecureEnvironmentVariableError as exc:
+                raise RuntimeError(
+                    "Feature store MinIO credentials use an insecure default. "
+                    "Rotate the access and secret keys."
+                ) from exc
             self.object_client = Minio(
                 config.get("endpoint", "localhost:9000"),
-                access_key=config.get("access_key", "minioadmin"),
-                secret_key=config.get("secret_key", "minioadmin"),
+                access_key=access_key,
+                secret_key=secret_key,
                 secure=config.get("secure", False)
             )
             self.bucket_name = config.get("bucket", "feature-store")
-            
+
             # Create bucket if doesn't exist
             if not self.object_client.bucket_exists(self.bucket_name):
                 self.object_client.make_bucket(self.bucket_name)
                 
         elif self.backend == "s3" and S3_AVAILABLE:
+            access_key = config.get("access_key")
+            secret_key = config.get("secret_key")
+            if not access_key or not secret_key:
+                raise RuntimeError("S3 credentials must be configured for the feature store.")
+            validate_secret_value("MINIO_ACCESS_KEY", access_key)
+            validate_secret_value("MINIO_SECRET_KEY", secret_key)
             self.object_client = boto3.client(
                 "s3",
-                aws_access_key_id=config.get("access_key"),
-                aws_secret_access_key=config.get("secret_key"),
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
                 region_name=config.get("region", "us-east-1")
             )
             self.bucket_name = config.get("bucket", "feature-store")

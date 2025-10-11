@@ -57,8 +57,8 @@ services:
     command: server /data --console-address ":9001"
     environment:
       # Credentials for object storage
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
       MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
       # Multi-tenant buckets configuration
       MINIO_DEFAULT_BUCKETS: models,datasets,artifacts,reports,backups,user-uploads
@@ -84,7 +84,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin123};
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set} ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set};
       /usr/bin/mc mb -p myminio/models;
       /usr/bin/mc mb -p myminio/datasets;
       /usr/bin/mc mb -p myminio/artifacts;
@@ -171,8 +171,8 @@ services:
       
       # Object Storage (MinIO)
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
       S3_BUCKET_MODELS: models
       S3_BUCKET_DATASETS: datasets
       S3_BUCKET_ARTIFACTS: artifacts
@@ -182,12 +182,12 @@ services:
       
       # SSO Authentication
       SSO_ENABLED: ${SSO_ENABLED:-true}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-this-in-production}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
       KEYCLOAK_ENABLED: ${KEYCLOAK_ENABLED:-true}
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-automl}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-automl-platform}
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-secret}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET must be set}
       
       # Alternative SSO Providers (optional)
       AUTH0_ENABLED: ${AUTH0_ENABLED:-false}
@@ -329,8 +329,8 @@ services:
     environment:
       BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
       ARTIFACT_ROOT: s3://models/
-      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       MLFLOW_S3_IGNORE_TLS: "true"
       # Authentication
@@ -387,8 +387,8 @@ services:
       
       # Storage
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
       
       # MLflow
       MLFLOW_TRACKING_URI: http://mlflow:5000

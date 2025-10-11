@@ -42,7 +42,12 @@ import jwt
 import httpx
 
 # Configuration
-from ..config import load_config
+from ..config import (
+    InsecureEnvironmentVariableError,
+    MissingEnvironmentVariableError,
+    load_config,
+    require_jwt_secret,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -60,7 +65,14 @@ class WebSocketConfig:
    
    def __init__(self):
        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-       self.jwt_secret = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+       try:
+           self.jwt_secret = require_jwt_secret()
+       except MissingEnvironmentVariableError as exc:
+           raise RuntimeError("JWT secret must be configured for WebSocket service.") from exc
+       except InsecureEnvironmentVariableError as exc:
+           raise RuntimeError(
+               "WebSocket JWT secret uses an insecure default value. Provide a new secret."
+           ) from exc
        self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
        self.llm_endpoint = os.getenv("LLM_ENDPOINT", "http://localhost:8000/llm/chat")
        self.max_connections_per_user = int(os.getenv("MAX_CONNECTIONS_PER_USER", "5"))

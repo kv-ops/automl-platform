@@ -38,6 +38,12 @@ import tensorflow as tf
 import torch
 import docker
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Response
+
+from automl_platform.config import (
+    InsecureEnvironmentVariableError,
+    MissingEnvironmentVariableError,
+    require_secret,
+)
 from fastapi.responses import FileResponse, StreamingResponse
 import grpc
 from concurrent import futures
@@ -85,8 +91,28 @@ class DeploymentConfig:
     
     # Storage (MinIO/S3 for model artifacts like H2O MLOps)
     MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-    MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+
+    @staticmethod
+    def _get_required_env(var_name: str) -> str:
+        try:
+            return require_secret(var_name)
+        except MissingEnvironmentVariableError as exc:
+            raise RuntimeError(
+                f"Environment variable {var_name} must be defined to enable deployment storage integration."
+            ) from exc
+        except InsecureEnvironmentVariableError as exc:
+            raise RuntimeError(
+                f"Environment variable {var_name} is set to an insecure default. "
+                "Generate a new credential before deploying."
+            ) from exc
+
+    @classmethod
+    def minio_access_key(cls) -> str:
+        return cls._get_required_env("MINIO_ACCESS_KEY")
+
+    @classmethod
+    def minio_secret_key(cls) -> str:
+        return cls._get_required_env("MINIO_SECRET_KEY")
     MODEL_BUCKET = os.getenv("MODEL_BUCKET", "models")
     
     # Kubernetes deployment (H2O AI Cloud style)
@@ -202,10 +228,13 @@ class ModelExportService:
     """Service for exporting models in various formats (Dataiku-style)"""
     
     def __init__(self):
+        access_key = DeploymentConfig.minio_access_key()
+        secret_key = DeploymentConfig.minio_secret_key()
+
         self.minio_client = Minio(
             DeploymentConfig.MINIO_ENDPOINT,
-            access_key=DeploymentConfig.MINIO_ACCESS_KEY,
-            secret_key=DeploymentConfig.MINIO_SECRET_KEY,
+            access_key=access_key,
+            secret_key=secret_key,
             secure=False
         )
         self._ensure_bucket()

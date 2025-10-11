@@ -282,6 +282,68 @@ BACKUP_RETENTION_DAYS=30
 BACKUP_S3_BUCKET=backups
 ```
 
+### Génération sécurisée des secrets
+
+Les services refuseront désormais de démarrer si des secrets critiques sont
+absents ou contiennent les valeurs d'exemple historiques (`minioadmin`,
+`change-this-secret-key`, etc.). Générez systématiquement vos secrets via une
+source cryptographiquement sécurisée :
+
+```bash
+# Clé secrète de plateforme (AUTOML_SECRET_KEY)
+python - <<'PY'
+import secrets
+print(secrets.token_urlsafe(64))
+PY
+
+# Identifiants MinIO compatibles avec la validation
+export MINIO_ACCESS_KEY="$(openssl rand -hex 16)"
+export MINIO_SECRET_KEY="$(openssl rand -base64 32)"
+
+# Secret JWT robuste
+openssl rand -base64 48
+```
+
+Le script `scripts/deploy_saas.sh` applique automatiquement ces commandes via
+`openssl rand`. Pour les environnements gérés (Vault, AWS Secrets Manager,
+Kubernetes Secrets, etc.), stockez ces valeurs hors du dépôt Git et référencez
+les uniquement via des variables d'environnement.
+
+### Migration depuis les anciennes valeurs par défaut
+
+Lors d'une mise à niveau, la plateforme échoue volontairement au démarrage si
+les anciens identifiants `minioadmin` ou les secrets JWT de démonstration sont
+toujours présents. Procédez comme suit pour migrer en conservant vos données :
+
+1. **Générez les nouveaux secrets** (voir ci-dessus) et enregistrez-les dans
+   votre gestionnaire de secrets.
+2. **Mettez à jour** le `.env`, les fichiers `docker-compose.override.yml` ou
+   les manifests Kubernetes avec `AUTOML_SECRET_KEY`, `MINIO_ACCESS_KEY` et
+   `MINIO_SECRET_KEY` fraichement générés.
+3. **Rotation MinIO** : si vous utilisiez l'utilisateur racine `minioadmin`,
+   créez un nouvel utilisateur avec les nouveaux identifiants, migrez les
+   politiques et désactivez l'ancien compte avant redémarrage. Définissez au
+   préalable la valeur de l'ancien secret (`export MINIO_OLD_SECRET="<mot de passe actuel>"`) puis exécutez :
+
+   ```bash
+   docker compose exec minio sh -c '
+     mc alias set local http://localhost:9000 minioadmin ${MINIO_OLD_SECRET};
+     mc admin user add local "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY";
+     mc admin policy attach local readwrite --user "$MINIO_ACCESS_KEY";
+     mc admin user disable local minioadmin
+   '
+   ```
+
+   Les buckets existants restent accessibles ; seule l'identité utilisée par la
+   plateforme change.
+4. **Redémarrez** la stack (`docker compose up -d --force-recreate`) et
+   vérifiez les journaux pour confirmer l'utilisation des nouveaux secrets.
+
+> 💡 **Astuce sécurité** : d'autres secrets (PostgreSQL, Redis, Grafana, Flower,
+> etc.) ne disposent pas encore de validation centralisée. Appliquez le même
+> processus de génération et de rotation pour maintenir un niveau de sécurité
+> homogène.
+
 ### Configuration Docker Compose
 
 Le fichier `docker-compose.yml` est déjà configuré. Pour personnaliser :
@@ -431,18 +493,25 @@ A    keycloak       -> YOUR_SERVER_IP
 
 ### Configuration MinIO
 
-1. **Accéder à la console** : http://localhost:9001
+1. **Générer des identifiants sécurisés** :
+   ```bash
+   export MINIO_ACCESS_KEY="$(openssl rand -hex 16)"
+   export MINIO_SECRET_KEY="$(openssl rand -base64 32)"
+   ```
+   Conservez ces valeurs dans votre gestionnaire de secrets (Vault, AWS Secrets Manager, etc.).
 
-2. **Créer les buckets** :
+2. **Accéder à la console** : http://localhost:9001 (authentification avec les secrets générés)
+
+3. **Créer les buckets** :
    ```bash
    # Via MC CLI
-   docker exec -it automl_minio mc alias set local http://localhost:9000 minioadmin minioadmin123
+   docker exec -it automl_minio mc alias set local http://localhost:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
    docker exec -it automl_minio mc mb local/models
    docker exec -it automl_minio mc mb local/datasets
    docker exec -it automl_minio mc mb local/artifacts
    ```
 
-3. **Configurer les politiques** :
+4. **Configurer les politiques** :
    ```json
    {
      "Version": "2012-10-17",
@@ -456,6 +525,9 @@ A    keycloak       -> YOUR_SERVER_IP
      ]
    }
    ```
+
+> ℹ️ **Rotation** : planifiez la rotation des identifiants MinIO via votre gestionnaire de secrets.
+> Les services refuseront de démarrer tant que les nouvelles valeurs ne sont pas propagées.
 
 ### Volumes Docker
 

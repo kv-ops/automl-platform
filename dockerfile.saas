@@ -101,8 +101,8 @@ ENV PYTHONUNBUFFERED=1 \
     REDIS_URL=redis://:redis_secret@redis:6379/0 \
     # MinIO
     MINIO_ENDPOINT=minio:9000 \
-    MINIO_ACCESS_KEY=minioadmin \
-    MINIO_SECRET_KEY=minioadmin123 \
+    MINIO_ACCESS_KEY= \
+    MINIO_SECRET_KEY= \
     # SSO
     SSO_ENABLED=true \
     KEYCLOAK_ENABLED=true \

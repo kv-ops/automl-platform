@@ -5,7 +5,7 @@ import warnings
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Iterable, List, Dict, Any, Optional, Set, Tuple
 import logging
 import os
 from datetime import timedelta
@@ -33,6 +33,113 @@ def _coerce_bool(value: Any) -> Optional[bool]:
     return bool(value)
 
 
+class MissingEnvironmentVariableError(RuntimeError):
+    """Raised when a mandatory environment variable is not defined."""
+
+
+class InsecureEnvironmentVariableError(RuntimeError):
+    """Raised when an environment variable contains a forbidden default value."""
+
+
+# Normalized forbidden secret values. The check is intentionally strict to block
+# the insecure defaults that previously shipped with the project and other
+# commonly leaked placeholders.
+_DEFAULT_FORBIDDEN_SECRET_VALUES = {
+    "minioadmin",
+    "minioadmin123",
+    "change-this-secret-key",
+    "change-this-secret-key-in-production",
+    "changeme",
+    "secret",
+    "password",
+    "admin123",
+}
+
+_FORBIDDEN_SECRET_VALUES_BY_ENV = {
+    "AUTOML_SECRET_KEY": {
+        "change-this-secret-key",
+        "change-this-secret-key-in-production",
+    },
+    "JWT_SECRET": {
+        "change-this-secret-key",
+        "change-this-secret-key-in-production",
+    },
+    "JWT_SECRET_KEY": {
+        "change-this-secret-key",
+        "change-this-secret-key-in-production",
+    },
+    "MINIO_ACCESS_KEY": {"minioadmin"},
+    "MINIO_SECRET_KEY": {"minioadmin", "minioadmin123"},
+}
+
+
+def validate_secret_value(
+    var_name: str,
+    value: Optional[str],
+    forbidden_values: Optional[Iterable[str]] = None,
+) -> Optional[str]:
+    """Validate that ``value`` is not using an insecure default secret."""
+
+    if value is None:
+        return value
+
+    normalized_value = value.strip()
+    if not normalized_value:
+        return normalized_value
+
+    lowered = normalized_value.lower()
+
+    forbidden: Set[str] = set(_DEFAULT_FORBIDDEN_SECRET_VALUES)
+    forbidden.update(_FORBIDDEN_SECRET_VALUES_BY_ENV.get(var_name, set()))
+    if forbidden_values:
+        forbidden.update(str(item).lower() for item in forbidden_values)
+
+    if lowered in forbidden:
+        raise InsecureEnvironmentVariableError(
+            f"Environment variable {var_name} is set to a forbidden insecure default value. "
+            "Generate a new secret and update the configuration."
+        )
+
+    return value
+
+
+def _require_env(
+    var_name: str,
+    forbidden_values: Optional[Iterable[str]] = None,
+) -> str:
+    """Return the value of ``var_name`` or raise a descriptive error."""
+
+    value = os.getenv(var_name)
+    if value is None or value == "":
+        raise MissingEnvironmentVariableError(
+            f"Environment variable {var_name} must be defined for secure configuration."
+        )
+    return validate_secret_value(var_name, value, forbidden_values) or value
+
+
+def require_secret(
+    var_name: str,
+    *,
+    forbidden_values: Optional[Iterable[str]] = None,
+) -> str:
+    """Public helper so other modules can request validated secrets."""
+
+    return _require_env(var_name, forbidden_values)
+
+
+def require_jwt_secret() -> str:
+    """Return a validated JWT secret from ``JWT_SECRET`` or ``JWT_SECRET_KEY``."""
+
+    for env_var in ("JWT_SECRET", "JWT_SECRET_KEY"):
+        value = os.getenv(env_var)
+        if value:
+            return validate_secret_value(env_var, value)
+
+    raise MissingEnvironmentVariableError(
+        "Either JWT_SECRET or JWT_SECRET_KEY must be defined to sign API tokens."
+    )
+
+
 @dataclass
 class DatabaseConfig:
     """Database configuration for core, audit and compliance services."""
@@ -49,16 +156,25 @@ class DatabaseConfig:
 
 @dataclass
 class SecurityConfig:
-    """Security-related secrets used across the platform."""
+    """Security-related secrets used across the platform.
 
-    secret_key: str = os.getenv("AUTOML_SECRET_KEY", "change-this-secret-key-in-production")
-    """Main application secret key."""
+    The ``AUTOML_SECRET_KEY`` environment variable **must** be defined. The
+    platform refuses to start when this secret is missing to avoid deploying a
+    predictable fallback key in production environments.
+    """
+
+    secret_key: str = field(default_factory=lambda: require_secret("AUTOML_SECRET_KEY"))
+    """Main application secret key supplied via ``AUTOML_SECRET_KEY``."""
 
     audit_encryption_key: Optional[str] = os.getenv("AUTOML_AUDIT_ENCRYPTION_KEY")
     """Optional encryption key for the audit service."""
 
     rgpd_encryption_key: Optional[str] = os.getenv("AUTOML_RGPD_ENCRYPTION_KEY")
     """Optional encryption key for the RGPD compliance service."""
+
+    def __post_init__(self) -> None:
+        validate_secret_value("AUTOML_AUDIT_ENCRYPTION_KEY", self.audit_encryption_key)
+        validate_secret_value("AUTOML_RGPD_ENCRYPTION_KEY", self.rgpd_encryption_key)
 
 
 @dataclass
@@ -568,8 +684,8 @@ class FeatureStoreConfig:
     
     # Object storage (S3/MinIO)
     endpoint: Optional[str] = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-    access_key: Optional[str] = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key: Optional[str] = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    access_key: Optional[str] = field(default_factory=lambda: os.getenv("MINIO_ACCESS_KEY"))
+    secret_key: Optional[str] = field(default_factory=lambda: os.getenv("MINIO_SECRET_KEY"))
     bucket: str = "feature-store"
     secure: bool = False
     
@@ -602,6 +718,11 @@ class FeatureStoreConfig:
     enable_multi_tenant: bool = True
     tenant_isolation: str = "logical"  # logical, physical
 
+    def __post_init__(self) -> None:
+        if self.backend in {"minio", "s3"}:
+            validate_secret_value("MINIO_ACCESS_KEY", self.access_key)
+            validate_secret_value("MINIO_SECRET_KEY", self.secret_key)
+
 
 @dataclass
 class StorageConfig:
@@ -623,8 +744,8 @@ class StorageConfig:
     
     # MinIO/S3 configuration
     endpoint: str = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-    access_key: str = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key: str = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    access_key: Optional[str] = field(default_factory=lambda: os.getenv("MINIO_ACCESS_KEY"))
+    secret_key: Optional[str] = field(default_factory=lambda: os.getenv("MINIO_SECRET_KEY"))
     secure: bool = False
     region: str = "us-east-1"
 
@@ -651,6 +772,11 @@ class StorageConfig:
     enable_multi_tenant: bool = True
     default_tenant_id: str = "default"
     isolate_buckets_per_tenant: bool = True  # Create separate buckets per tenant
+
+    def __post_init__(self) -> None:
+        if self.backend in {"minio", "s3"}:
+            validate_secret_value("MINIO_ACCESS_KEY", self.access_key)
+            validate_secret_value("MINIO_SECRET_KEY", self.secret_key)
 
 
 @dataclass
@@ -820,10 +946,10 @@ class APIConfig:
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8000
-    
+
     # Security
     enable_auth: bool = True
-    jwt_secret: str = os.getenv("JWT_SECRET", "change-this-secret-key")
+    jwt_secret: str = field(default_factory=require_jwt_secret)
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60
     
@@ -846,6 +972,8 @@ class APIConfig:
             raise ValueError(
                 "api.redis_url must start with 'redis://' or 'rediss://'"
             )
+        validate_secret_value("JWT_SECRET", self.jwt_secret)
+        validate_secret_value("JWT_SECRET_KEY", self.jwt_secret)
     
     # Rate limiting - PER PLAN
     enable_rate_limit: bool = True
@@ -904,7 +1032,6 @@ class AutoMLConfig:
             self.security = SecurityConfig()
 
         default_database = DatabaseConfig()
-        default_security = SecurityConfig()
 
         legacy_database_url = getattr(self, 'database_url', None)
         if legacy_database_url:
@@ -923,13 +1050,14 @@ class AutoMLConfig:
 
         legacy_secret_key = getattr(self, 'secret_key', None)
         if legacy_secret_key:
-            if self.security.secret_key == default_security.secret_key and legacy_secret_key != self.security.secret_key:
+            nested_secret = getattr(self.security, 'secret_key', None)
+            if not nested_secret:
                 logger.warning(
                     "Attribute 'secret_key' is deprecated and will be removed in a future release; "
                     "updating the nested SecurityConfig.secret_key from its value. Please migrate to config.security.secret_key."
                 )
                 self.security.secret_key = legacy_secret_key
-            elif legacy_secret_key != self.security.secret_key:
+            elif legacy_secret_key != nested_secret:
                 logger.warning(
                     "Conflicting security configuration detected between flat 'secret_key' and nested security.secret_key. "
                     "Using the nested value."
@@ -1446,11 +1574,22 @@ class AutoMLConfig:
             
             # Validate storage config
             assert self.storage.backend in ["local", "minio", "s3", "gcs", "none"], f"Invalid storage backend: {self.storage.backend}"
+            if self.storage.backend in {"minio", "s3"}:
+                assert self.storage.access_key, "storage.access_key must be defined for MinIO/S3 backends"
+                assert self.storage.secret_key, "storage.secret_key must be defined for MinIO/S3 backends"
+                validate_secret_value("MINIO_ACCESS_KEY", self.storage.access_key)
+                validate_secret_value("MINIO_SECRET_KEY", self.storage.secret_key)
             if self.storage.backend == "gcs" and self.storage.credentials_path:
                 credentials_file = Path(self.storage.credentials_path).expanduser()
                 assert credentials_file.exists(), (
                     f"GCS credentials_path does not exist: {credentials_file}"
                 )
+
+            if self.feature_store.enabled and self.feature_store.backend in {"minio", "s3"}:
+                assert self.feature_store.access_key, "feature_store.access_key must be defined for MinIO/S3 backends"
+                assert self.feature_store.secret_key, "feature_store.secret_key must be defined for MinIO/S3 backends"
+                validate_secret_value("MINIO_ACCESS_KEY", self.feature_store.access_key)
+                validate_secret_value("MINIO_SECRET_KEY", self.feature_store.secret_key)
             
             # Validate monitoring config
             if self.monitoring.enabled:

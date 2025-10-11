@@ -5,6 +5,7 @@ Fixtures réutilisables pour tous les tests du projet.
 """
 
 import inspect
+import os
 import asyncio
 import pytest
 import pandas as pd
@@ -19,6 +20,11 @@ from typing import Dict, Any, List, Optional
 import sys
 import types
 import importlib.util
+
+os.environ.setdefault("AUTOML_SECRET_KEY", "unit-test-secret-key")
+os.environ.setdefault("MINIO_ACCESS_KEY", "unit-test-access-key")
+os.environ.setdefault("MINIO_SECRET_KEY", "unit-test-secret")
+os.environ.setdefault("JWT_SECRET", "unit-test-jwt-secret")
 
 
 # ---------------------------------------------------------------------------

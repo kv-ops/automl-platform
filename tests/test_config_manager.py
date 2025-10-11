@@ -15,17 +15,18 @@ from pathlib import Path
 
 from automl_platform.core.config_manager import ConfigManager
 from automl_platform.config import (
-    AutoMLConfig,
-    StorageConfig,
-    WorkerConfig,
-    BillingConfig,
-    MonitoringConfig,
-    LLMConfig,
     APIConfig,
-    RGPDConfig,
-    StreamingConfig,
+    AutoMLConfig,
+    BillingConfig,
+    InsecureEnvironmentVariableError,
+    LLMConfig,
+    MonitoringConfig,
     PlanType,
-    load_config
+    RGPDConfig,
+    StorageConfig,
+    StreamingConfig,
+    WorkerConfig,
+    load_config,
 )
 
 
@@ -156,6 +157,57 @@ class TestConfigManager:
         
         finally:
             os.unlink(temp_path)
+
+    def test_missing_required_secrets_raise_error(self, monkeypatch):
+        """ConfigManager should fail fast when mandatory secrets are absent."""
+        monkeypatch.delenv("AUTOML_SECRET_KEY", raising=False)
+        monkeypatch.delenv("MINIO_ACCESS_KEY", raising=False)
+        monkeypatch.delenv("MINIO_SECRET_KEY", raising=False)
+
+        with pytest.raises(RuntimeError) as exc:
+            ConfigManager(config_path="non_existent.yaml", environment="development")
+
+        assert "AUTOML_SECRET_KEY" in str(exc.value)
+
+    def test_insecure_minio_defaults_in_yaml_raise_error(self, tmp_path, monkeypatch):
+        """Explicit insecure MinIO credentials in YAML should be rejected."""
+
+        monkeypatch.setenv("AUTOML_SECRET_KEY", "unit-test-override-secret")
+
+        config_path = tmp_path / "insecure_minio.yaml"
+        with config_path.open("w") as handle:
+            yaml.safe_dump(
+                {
+                    "storage": {
+                        "backend": "minio",
+                        "endpoint": "http://localhost:9000",
+                        "access_key": "minioadmin",
+                        "secret_key": "minioadmin123",
+                    }
+                },
+                handle,
+            )
+
+        with pytest.raises(InsecureEnvironmentVariableError):
+            ConfigManager(config_path=str(config_path), environment="development")
+
+    def test_insecure_minio_defaults_from_env_raise_error(self, monkeypatch, tmp_path):
+        """Environment overrides using insecure defaults must fail fast."""
+
+        monkeypatch.setenv("AUTOML_SECRET_KEY", "unit-test-override-secret")
+        monkeypatch.setenv("STORAGE_BACKEND", "minio")
+        monkeypatch.setenv("MINIO_ENDPOINT", "http://localhost:9000")
+        monkeypatch.setenv("MINIO_ACCESS_KEY", "minioadmin")
+        monkeypatch.setenv("MINIO_SECRET_KEY", "minioadmin123")
+
+        config_path = tmp_path / "base.yaml"
+        with config_path.open("w") as handle:
+            yaml.safe_dump({}, handle)
+
+        with pytest.raises(RuntimeError) as exc:
+            ConfigManager(config_path=str(config_path), environment="development")
+
+        assert "insecure" in str(exc.value).lower()
 
     def test_from_yaml_propagates_agent_first_flag(self, tmp_path):
         """Agent-First nested flag should enable top-level setting when loading YAML."""

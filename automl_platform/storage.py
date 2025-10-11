@@ -20,12 +20,19 @@ import pandas as pd
 import numpy as np
 from io import BytesIO, StringIO
 
+from automl_platform.config import (
+    InsecureEnvironmentVariableError,
+    validate_secret_value,
+)
+
 try:
     from minio import Minio
     from minio.error import S3Error
     MINIO_AVAILABLE = True
 except ImportError:
     MINIO_AVAILABLE = False
+    Minio = None  # type: ignore[assignment]
+    S3Error = Exception  # type: ignore[assignment]
 
 try:
     import boto3
@@ -170,31 +177,51 @@ class NullStorage(StorageBackend):
 class MinIOStorage(StorageBackend):
     """MinIO/S3 compatible storage backend with encryption support."""
     
-    def __init__(self, 
+    def __init__(self,
                  endpoint: str = "localhost:9000",
-                 access_key: str = "minioadmin",
-                 secret_key: str = "minioadmin",
+                 access_key: Optional[str] = None,
+                 secret_key: Optional[str] = None,
                  secure: bool = False,
                  region: str = "us-east-1",
                  encryption_key: bytes = None):
-        
+
         self.encryption_key = encryption_key
-        
+
+        resolved_access_key = access_key or os.getenv("MINIO_ACCESS_KEY")
+        resolved_secret_key = secret_key or os.getenv("MINIO_SECRET_KEY")
+
+        if not resolved_access_key or not resolved_secret_key:
+            raise RuntimeError(
+                "MinIO access and secret keys must be provided via arguments or environment variables."
+            )
+
+        try:
+            validate_secret_value("MINIO_ACCESS_KEY", resolved_access_key)
+            validate_secret_value("MINIO_SECRET_KEY", resolved_secret_key)
+        except InsecureEnvironmentVariableError as exc:
+            raise RuntimeError(
+                "MinIO credentials use an insecure default value. "
+                "Rotate the access and secret keys before enabling MinIO storage."
+            ) from exc
+
+        self._uses_minio = False
+
         if MINIO_AVAILABLE:
             self.client = Minio(
                 endpoint,
-                access_key=access_key,
-                secret_key=secret_key,
+                access_key=resolved_access_key,
+                secret_key=resolved_secret_key,
                 secure=secure,
                 region=region
             )
+            self._uses_minio = True
         elif S3_AVAILABLE:
             # Fallback to boto3 for AWS S3
             self.client = boto3.client(
                 's3',
                 endpoint_url=f"http://{endpoint}" if not secure else f"https://{endpoint}",
-                aws_access_key_id=access_key,
-                aws_secret_access_key=secret_key,
+                aws_access_key_id=resolved_access_key,
+                aws_secret_access_key=resolved_secret_key,
                 region_name=region
             )
             self.use_boto = True
@@ -214,11 +241,11 @@ class MinIOStorage(StorageBackend):
         
         for bucket in buckets:
             try:
-                if MINIO_AVAILABLE:
+                if self._uses_minio:
                     if not self.client.bucket_exists(bucket):
                         self.client.make_bucket(bucket)
                         logger.info(f"Created bucket: {bucket}")
-                elif S3_AVAILABLE and hasattr(self, 'use_boto'):
+                elif hasattr(self, 'use_boto'):
                     try:
                         self.client.head_bucket(Bucket=bucket)
                     except ClientError:
@@ -266,7 +293,7 @@ class MinIOStorage(StorageBackend):
             metadata_name = f"{metadata.tenant_id}/{metadata.model_id}/v{metadata.version}/metadata.json"
             
             # Save model
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 from io import BytesIO
                 self.client.put_object(
                     self.models_bucket,
@@ -313,7 +340,7 @@ class MinIOStorage(StorageBackend):
             object_name = f"{tenant_id}/{model_id}/v{version}/model.pkl"
             metadata_name = f"{tenant_id}/{model_id}/v{version}/metadata.json"
             
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 # Load model
                 response = self.client.get_object(self.models_bucket, object_name)
                 model_bytes = response.read()
@@ -359,7 +386,7 @@ class MinIOStorage(StorageBackend):
         versions = []
         
         try:
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 objects = self.client.list_objects(self.models_bucket, prefix=prefix)
                 for obj in objects:
                     parts = obj.object_name.split('/')
@@ -429,7 +456,7 @@ class MinIOStorage(StorageBackend):
                 "size_bytes": len(data_bytes)
             }
             
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 # Save dataset
                 self.client.put_object(
                     self.datasets_bucket,
@@ -471,7 +498,7 @@ class MinIOStorage(StorageBackend):
             # Find dataset file
             prefix = f"{tenant_id}/{dataset_id}"
             
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 objects = list(self.client.list_objects(self.datasets_bucket, prefix=prefix))
                 dataset_files = [obj.object_name for obj in objects 
                                if not obj.object_name.endswith('_metadata.json')]
@@ -489,7 +516,7 @@ class MinIOStorage(StorageBackend):
             # Load the most recent one
             object_name = sorted(dataset_files)[-1]
             
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 response = self.client.get_object(self.datasets_bucket, object_name)
                 data_bytes = response.read()
                 response.close()
@@ -522,7 +549,7 @@ class MinIOStorage(StorageBackend):
         prefix = f"{tenant_id}/" if tenant_id else ""
         
         try:
-            if MINIO_AVAILABLE:
+            if self._uses_minio:
                 objects = self.client.list_objects(self.models_bucket, prefix=prefix, recursive=True)
                 for obj in objects:
                     if obj.object_name.endswith('metadata.json'):

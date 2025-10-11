@@ -254,7 +254,7 @@ class TestMinIOStorage:
     def minio_storage(self, mock_minio_client):
         """Create MinIOStorage instance with mock client."""
         with patch('automl_platform.storage.MINIO_AVAILABLE', True):
-            storage = MinIOStorage()
+            storage = MinIOStorage(access_key="test-access", secret_key="test-secret")
             storage.client = mock_minio_client
             return storage
     
@@ -263,7 +263,7 @@ class TestMinIOStorage:
         mock_minio_client.bucket_exists.return_value = False
         
         with patch('automl_platform.storage.MINIO_AVAILABLE', True):
-            storage = MinIOStorage()
+            storage = MinIOStorage(access_key="test-access", secret_key="test-secret")
             storage.client = mock_minio_client
             storage._ensure_buckets()
         
