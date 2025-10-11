@@ -702,6 +702,46 @@ class TestFeatureStore:
         yield store
         # Cleanup
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def limited_feature_store(self):
+        """FeatureStore with strict cache limits for eviction tests."""
+        temp_dir = tempfile.mkdtemp()
+        storage_manager = StorageManager(backend="local", base_path=temp_dir)
+        store = FeatureStore(
+            storage_manager,
+            cache_max_entries=2,
+            cache_max_memory_mb=0.001,
+            cache_ttl_seconds=None,
+        )
+        yield store
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def ttl_feature_store(self):
+        """FeatureStore with controllable clock for TTL expiration tests."""
+
+        class FakeClock:
+            def __init__(self, start: float = 0.0):
+                self._time = start
+
+            def time(self) -> float:
+                return self._time
+
+            def advance(self, seconds: float) -> None:
+                self._time += seconds
+
+        temp_dir = tempfile.mkdtemp()
+        storage_manager = StorageManager(backend="local", base_path=temp_dir)
+        clock = FakeClock()
+        store = FeatureStore(
+            storage_manager,
+            cache_max_entries=4,
+            cache_ttl_seconds=5,
+            time_provider=clock.time,
+        )
+        yield store, clock
+        shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_register_feature(self, feature_store):
         """Test registering a feature computation."""
@@ -791,21 +831,145 @@ class TestFeatureStore:
         pd.testing.assert_frame_equal(loaded1, loaded2)
         
         # Check cache
-        assert "cached_features:1.0.0" in feature_store.feature_cache
-    
+        assert "cached_features:1.0.0" in feature_store.get_cached_keys()
+
+    def test_feature_cache_eviction(self, limited_feature_store):
+        """Ensure least recently used feature sets are evicted when capacity is exceeded."""
+        df = pd.DataFrame({'value': [1, 2, 3]})
+
+        limited_feature_store.save_features(df, "set1", "1.0.0")
+        limited_feature_store.save_features(df, "set2", "1.0.0")
+
+        # Access set1 to mark it as most recently used
+        limited_feature_store.load_features("set1", "1.0.0")
+
+        # Saving a third set should evict set2 (the least recently used)
+        limited_feature_store.save_features(df, "set3", "1.0.0")
+
+        cached_keys = limited_feature_store.get_cached_keys()
+        assert len(cached_keys) == 2
+        assert "set1:1.0.0" in cached_keys
+        assert "set3:1.0.0" in cached_keys
+        assert "set2:1.0.0" not in cached_keys
+
+    def test_feature_cache_ttl_expiration(self, ttl_feature_store):
+        """Verify cached entries expire after the configured TTL."""
+        store, clock = ttl_feature_store
+        df = pd.DataFrame({'value': [10, 20, 30]})
+
+        store.save_features(df, "ttl_set", "1.0.0")
+        assert "ttl_set:1.0.0" in store.get_cached_keys()
+
+        # Advance time beyond TTL so that cache entry expires
+        clock.advance(6)
+
+        with patch.object(store.storage, 'load_dataset', wraps=store.storage.load_dataset) as mocked_load:
+            reloaded = store.load_features("ttl_set", "1.0.0")
+
+        # Entry should be reloaded from storage after expiration
+        mocked_load.assert_called_once()
+        pd.testing.assert_frame_equal(reloaded, df)
+        cached_keys = store.get_cached_keys()
+        assert "ttl_set:1.0.0" in cached_keys
+        assert len(cached_keys) == 1
+
+        stats = store.get_cache_stats()
+        assert stats["evictions"] >= 1
+
     def test_list_feature_sets(self, feature_store):
         """Test listing available feature sets."""
         # Save multiple feature sets
         features1 = pd.DataFrame({'f1': [1, 2]})
         features2 = pd.DataFrame({'f2': [3, 4]})
-        
+
         feature_store.save_features(features1, "set1", "1.0.0")
         feature_store.save_features(features2, "set2", "1.0.0")
-        
+
         # List feature sets
         sets = feature_store.list_feature_sets()
         assert "set1" in sets
         assert "set2" in sets
+
+    def test_feature_store_default_configuration(self, feature_store):
+        """Defaults should reflect conservative cache sizing and TTL."""
+
+        assert feature_store.cache_max_entries == 100
+        assert feature_store.cache_ttl_seconds == 3600
+        assert feature_store.cache_max_memory_bytes == 500 * 1024 * 1024
+
+    def test_feature_cache_memory_limit_eviction(self):
+        """Ensure oversized cache totals trigger LRU evictions respecting memory limit."""
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            storage_manager = StorageManager(backend="local", base_path=temp_dir)
+            store = FeatureStore(
+                storage_manager,
+                cache_max_entries=10,
+                cache_max_memory_mb=0.0012,
+                cache_ttl_seconds=None,
+            )
+
+            large_df = pd.DataFrame({'value': ['x' * 512]})
+
+            store.save_features(large_df, "large1", "1.0.0")
+            store.save_features(large_df, "large2", "1.0.0")
+
+            cached_keys = store.get_cached_keys()
+            assert cached_keys == ["large2:1.0.0"]
+
+            stats = store.get_cache_stats()
+            assert stats["evictions"] >= 1
+            assert stats["current_memory_bytes"] <= stats["max_memory_bytes"]
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_feature_cache_skips_entries_larger_than_limit(self):
+        """Entries larger than the configured max memory should not be cached."""
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            storage_manager = StorageManager(backend="local", base_path=temp_dir)
+            store = FeatureStore(
+                storage_manager,
+                cache_max_entries=10,
+                cache_max_memory_mb=0.0001,
+                cache_ttl_seconds=None,
+            )
+
+            huge_df = pd.DataFrame({'value': ['y' * 2048]})
+
+            store.save_features(huge_df, "too_big", "1.0.0")
+
+            assert "too_big:1.0.0" not in store.get_cached_keys()
+            stats = store.get_cache_stats()
+            assert stats["current_memory_bytes"] == 0
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_feature_cache_metrics(self, limited_feature_store):
+        """Cache hit/miss counters should reflect access patterns."""
+
+        df = pd.DataFrame({'value': [42]})
+
+        limited_feature_store.save_features(df, "metrics", "1.0.0")
+
+        # Use a fresh store to ensure a miss followed by a hit.
+        storage_manager = limited_feature_store.storage
+        metrics_store = FeatureStore(
+            storage_manager,
+            cache_max_entries=2,
+            cache_max_memory_mb=0.001,
+            cache_ttl_seconds=None,
+        )
+
+        metrics_store.load_features("metrics", "1.0.0")
+        metrics_store.load_features("metrics", "1.0.0")
+
+        stats = metrics_store.get_cache_stats()
+        assert stats["hits"] >= 1
+        assert stats["misses"] >= 1
+        assert stats["hits"] + stats["misses"] >= 2
 
 
 class TestConnectorIntegration:
