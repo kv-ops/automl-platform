@@ -226,23 +226,36 @@ class DeploymentSpec:
 
 class ModelExportService:
     """Service for exporting models in various formats (Dataiku-style)"""
-    
-    def __init__(self):
-        access_key = DeploymentConfig.minio_access_key()
-        secret_key = DeploymentConfig.minio_secret_key()
 
-        self.minio_client = Minio(
-            DeploymentConfig.MINIO_ENDPOINT,
-            access_key=access_key,
-            secret_key=secret_key,
-            secure=False
-        )
-        self._ensure_bucket()
-    
-    def _ensure_bucket(self):
+    def __init__(self):
+        # MinIO credentials are validated lazily so that deployments which do not
+        # rely on MinIO can still start without provisioning unused secrets.
+        self._minio_client: Optional[Minio] = None
+        self._minio_bucket_verified = False
+
+    def _get_minio_client(self) -> Minio:
+        """Return a configured MinIO client, validating credentials on demand."""
+        if self._minio_client is None:
+            access_key = DeploymentConfig.minio_access_key()
+            secret_key = DeploymentConfig.minio_secret_key()
+
+            self._minio_client = Minio(
+                DeploymentConfig.MINIO_ENDPOINT,
+                access_key=access_key,
+                secret_key=secret_key,
+                secure=False
+            )
+
+        if not self._minio_bucket_verified:
+            self._ensure_bucket(self._minio_client)
+            self._minio_bucket_verified = True
+
+        return self._minio_client
+
+    def _ensure_bucket(self, minio_client: Minio) -> None:
         """Ensure model bucket exists"""
-        if not self.minio_client.bucket_exists(DeploymentConfig.MODEL_BUCKET):
-            self.minio_client.make_bucket(DeploymentConfig.MODEL_BUCKET)
+        if not minio_client.bucket_exists(DeploymentConfig.MODEL_BUCKET):
+            minio_client.make_bucket(DeploymentConfig.MODEL_BUCKET)
     
     async def export_model(
         self,
@@ -284,7 +297,7 @@ class ModelExportService:
             pickle.dump(model, f)
         
         # Upload to MinIO
-        self.minio_client.fput_object(
+        self._get_minio_client().fput_object(
             DeploymentConfig.MODEL_BUCKET,
             f"{metadata.model_id}/{metadata.version}/model.pkl",
             pickle_path
@@ -298,7 +311,7 @@ class ModelExportService:
         joblib.dump(model, joblib_path)
         
         # Upload to MinIO
-        self.minio_client.fput_object(
+        self._get_minio_client().fput_object(
             DeploymentConfig.MODEL_BUCKET,
             f"{metadata.model_id}/{metadata.version}/model.joblib",
             joblib_path
@@ -331,7 +344,7 @@ class ModelExportService:
             f.write(onnx_model.SerializeToString())
         
         # Upload to MinIO
-        self.minio_client.fput_object(
+        self._get_minio_client().fput_object(
             DeploymentConfig.MODEL_BUCKET,
             f"{metadata.model_id}/{metadata.version}/model.onnx",
             onnx_path
@@ -355,7 +368,7 @@ class ModelExportService:
         sklearn2pmml(pipeline, pmml_path)
         
         # Upload to MinIO
-        self.minio_client.fput_object(
+        self._get_minio_client().fput_object(
             DeploymentConfig.MODEL_BUCKET,
             f"{metadata.model_id}/{metadata.version}/model.pmml",
             pmml_path
@@ -459,7 +472,7 @@ class ModelExportService:
             f.write(tflite_model)
         
         # Upload to MinIO
-        self.minio_client.fput_object(
+        self._get_minio_client().fput_object(
             DeploymentConfig.MODEL_BUCKET,
             f"{metadata.model_id}/{metadata.version}/model.tflite",
             tflite_path
@@ -476,7 +489,7 @@ class ModelExportService:
             f.write(code)
         
         # Upload to MinIO
-        self.minio_client.fput_object(
+        self._get_minio_client().fput_object(
             DeploymentConfig.MODEL_BUCKET,
             f"{metadata.model_id}/{metadata.version}/inference.py",
             py_path
