@@ -10,12 +10,15 @@ import json
 import hashlib
 import pickle
 import joblib
-from typing import Any, Dict, List, Optional, Union, BinaryIO, Tuple
+from typing import Any, Callable, Dict, List, Optional, Union, BinaryIO, Tuple
 from datetime import datetime
 from pathlib import Path
 import logging
 import warnings
 from dataclasses import dataclass, asdict
+from collections import OrderedDict
+import time
+import threading
 import pandas as pd
 import numpy as np
 from io import BytesIO, StringIO
@@ -1700,14 +1703,231 @@ echo "Stop: docker-compose down"
 
 
 class FeatureStore:
-    """Feature store for feature reusability and versioning."""
-    
-    def __init__(self, storage_manager: StorageManager):
+    """Feature store for feature reusability and versioning.
+
+    The in-memory cache now enforces conservative defaults (100 entries, 500 MB, 1 hour
+    TTL) and can be tuned per deployment.  Evictions use an LRU policy guarded by a
+    re-entrant lock so concurrent workers see a consistent view.  Cache metrics such as
+    hits, misses, evictions, and memory consumption are tracked for observability and
+    logged whenever pruning occurs.
+    """
+
+    @dataclass
+    class _FeatureCacheEntry:
+        data: pd.DataFrame
+        timestamp: float
+        size_bytes: int
+
+    def __init__(
+        self,
+        storage_manager: StorageManager,
+        cache_max_entries: int = 100,
+        cache_max_memory_mb: Optional[float] = 500,
+        cache_ttl_seconds: Optional[float] = 3600,
+        time_provider: Callable[[], float] = time.time,
+    ):
         self.storage = storage_manager
-        self.feature_cache = {}
+        self._cache_max_entries = max(0, cache_max_entries or 0)
+        self._cache_max_memory_bytes: Optional[int] = (
+            int(cache_max_memory_mb * 1024 * 1024)
+            if cache_max_memory_mb and cache_max_memory_mb > 0
+            else None
+        )
+        self._cache_ttl_seconds = (
+            cache_ttl_seconds if cache_ttl_seconds and cache_ttl_seconds > 0 else None
+        )
+        self._time_provider = time_provider
+        self.feature_cache: "OrderedDict[str, FeatureStore._FeatureCacheEntry]" = (
+            OrderedDict()
+        )
+        self._cache_current_memory = 0
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._cache_evictions = 0
+        self._cache_lock = threading.RLock()
         self.feature_registry = {}
-    
-    def register_feature(self, name: str, description: str, 
+
+    def _cache_enabled(self) -> bool:
+        return self._cache_max_entries > 0 or self._cache_max_memory_bytes is not None
+
+    def _current_time(self) -> float:
+        return self._time_provider()
+
+    def _make_cache_key(self, feature_set_name: str, version: Optional[str]) -> str:
+        return f"{feature_set_name}:{version}" if version else feature_set_name
+
+    def _estimate_dataframe_size(self, features: pd.DataFrame) -> int:
+        try:
+            return int(features.memory_usage(deep=True).sum())
+        except ValueError:
+            return int(features.memory_usage().sum())
+
+    def _log_cache_summary_locked(self, level: int = logging.DEBUG) -> None:
+        total_requests = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total_requests) if total_requests else 0.0
+        logger.log(
+            level,
+            (
+                "FeatureStore cache stats: entries=%d/%s memory=%d/%s "
+                "hits=%d misses=%d evictions=%d hit_rate=%.2f"
+            ),
+            len(self.feature_cache),
+            self._cache_max_entries if self._cache_max_entries else "unbounded",
+            self._cache_current_memory,
+            self._cache_max_memory_bytes
+            if self._cache_max_memory_bytes is not None
+            else "unbounded",
+            self._cache_hits,
+            self._cache_misses,
+            self._cache_evictions,
+            hit_rate,
+        )
+
+    def _prune_expired_locked(self) -> None:
+        if not self._cache_enabled():
+            if self.feature_cache:
+                self.feature_cache.clear()
+                self._cache_current_memory = 0
+            return
+
+        if self._cache_ttl_seconds is None:
+            return
+
+        now = self._current_time()
+        expired_keys: List[str] = []
+        for key, entry in list(self.feature_cache.items()):
+            if now - entry.timestamp >= self._cache_ttl_seconds:
+                expired_keys.append(key)
+
+        for key in expired_keys:
+            entry = self.feature_cache.pop(key, None)
+            if entry:
+                self._cache_current_memory -= entry.size_bytes
+                self._cache_evictions += 1
+                logger.info(
+                    "Evicting feature cache entry %s due to TTL expiry (ttl=%ss)",
+                    key,
+                    self._cache_ttl_seconds,
+                )
+                self._log_cache_summary_locked(level=logging.INFO)
+
+    def _evict_excess_entries_locked(self) -> None:
+        if self._cache_max_entries <= 0:
+            return
+
+        while len(self.feature_cache) > self._cache_max_entries:
+            key, entry = self.feature_cache.popitem(last=False)
+            self._cache_current_memory -= entry.size_bytes
+            self._cache_evictions += 1
+            logger.info(
+                "Evicting feature cache entry %s to enforce max entries %d",
+                key,
+                self._cache_max_entries,
+            )
+            self._log_cache_summary_locked(level=logging.INFO)
+
+    def _evict_for_memory_pressure_locked(self) -> None:
+        if self._cache_max_memory_bytes is None:
+            return
+
+        while (
+            self.feature_cache
+            and self._cache_current_memory > self._cache_max_memory_bytes
+        ):
+            key, entry = self.feature_cache.popitem(last=False)
+            self._cache_current_memory -= entry.size_bytes
+            self._cache_evictions += 1
+            logger.info(
+                "Evicting feature cache entry %s to enforce max memory %d bytes",
+                key,
+                self._cache_max_memory_bytes,
+            )
+            self._log_cache_summary_locked(level=logging.INFO)
+
+    def _store_in_cache(self, cache_key: str, features: pd.DataFrame) -> None:
+        if not self._cache_enabled():
+            return
+
+        with self._cache_lock:
+            self._prune_expired_locked()
+            size_bytes = self._estimate_dataframe_size(features)
+            if (
+                self._cache_max_memory_bytes is not None
+                and size_bytes > self._cache_max_memory_bytes
+            ):
+                logger.warning(
+                    "Skipping cache for %s because entry size %d bytes exceeds max %d bytes",
+                    cache_key,
+                    size_bytes,
+                    self._cache_max_memory_bytes,
+                )
+                return
+
+            existing = self.feature_cache.pop(cache_key, None)
+            if existing:
+                self._cache_current_memory -= existing.size_bytes
+
+            entry = FeatureStore._FeatureCacheEntry(
+                data=features,
+                timestamp=self._current_time(),
+                size_bytes=size_bytes,
+            )
+            self.feature_cache[cache_key] = entry
+            self.feature_cache.move_to_end(cache_key)
+            self._cache_current_memory += size_bytes
+
+            self._evict_excess_entries_locked()
+            self._evict_for_memory_pressure_locked()
+            self._log_cache_summary_locked()
+
+    def _get_cached_features(self, cache_key: str) -> Optional[pd.DataFrame]:
+        if not self._cache_enabled():
+            return None
+
+        with self._cache_lock:
+            self._prune_expired_locked()
+            entry = self.feature_cache.get(cache_key)
+            if entry is None:
+                self._cache_misses += 1
+                self._log_cache_summary_locked()
+                return None
+
+            self.feature_cache.move_to_end(cache_key)
+            self._cache_hits += 1
+            self._log_cache_summary_locked()
+            return entry.data
+
+    def get_cache_stats(self) -> Dict[str, Union[int, Optional[int]]]:
+        with self._cache_lock:
+            self._prune_expired_locked()
+            return {
+                "entries": len(self.feature_cache),
+                "max_entries": self._cache_max_entries if self._cache_max_entries else None,
+                "current_memory_bytes": self._cache_current_memory,
+                "max_memory_bytes": self._cache_max_memory_bytes,
+                "hits": self._cache_hits,
+                "misses": self._cache_misses,
+                "evictions": self._cache_evictions,
+            }
+
+    def get_cached_keys(self) -> List[str]:
+        with self._cache_lock:
+            self._prune_expired_locked()
+            return list(self.feature_cache.keys())
+
+    @property
+    def cache_max_entries(self) -> int:
+        return self._cache_max_entries
+
+    @property
+    def cache_max_memory_bytes(self) -> Optional[int]:
+        return self._cache_max_memory_bytes
+
+    @property
+    def cache_ttl_seconds(self) -> Optional[float]:
+        return self._cache_ttl_seconds
+
+    def register_feature(self, name: str, description: str,
                         computation_func: callable, dependencies: List[str] = None):
         """Register a feature computation."""
         self.feature_registry[name] = {
@@ -1756,39 +1976,42 @@ class FeatureStore:
         # Save as dataset with special naming
         dataset_id = f"features_{feature_set_name}_v{version}"
         path = self.storage.save_dataset(features, dataset_id)
-        
+
         # Cache for quick access
-        cache_key = f"{feature_set_name}:{version}"
-        self.feature_cache[cache_key] = features
-        
+        cache_key = self._make_cache_key(feature_set_name, version)
+        self._store_in_cache(cache_key, features)
+
         logger.info(f"Features saved: {feature_set_name} v{version}")
         return path
-    
-    def load_features(self, 
+
+    def load_features(self,
                      feature_set_name: str,
                      version: str = None) -> pd.DataFrame:
         """Load features from store."""
-        
+
         # Check cache first
-        cache_key = f"{feature_set_name}:{version}" if version else feature_set_name
-        if cache_key in self.feature_cache:
-            return self.feature_cache[cache_key]
-        
+        cache_key = self._make_cache_key(feature_set_name, version)
+        cached = self._get_cached_features(cache_key)
+        if cached is not None:
+            return cached
+
         # Load from storage
         dataset_id = f"features_{feature_set_name}"
         if version:
             dataset_id += f"_v{version}"
-        
+
         features = self.storage.load_dataset(dataset_id)
-        
+
         # Update cache
-        self.feature_cache[cache_key] = features
-        
+        self._store_in_cache(cache_key, features)
+
         return features
-    
+
     def list_feature_sets(self) -> List[str]:
         """List available feature sets."""
-        return list(set(k.split(':')[0] for k in self.feature_cache.keys()))
+        with self._cache_lock:
+            self._prune_expired_locked()
+            return list({k.split(':')[0] for k in self.feature_cache.keys()})
 
 
 # Backward compatibility alias for modules expecting StorageService
