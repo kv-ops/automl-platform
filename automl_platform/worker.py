@@ -22,6 +22,8 @@ from pathlib import Path
 import psutil
 import gc
 
+from automl_platform.config import InsecureEnvironmentVariableError, validate_secret_value
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -141,7 +143,15 @@ security_cfg = getattr(config, 'security', None)
 primary_db_url = getattr(database_cfg, 'url', None) or getattr(config, 'database_url', 'sqlite:///automl.db')
 tenant_manager = TenantManager(db_url=primary_db_url)
 
-secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', 'default-secret')
+secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', None)
+if not secret_key:
+    raise RuntimeError("AUTOML_SECRET_KEY must be defined for worker startup.")
+try:
+    validate_secret_value("AUTOML_SECRET_KEY", secret_key)
+except InsecureEnvironmentVariableError as exc:
+    raise RuntimeError(
+        "AUTOML_SECRET_KEY uses an insecure default value. Provide a newly generated secret."
+    ) from exc
 security_manager = SecurityManager(secret_key=secret_key)
 billing_manager = BillingManager(tenant_manager=tenant_manager)
 usage_tracker = UsageTracker(billing_manager=billing_manager)

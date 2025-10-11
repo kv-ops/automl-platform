@@ -27,6 +27,8 @@ from io import BytesIO
 import time
 from enum import Enum
 
+from automl_platform.config import InsecureEnvironmentVariableError, validate_secret_value
+
 # Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -273,7 +275,15 @@ async def lifespan(app: FastAPI):
     primary_db_url = getattr(database_cfg, 'url', None) or getattr(config, 'database_url', 'sqlite:///automl.db')
     app.state.tenant_manager = TenantManager(db_url=primary_db_url)
 
-    secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', 'default-secret')
+    secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', None)
+    if not secret_key:
+        raise RuntimeError("AUTOML_SECRET_KEY must be defined for API startup.")
+    try:
+        validate_secret_value("AUTOML_SECRET_KEY", secret_key)
+    except InsecureEnvironmentVariableError as exc:
+        raise RuntimeError(
+            "AUTOML_SECRET_KEY uses an insecure default value. Provide a newly generated secret."
+        ) from exc
     app.state.security_manager = SecurityManager(secret_key=secret_key)
     app.state.billing_manager = BillingManager()
     app.state.usage_tracker = UsageTracker()

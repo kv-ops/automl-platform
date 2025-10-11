@@ -38,6 +38,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 
+from automl_platform.config import InsecureEnvironmentVariableError, validate_secret_value
+
 # Database
 import sqlalchemy
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, JSON
@@ -414,8 +416,17 @@ class TenantManager:
 class SecurityManager:
     """Manages security, encryption, and access control."""
     
-    def __init__(self, secret_key: str = None):
-        self.secret_key = secret_key or os.environ.get('SECRET_KEY', 'default-secret-key')
+    def __init__(self, secret_key: Optional[str] = None):
+        resolved_secret = secret_key or os.environ.get('AUTOML_SECRET_KEY') or os.environ.get('SECRET_KEY')
+        if not resolved_secret:
+            raise RuntimeError("A secret key must be provided to SecurityManager.")
+        try:
+            validate_secret_value("AUTOML_SECRET_KEY", resolved_secret)
+        except InsecureEnvironmentVariableError as exc:
+            raise RuntimeError(
+                "SecurityManager received an insecure default secret. Provide a unique secret key."
+            ) from exc
+        self.secret_key = resolved_secret
         
     def generate_api_key(self, tenant_id: str) -> str:
         """Generate API key for tenant."""

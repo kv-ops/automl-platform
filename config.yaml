@@ -19,7 +19,7 @@ database:
 
 # ---------- Security ----------
 security:
-  secret_key: change-this-secret-key-in-production
+  secret_key: null  # MUST be provided via the AUTOML_SECRET_KEY environment variable
   audit_encryption_key: null
   rgpd_encryption_key: null
 
@@ -30,8 +30,8 @@ storage:
   
   # MinIO/S3 settings
   endpoint: localhost:9000
-  access_key: minioadmin
-  secret_key: minioadmin
+  access_key: null  # Inject MINIO_ACCESS_KEY via environment or secrets manager
+  secret_key: null  # Inject MINIO_SECRET_KEY via environment or secrets manager
   secure: false
   region: us-east-1
   
@@ -57,7 +57,7 @@ api:
   
   # Security
   enable_auth: false
-  jwt_secret: your-secret-key
+  jwt_secret: null  # Supply via JWT_SECRET or JWT_SECRET_KEY environment variable
   jwt_algorithm: HS256
   jwt_expiration_minutes: 60
   redis_url: redis://localhost:6379  # Obligatoire pour le cache d'authentification (modifiable via REDIS_URL)

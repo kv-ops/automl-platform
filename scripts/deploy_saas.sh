@@ -240,7 +240,7 @@ REDIS_PASSWORD=$(openssl rand -base64 32)
 REDIS_PORT=6379
 
 # MinIO (Object Storage)
-MINIO_ACCESS_KEY=minioadmin
+MINIO_ACCESS_KEY=$(openssl rand -hex 16)
 MINIO_SECRET_KEY=$(openssl rand -base64 32)
 MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
