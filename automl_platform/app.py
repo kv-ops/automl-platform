@@ -480,6 +480,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 # Include auth router
 app.include_router(auth_router)
 
