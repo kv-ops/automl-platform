@@ -16,6 +16,7 @@ import numpy as np
 import json
 import asyncio
 import aiofiles
+import secrets
 from datetime import datetime, timedelta
 import hashlib
 import jwt
@@ -275,9 +276,19 @@ async def lifespan(app: FastAPI):
     primary_db_url = getattr(database_cfg, 'url', None) or getattr(config, 'database_url', 'sqlite:///automl.db')
     app.state.tenant_manager = TenantManager(db_url=primary_db_url)
 
-    secret_key = getattr(security_cfg, 'secret_key', None) or getattr(config, 'secret_key', None)
+    secret_key = (
+        os.getenv("AUTOML_SECRET_KEY")
+        or getattr(security_cfg, 'secret_key', None)
+        or getattr(config, 'secret_key', None)
+    )
     if not secret_key:
-        raise RuntimeError("AUTOML_SECRET_KEY must be defined for API startup.")
+        if os.getenv("ENV", "development").lower() == "production":
+            raise RuntimeError("AUTOML_SECRET_KEY must be defined for API startup in production.")
+        secret_key = secrets.token_urlsafe(32)
+        logger.warning(
+            "Generated ephemeral AUTOML secret key for development. Set AUTOML_SECRET_KEY for persistence."
+        )
+    os.environ.setdefault("AUTOML_SECRET_KEY", secret_key)
     try:
         validate_secret_value("AUTOML_SECRET_KEY", secret_key)
     except InsecureEnvironmentVariableError as exc:
@@ -757,7 +768,7 @@ app.add_middleware(SlowAPIMiddleware)
 if getattr(config.api, 'enable_cors', True):
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=getattr(config.api, 'cors_origins', ["*"]),
+        allow_origins=["http://localhost:5173"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
