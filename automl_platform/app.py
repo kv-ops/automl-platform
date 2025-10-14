@@ -282,7 +282,13 @@ async def lifespan(app: FastAPI):
         or getattr(config, 'secret_key', None)
     )
     if not secret_key:
-        if os.getenv("ENV", "development").lower() == "production":
+        environment = (
+            os.getenv("ENVIRONMENT")
+            or os.getenv("ENV")
+            or getattr(config, "environment", None)
+            or "development"
+        ).lower()
+        if environment in {"production", "prod"}:
             raise RuntimeError("AUTOML_SECRET_KEY must be defined for API startup in production.")
         secret_key = secrets.token_urlsafe(32)
         logger.warning(
