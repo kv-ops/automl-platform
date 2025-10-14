@@ -307,6 +307,15 @@ python examples/example_intelligent_cleaning.py
 Set in `.env` file:
 
 ```bash
+# Core platform secrets (rotation required)
+AUTOML_SECRET_KEY="$(openssl rand -base64 48)"
+MINIO_ACCESS_KEY="$(openssl rand -hex 16)"
+MINIO_SECRET_KEY="$(openssl rand -base64 48)"
+JWT_SECRET_KEY="$(openssl rand -base64 48)"
+
+# Worker/API services fail fast if AUTOML_SECRET_KEY is missing or uses defaults
+# See docs/deployment_guide.md for the full rotation checklist
+
 # OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_CLEANING_MODEL=gpt-4-1106-preview
@@ -319,7 +328,66 @@ ENABLE_FILE_OPERATIONS=true
 AGENT_TIMEOUT_SECONDS=300
 AGENT_MAX_RETRIES=3
 AGENT_EXPONENTIAL_BACKOFF=true
+
+# Anthropic Claude (facultatif)
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+CLAUDE_CLEANING_MODEL=claude-sonnet-4-5-20250929
+ENABLE_CLAUDE_ORCHESTRATION=true
 ```
+
+> ⚙️ **Important** : la configuration `config.yaml` utilise désormais des blocs imbriqués `database:` et `security:` au lieu des anciennes clés à plat (`database_url`, `secret_key`). Adaptez vos fichiers existants pour rester compatibles avec les chargeurs récents.
+
+> 🗄️ **Persistance optionnelle** : `storage.backend` accepte désormais la valeur `none` pour les déploiements éphémères. Toutes les opérations de sauvegarde lèveront `StorageDisabledError` — combinez cette option avec `feature_store.enabled=false` pour exécuter des pipelines sans persistance durable (ex. tests temporaires ou démonstrations sandbox).
+
+```yaml
+database:
+  url: postgresql://user:password@host/db
+
+security:
+  secret_key: your-secret
+```
+
+### 📊 Observabilité du Feature Store
+
+Le cache du **FeatureStore** applique désormais des limites strictes (100 entrées, 500 MB, TTL 1 h par défaut) avec statistiques détaillées (`hits`, `misses`, `evictions`, `memory_mb`). Ajustez ces paramètres dans `config.yaml` ou dynamiquement :
+
+```python
+from automl_platform.storage import FeatureStore, StorageManager
+
+storage = StorageManager(
+    backend=platform_config.storage.backend,
+    base_path=platform_config.storage.local_base_path,
+    endpoint=platform_config.storage.endpoint,
+    access_key=platform_config.storage.access_key,
+    secret_key=platform_config.storage.secret_key,
+    secure=platform_config.storage.secure,
+    region=platform_config.storage.region,
+)
+feature_store = FeatureStore(
+    storage,
+    cache_max_entries=200,
+    cache_max_memory_mb=256,
+    cache_ttl_seconds=1800,
+)
+
+# Récupérer la télémétrie pour vos dashboards
+print(feature_store.get_cache_stats())
+```
+
+Les journaux Prometheus/Stubs reflètent également ces compteurs (commit #69) pour simplifier l'intégration Grafana détaillée.
+
+### 💳 Nouvelles offres & quotas
+
+La configuration `billing.quotas` embarque désormais les paliers **Starter** et **Professional** en plus de `free`, `trial`, `pro`, `enterprise`. Chaque plan renseigne le nombre de datasets, la taille maximale, le plafond `agent_calls_per_month`, ainsi que les limites d'API (`api_rate_limit`). Utilisez `PlanType` depuis `automl_platform.plans` pour normaliser les requêtes et vérifier les droits :
+
+```python
+from automl_platform.plans import is_plan_at_least, PlanType
+
+if is_plan_at_least(user.plan, PlanType.PROFESSIONAL):
+    enable_enterprise_features()
+```
+
+> 📝 Les quotas détaillés restent centralisés dans `config.yaml` afin de garder la facturation, l'orchestration Celery et les contrôles API synchronisés (commits #39 et #52).
 
 ### 🎯 When to Use Intelligent Cleaning
 
@@ -352,6 +420,35 @@ AGENT_EXPONENTIAL_BACKOFF=true
 5. **Review Transformations**: Check the YAML config before production
 6. **Test Fallback**: Ensure traditional cleaning works as backup
 
+### 🛡️ Production Universal ML Agent
+
+La version **ProductionUniversalMLAgent** ajoute des garde-fous enterprise :
+
+- **Surveillance mémoire & budgets configurables** pour éviter les OOM, avec journalisation proactive et nettoyage automatique.
+- **Cache LRU borné et traitement par lots** pour accélérer les réutilisations et supporter les jeux de données volumineux.
+- **Orchestration hybride OpenAI/Claude** avec modèle `claude-sonnet-4-5-20250929` pour les résumés et décisions critiques.
+
+```python
+from automl_platform.agents import ProductionUniversalMLAgent
+
+agent = ProductionUniversalMLAgent(
+    max_cache_mb=500,
+    memory_warning_mb=1000,
+    memory_critical_mb=2000,
+    batch_size=10000
+)
+
+result = await agent.automl_without_templates(
+    df=dataset,
+    target_col="churn",
+    user_hints={"problem_type": "churn_prediction"}
+)
+
+print(result.success, result.memory_stats["peak_mb"], result.performance_profile.get("cache_hit_rate"))
+```
+
+> 📘 Retrouvez l'intégralité des scénarios d'exploitation dans le guide « Production Universal ML Agent » (docs/prod_usage_guide.md).
+
 ### 📚 Agent Documentation
 
 For detailed agent documentation, refer to the "🤖 NEW: Intelligent Data Cleaning with OpenAI Agents" section earlier in this README.
@@ -363,6 +460,10 @@ rg "Intelligent Data Cleaning" README.md
 # Run the intelligent cleaning example and generate a report
 python examples/example_intelligent_cleaning.py
 ```
+
+### 🔌 Extended Enterprise Connectors
+
+La plateforme inclut désormais des connecteurs managés pour BigQuery, Databricks SQL Warehouse, MongoDB, Google Sheets et HubSpot, chacun avec limitations de débit, retries exponentiels et bonnes pratiques de sécurité documentées dans `docs/connectors_guide.md`.
 
 ---
 
@@ -448,6 +549,20 @@ pip install -e ".[dev]"
 # Ensure the repository is discoverable when running CLI commands or examples
 export PYTHONPATH="$(pwd):${PYTHONPATH}"
 ```
+
+### Automated SaaS Deployment
+
+Pour déployer l'ensemble (API, Streamlit, workers, monitoring) en mode SaaS, utilisez le script `scripts/deploy_saas.sh` :
+
+```bash
+# Déploiement production avec monitoring et 4 workers
+./scripts/deploy_saas.sh --env prod --monitoring --scale 4
+
+# Activer le support GPU et restauration depuis une sauvegarde
+./scripts/deploy_saas.sh --env prod --gpu --restore backup_YYYYMMDD.tar.gz
+```
+
+Le script gère les prérequis Docker, la génération du `.env`, le scaling des workers et les options de sauvegarde/restauration documentées en tête de fichier.
 
 ## 📖 Documentation
 
