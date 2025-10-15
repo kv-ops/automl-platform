@@ -165,6 +165,7 @@ open http://localhost:3000             # Grafana
 ## 14. Notes complémentaires
 
 - Le reverse proxy Nginx termine TLS en lisant les certificats montés dans `nginx/ssl/` (`tls.crt` et `tls.key`). Utiliser mkcert ou Let’s Encrypt pour la démo.
+- La cible `make prod` génère automatiquement un certificat autosigné si aucun n'est présent dans `nginx/ssl/` (via `make ssl-cert`).
 - Les dashboards Grafana sont provisionnés automatiquement depuis `monitoring/grafana/dashboards/`.
 - Les exporter Prometheus (`postgres-exporter`, `redis-exporter`) sont activés par défaut et nécessitent les rôles générés via `scripts/init-multi-db.sh`.
 - Le fichier `.dockerignore` exclut les artefacts de build et les jeux de données volumineux pour accélérer les builds.

@@ -121,6 +121,7 @@ services:
       # Admin credentials
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
+      KEYCLOAK_DEMO_PASSWORD: ${KEYCLOAK_DEMO_PASSWORD:-ChangeMe123!}
       # Features
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
@@ -528,6 +529,23 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:0.11.0
+    container_name: automl_nginx_exporter
+    command:
+      - '-nginx.scrape-uri=http://127.0.0.1:8080/metrics'
+    depends_on:
+      nginx:
+        condition: service_started
+    network_mode: service:nginx
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9113/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - production
 
   # Grafana for visualization
   grafana:

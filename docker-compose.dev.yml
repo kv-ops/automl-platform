@@ -45,10 +45,6 @@ services:
       dockerfile: ${API_DOCKERFILE:-Dockerfile}
       target: api
     container_name: automl_api_dev
-    command: >
-      bash -c "wait-for-it postgres:5432 --timeout=60 && \
-               wait-for-it redis:6379 --timeout=60 && \
-               uvicorn automl_platform.app:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       ENVIRONMENT: development
       DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
@@ -60,6 +56,10 @@ services:
     volumes:
       - ./automl_platform:/app/automl_platform
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
+    command: >
+      bash -c "/usr/local/bin/wait-for-it postgres:5432 --timeout=60 && \
+               /usr/local/bin/wait-for-it redis:6379 --timeout=60 && \
+               uvicorn automl_platform.app:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -69,6 +69,12 @@ services:
         condition: service_healthy
     networks:
       - automl_dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   ui:
     build:
@@ -87,14 +93,20 @@ services:
       - ./automl_platform:/app/automl_platform
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
     command: >
-      bash -c "wait-for-it api:8000 --timeout=60 && streamlit run automl_platform/ui/app.py --server.port=8501 --server.address=0.0.0.0"
+      bash -c "/usr/local/bin/wait-for-it api:8000 --timeout=60 && streamlit run automl_platform/ui/app.py --server.port=8501 --server.address=0.0.0.0"
     ports:
       - "${UI_PORT:-8501}:8501"
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     networks:
       - automl_dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8501/_stcore/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 networks:
   automl_dev:

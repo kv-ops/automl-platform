@@ -59,14 +59,14 @@ write_env_file() {
     local POSTGRES_PASSWORD POSTGRES_MONITORING_PASSWORD POSTGRES_BACKUP_PASSWORD
     local REDIS_PASSWORD MINIO_ACCESS_KEY MINIO_SECRET_KEY MINIO_SERVICE_PASSWORD
     local MLFLOW_PASSWORD KEYCLOAK_CLIENT_SECRET KEYCLOAK_ADMIN_PASSWORD
-    local FLOWER_PASSWORD GRAFANA_PASSWORD STRIPE_API_KEY STRIPE_WEBHOOK_SECRET
+    local FLOWER_PASSWORD GRAFANA_PASSWORD
 
     AUTOML_SECRET_KEY="$(rand_base64 48)"
     JWT_SECRET_KEY="$(rand_base64 48)"
     SESSION_SECRET_KEY="$(rand_base64 32)"
     POSTGRES_PASSWORD="$(rand_base64 32)"
-    POSTGRES_MONITORING_PASSWORD="$(rand_base64 24)"
-    POSTGRES_BACKUP_PASSWORD="$(rand_base64 24)"
+    POSTGRES_MONITORING_PASSWORD="$(rand_base64 32)"
+    POSTGRES_BACKUP_PASSWORD="$(rand_base64 32)"
     REDIS_PASSWORD="$(rand_base64 32)"
     MINIO_ACCESS_KEY="$(rand_hex 16)"
     MINIO_SECRET_KEY="$(rand_base64 32)"
@@ -76,8 +76,6 @@ write_env_file() {
     KEYCLOAK_ADMIN_PASSWORD="$(rand_base64 24)"
     FLOWER_PASSWORD="$(rand_base64 24)"
     GRAFANA_PASSWORD="$(rand_base64 24)"
-    STRIPE_API_KEY="$(rand_base64 32)"
-    STRIPE_WEBHOOK_SECRET="$(rand_base64 32)"
 
     cat > "$output_file" <<ENVFILE
 # ============================================================================
@@ -138,8 +136,9 @@ GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
 PROMETHEUS_RETENTION=30d
 
 # ============================ BILLING & WEBHOOKS =============================
-STRIPE_API_KEY=${STRIPE_API_KEY}
-STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+# Provide these from your Stripe dashboard (do not generate locally)
+STRIPE_API_KEY=
+STRIPE_WEBHOOK_SECRET=
 
 # ============================= OPTIONAL PROVIDERS ============================
 # Provide vendor issued credentials when enabling external integrations.

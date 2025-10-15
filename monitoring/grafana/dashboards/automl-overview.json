@@ -1,171 +1,357 @@
 {
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": {
-          "type": "grafana",
-          "uid": "grafana"
-        },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
-  },
-  "editable": true,
-  "gnetId": null,
-  "graphTooltip": 0,
-  "id": null,
-  "panels": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
-      "id": 1,
-      "title": "API Requests per Second",
-      "type": "timeseries",
-      "targets": [
+    "id": null,
+    "uid": "automl-overview",
+    "title": "AutoML Platform Overview",
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "30s",
+    "tags": [
+        "automl",
+        "platform"
+    ],
+    "timezone": "",
+    "panels": [
         {
-          "expr": "sum(rate(http_requests_total{job='api'}[5m]))",
-          "legendFormat": "{{method}} {{status}}",
-          "refId": "A"
+            "type": "stat",
+            "title": "API Request Rate",
+            "description": "Requests per second handled by the FastAPI service (5m rate).",
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum(rate(automl_api_requests_total[5m]))",
+                    "format": "time_series",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 0
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ],
+                    "fields": "",
+                    "values": false
+                },
+                "orientation": "horizontal",
+                "textMode": "auto",
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "auto"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "req/s",
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "gradient",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "orange",
+                                "value": 20
+                            },
+                            {
+                                "color": "red",
+                                "value": 50
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            }
+        },
+        {
+            "type": "stat",
+            "title": "Queued Training Jobs",
+            "description": "Current Celery training jobs waiting to start.",
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum(automl_training_jobs{status=\"queued\"})",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 0
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ],
+                    "fields": "",
+                    "values": false
+                },
+                "orientation": "horizontal",
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "auto"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "orange",
+                                "value": 5
+                            },
+                            {
+                                "color": "red",
+                                "value": 15
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            }
+        },
+        {
+            "type": "timeseries",
+            "title": "Training Jobs by Status",
+            "description": "Live breakdown of training workloads per status label.",
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum(automl_training_jobs) by (status)",
+                    "legendFormat": "{{status}}",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 16,
+                "x": 0,
+                "y": 8
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "percentage",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "desc"
+                }
+            }
+        },
+        {
+            "type": "timeseries",
+            "title": "GPU Utilization",
+            "description": "GPU utilization percentage reported by training workers.",
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "avg(automl_gpu_utilization) by (gpu_id)",
+                    "legendFormat": "GPU {{gpu_id}}",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 16,
+                "x": 0,
+                "y": 16
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "desc"
+                }
+            }
+        },
+        {
+            "type": "timeseries",
+            "title": "API Error Rate",
+            "description": "Percentage of API requests returning 5xx responses.",
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "100 * sum(rate(automl_api_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(automl_api_requests_total[5m])), 1e-6)",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 24
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "percent",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "orange",
+                                "value": 1
+                            },
+                            {
+                                "color": "red",
+                                "value": 5
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "hidden"
+                },
+                "tooltip": {
+                    "mode": "single"
+                }
+            }
+        },
+        {
+            "type": "stat",
+            "title": "Active Models",
+            "description": "Number of active models currently loaded in the platform.",
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum(automl_active_models)",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 24
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ],
+                    "fields": "",
+                    "values": false
+                },
+                "orientation": "horizontal",
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "auto"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "orange",
+                                "value": 25
+                            },
+                            {
+                                "color": "red",
+                                "value": 50
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            }
         }
-      ]
+    ],
+    "templating": {
+        "list": []
     },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {
-        "defaults": {"unit": "short"},
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
-      "id": 2,
-      "title": "Worker Queue Depth",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "sum(celery_tasks_in_queue{queue=~'default|training'})",
-          "legendFormat": "{{queue}}",
-          "refId": "A"
-        }
-      ]
+    "time": {
+        "from": "now-6h",
+        "to": "now"
     },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {
-        "defaults": {"unit": "short"},
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
-      "id": 3,
-      "title": "Model Training Jobs Status",
-      "type": "stat",
-      "options": {
-        "reduceOptions": {
-          "calcs": ["last"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(automl_training_jobs_total[5m])) by (status)",
-          "legendFormat": "{{status}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
-      "id": 4,
-      "title": "API Resource Utilization",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "avg(rate(container_cpu_usage_seconds_total{container='automl_api'}[5m])) * 100",
-          "legendFormat": "CPU %",
-          "refId": "A"
-        },
-        {
-          "expr": "avg(container_memory_usage_bytes{container='automl_api'}) / 1024 / 1024",
-          "legendFormat": "Memory MB",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
-      "id": 5,
-      "title": "Error Rate",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "sum(rate(http_requests_total{job='api',status=~'5..'}[5m]))",
-          "legendFormat": "5xx",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(rate(http_requests_total{job='api',status=~'4..'}[5m]))",
-          "legendFormat": "4xx",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
-      "id": 6,
-      "title": "MinIO Storage Utilization",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "sum(minio_bucket_object_size_bytes{bucket=~'models|datasets|artifacts'}) / 1024 / 1024 / 1024",
-          "legendFormat": "{{bucket}}",
-          "refId": "A"
-        }
-      ]
+    "timepicker": {
+        "refresh_intervals": [
+            "5s",
+            "10s",
+            "30s",
+            "1m",
+            "5m",
+            "15m"
+        ],
+        "time_options": [
+            "5m",
+            "15m",
+            "1h",
+            "6h",
+            "12h",
+            "24h"
+        ]
     }
-  ],
-  "schemaVersion": 38,
-  "style": "dark",
-  "tags": ["automl", "operations"],
-  "templating": {"list": []},
-  "time": {"from": "now-6h", "to": "now"},
-  "timepicker": {},
-  "timezone": "",
-  "title": "AutoML Platform Overview",
-  "uid": "automl-overview",
-  "version": 1
 }

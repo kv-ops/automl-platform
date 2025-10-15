@@ -4,7 +4,7 @@
 # ============================================================================
 
 .PHONY: help install setup up down restart logs clean test deploy status backup restore \
-prod dev stop secrets
+prod dev stop secrets ssl-cert
 
 # Variables
 DOCKER_COMPOSE = docker compose
@@ -161,6 +161,7 @@ prod:
 	@if [ ! -f $(PROD_ENV_FILE) ]; then \
 echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; exit 1; \
 fi
+	@$(MAKE) ssl-cert
 	@DOCKER_BUILDKIT=1 $(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) --profile production up -d
 	@echo "$(GREEN)✓ Production stack is running$(NC)"
 
@@ -206,9 +207,6 @@ format:
 # ============================================================================
 
 logs:
-	@if [ ! -f $(PROD_ENV_FILE) ]; then \
-echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; exit 1; \
-fi
 	@$(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) logs -f --tail=100
 
 logs-ui:
@@ -372,10 +370,25 @@ deploy:
 	@$(MAKE) push
 	@echo "$(GREEN)✓ Deployment completed$(NC)"
 
+scale: n ?= 2
 scale:
 	@echo "$(BLUE)Scaling workers to $(n) instances...$(NC)"
 	@$(DOCKER_COMPOSE) up -d --scale worker-cpu=$(n)
 	@echo "$(GREEN)✓ Scaled to $(n) workers$(NC)"
+
+ssl-cert:
+	@if [ ! -f nginx/ssl/tls.crt ] || [ ! -f nginx/ssl/tls.key ]; then \
+echo "$(YELLOW)Generating self-signed certificate for nginx...$(NC)"; \
+		mkdir -p nginx/ssl; \
+		openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
+		  -keyout nginx/ssl/tls.key \
+		  -out nginx/ssl/tls.crt \
+		  -subj "/CN=localhost"; \
+		chmod 600 nginx/ssl/tls.key; \
+		echo "$(GREEN)✓ Self-signed certificate generated$(NC)"; \
+	else \
+		echo "$(GREEN)✓ SSL certificate already present$(NC)"; \
+fi
 
 # ============================================================================
 # Cleanup
