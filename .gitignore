@@ -127,6 +127,8 @@ data/
 *.xlsx
 *.xls
 *.json
+!keycloak/realm-export.json
+!monitoring/grafana/dashboards/automl-overview.json
 !tests/fixtures/*.json
 *.h5
 *.hdf5
@@ -233,6 +235,7 @@ experiments/
 runs/
 artifacts/
 checkpoints/
+backups/
 
 # ============== Cache ==============
 .cache/

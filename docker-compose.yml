@@ -10,10 +10,14 @@ services:
     image: postgres:15-alpine
     container_name: automl_postgres
     environment:
-      POSTGRES_MULTIPLE_DATABASES: automl,keycloak,airflow,metadata
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-automl,keycloak,airflow,metadata}
       POSTGRES_DB: automl
       POSTGRES_USER: ${POSTGRES_USER:-automl}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-automl_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_MONITORING_USER: ${POSTGRES_MONITORING_USER:-monitoring}
+      POSTGRES_MONITORING_PASSWORD: ${POSTGRES_MONITORING_PASSWORD:?POSTGRES_MONITORING_PASSWORD must be set}
+      POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER:-backup_user}
+      POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
@@ -34,8 +38,8 @@ services:
     container_name: automl_redis
     command: >
       redis-server 
-      --appendonly yes 
-      --requirepass ${REDIS_PASSWORD:-redis_secret}
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       --maxmemory 2gb
       --maxmemory-policy allkeys-lru
     volumes:
@@ -45,7 +49,7 @@ services:
     networks:
       - automl_network
     healthcheck:
-      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -92,7 +96,7 @@ services:
       /usr/bin/mc mb -p myminio/backups;
       /usr/bin/mc mb -p myminio/user-uploads;
       /usr/bin/mc policy set public myminio/reports;
-      /usr/bin/mc admin user add myminio automl-service ${MINIO_SERVICE_PASSWORD:-service123};
+      /usr/bin/mc admin user add myminio automl-service ${MINIO_SERVICE_PASSWORD:?MINIO_SERVICE_PASSWORD must be set};
       /usr/bin/mc admin policy set myminio readwrite user=automl-service;
       exit 0;
       "
@@ -113,10 +117,11 @@ services:
       KC_DB_URL_HOST: postgres
       KC_DB_URL_DATABASE: keycloak
       KC_DB_USERNAME: ${POSTGRES_USER:-automl}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-automl_secret}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # Admin credentials
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin123}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
+      KEYCLOAK_DEMO_PASSWORD: ${KEYCLOAK_DEMO_PASSWORD:-ChangeMe123!}
       # Features
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
@@ -160,14 +165,15 @@ services:
       # Operation Mode
       AUTOML_MODE: ${AUTOML_MODE:-saas}
       AUTOML_EXPERT_MODE: ${AUTOML_EXPERT_MODE:-false}
-      
+      AUTOML_SECRET_KEY: ${AUTOML_SECRET_KEY:?AUTOML_SECRET_KEY must be set}
+
       # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
-      METADATA_DB_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/metadata
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
+      METADATA_DB_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/metadata
       
       # Redis
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
       
       # Object Storage (MinIO)
       MINIO_ENDPOINT: minio:9000
@@ -267,8 +273,8 @@ services:
       PUBLIC_MLFLOW_URL: ${PUBLIC_MLFLOW_URL:-http://localhost:5000}
       
       # Redis for session management
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/1
-      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-ui-session-secret}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:?SESSION_SECRET_KEY must be set}
       
       # SSO Configuration
       SSO_ENABLED: ${SSO_ENABLED:-true}
@@ -327,7 +333,7 @@ services:
     image: ghcr.io/mlflow/mlflow:v2.10.0
     container_name: automl_mlflow
     environment:
-      BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
+      BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
       ARTIFACT_ROOT: s3://models/
       AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
       AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
@@ -336,7 +342,7 @@ services:
       # Authentication
       MLFLOW_AUTH_CONFIG: ${MLFLOW_AUTH_CONFIG:-basic}
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_USER:-mlflow}
-      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:-mlflow123}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:?MLFLOW_PASSWORD must be set}
     ports:
       - "${MLFLOW_PORT:-5000}:5000"
     networks:
@@ -348,7 +354,7 @@ services:
         condition: service_healthy
     command: >
       mlflow server
-      --backend-store-uri postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
+      --backend-store-uri postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
       --default-artifact-root s3://models/
       --host 0.0.0.0
       --port 5000
@@ -381,9 +387,9 @@ services:
       --max-memory-per-child=2000000
     environment:
       # Connections
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
       
       # Storage
       MINIO_ENDPOINT: minio:9000
@@ -430,9 +436,9 @@ services:
     container_name: automl_celery_beat
     command: celery -A automl_platform.worker.celery_app beat --loglevel=${LOG_LEVEL:-info}
     environment:
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-automl_secret}@postgres:5432/automl
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
     volumes:
       - ./automl_platform:/app/automl_platform:ro
       - celerybeat_data:/app/celerybeat
@@ -452,11 +458,11 @@ services:
     command: >
       celery -A automl_platform.worker.celery_app flower
       --port=5555
-      --broker_api=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin123}
+      --broker_api=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:?FLOWER_PASSWORD must be set}
     environment:
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
     ports:
       - "${FLOWER_PORT:-5555}:5555"
     networks:
@@ -479,7 +485,7 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
       - '--web.enable-lifecycle'
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
@@ -491,20 +497,70 @@ services:
       timeout: 10s
       retries: 3
 
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: automl_postgres_exporter
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_MONITORING_USER:-monitoring}:${POSTGRES_MONITORING_PASSWORD:?POSTGRES_MONITORING_PASSWORD must be set}@postgres:5432/postgres?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - automl_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9187/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.56.0
+    container_name: automl_redis_exporter
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - automl_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9121/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:0.11.0
+    container_name: automl_nginx_exporter
+    command:
+      - '-nginx.scrape-uri=http://127.0.0.1:8080/metrics'
+    depends_on:
+      nginx:
+        condition: service_started
+    network_mode: service:nginx
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9113/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - production
+
   # Grafana for visualization
   grafana:
     image: grafana/grafana:10.3.1
     container_name: automl_grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
       GF_INSTALL_PLUGINS: redis-datasource,plotly-panel
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/automl-overview.json
       # SSO integration
       GF_AUTH_GENERIC_OAUTH_ENABLED: ${GRAFANA_SSO_ENABLED:-true}
       GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
       GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-automl-platform}
-      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-secret}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET must be set}
       GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email
       GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://${KEYCLOAK_HOSTNAME:-localhost}:${KEYCLOAK_PORT:-8080}/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/auth
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/token

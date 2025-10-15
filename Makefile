@@ -3,13 +3,17 @@
 # Simplified commands for Docker operations and development workflow
 # ============================================================================
 
-.PHONY: help install setup up down restart logs clean test deploy status backup restore
+.PHONY: help install setup up down restart logs clean test deploy status backup restore \
+prod dev stop secrets ssl-cert
 
 # Variables
 DOCKER_COMPOSE = docker compose
 ENV_FILE = .env
 BACKUP_DIR = backups
 TIMESTAMP := $(shell date +%Y%m%d_%H%M%S)
+PROD_ENV_FILE ?= .env.production
+DEV_ENV_FILE ?= .env.development
+DEV_COMPOSE_FILE ?= docker-compose.dev.yml
 
 # Colors for output
 RED := \033[0;31m
@@ -20,71 +24,16 @@ NC := \033[0m # No Color
 
 # Default target
 help:
-	@echo "$(BLUE)╔══════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║       AutoML Platform - Docker & Development Commands        ║$(NC)"
-	@echo "$(BLUE)╚══════════════════════════════════════════════════════════════╝$(NC)"
-	@echo ""
-	@echo "$(GREEN)🚀 Quick Start:$(NC)"
-	@echo "  make install        - First time setup (install deps + init)"
-	@echo "  make up            - Start basic services (UI + API + Workers)"
-	@echo "  make ui            - Open UI dashboard in browser"
-	@echo "  make status        - Check all services status"
-	@echo ""
-	@echo "$(GREEN)📦 Service Management:$(NC)"
-	@echo "  make up-min        - Minimal setup (DB + Redis + API + UI)"
-	@echo "  make up-full       - Full setup with monitoring"
-	@echo "  make up-gpu        - Include GPU workers"
-	@echo "  make up-prod       - Production setup with all features"
-	@echo "  make down          - Stop all services"
-	@echo "  make restart       - Restart all services"
-	@echo ""
-	@echo "$(GREEN)📊 Monitoring:$(NC)"
-	@echo "  make logs          - View all logs"
-	@echo "  make logs-ui       - View UI dashboard logs"
-	@echo "  make logs-api      - View API logs"
-	@echo "  make logs-worker   - View worker logs"
-	@echo "  make monitor       - Open monitoring dashboards"
-	@echo ""
-	@echo "$(GREEN)🔧 Development:$(NC)"
-	@echo "  make dev           - Start in dev mode with hot-reload"
-	@echo "  make test          - Run all tests"
-	@echo "  make test-ui       - Test UI components"
-	@echo "  make lint          - Run code linting"
-	@echo "  make format        - Format code with black"
-	@echo "  make shell-ui      - Shell into UI container"
-	@echo "  make shell-api     - Shell into API container"
-	@echo "  make db-shell      - PostgreSQL shell"
-	@echo ""
-	@echo "$(GREEN)🎯 Specific Services:$(NC)"
-	@echo "  make mlflow        - Open MLflow UI"
-	@echo "  make flower        - Open Flower (Celery monitor)"
-	@echo "  make grafana       - Open Grafana dashboards"
-	@echo "  make minio         - Open MinIO console"
-	@echo ""
-	@echo "$(GREEN)💾 Data Management:$(NC)"
-	@echo "  make backup        - Backup DB and models"
-	@echo "  make restore       - Restore from backup"
-	@echo "  make clean-data    - Remove all data (careful!)"
-	@echo "  make migrate       - Run database migrations"
-	@echo ""
-	@echo "$(GREEN)🚀 Deployment:$(NC)"
-	@echo "  make build         - Build all images"
-	@echo "  make build-ui      - Build UI image only"
-	@echo "  make push          - Push images to registry"
-	@echo "  make deploy        - Deploy to production"
-	@echo "  make scale n=4     - Scale workers"
-	@echo ""
-	@echo "$(GREEN)🧹 Maintenance:$(NC)"
-	@echo "  make clean         - Stop and remove containers"
-	@echo "  make clean-all     - Full cleanup (including volumes)"
-	@echo "  make prune         - Remove unused Docker resources"
-	@echo "  make update        - Update all dependencies"
-	@echo ""
-	@echo "$(YELLOW)📝 Examples:$(NC)"
-	@echo "  make up-min        # Quick start for development"
-	@echo "  make scale n=4     # Scale to 4 workers"
-	@echo "  make logs-ui       # Debug UI issues"
-	@echo "  make backup        # Before major changes"
+@echo "Available commands:"
+@echo "  make secrets   - Generate .env.production/.env.staging/.env.development"
+@echo "  make dev       - Launch the lightweight development stack"
+@echo "  make prod      - Launch the full production stack"
+@echo "  make stop      - Stop running containers"
+@echo "  make logs      - Tail Docker Compose logs"
+@echo "  make clean     - Remove containers (keeps data volumes)"
+@echo ""
+@echo "Extended commands remain available for advanced workflows."
+@echo "Run 'make status' to inspect container health or consult README-DOCKER.md for a full guide."
 
 # ============================================================================
 # Installation & Setup
@@ -196,8 +145,38 @@ wait-healthy:
 
 # Development mode with hot reload
 dev:
-	@echo "$(BLUE)Starting development mode with hot-reload...$(NC)"
-	@DOCKER_BUILDKIT=1 $(DOCKER_COMPOSE) up --build
+	@echo "$(BLUE)Starting lightweight development stack...$(NC)"
+	@if [ ! -f $(DEV_COMPOSE_FILE) ]; then \
+echo "$(RED)Missing $(DEV_COMPOSE_FILE).$(NC)"; exit 1; \
+fi
+	@if [ ! -f $(DEV_ENV_FILE) ]; then \
+echo "$(YELLOW)⚠️  $(DEV_ENV_FILE) not found. Falling back to .env example.$(NC)"; \
+cp .env.example $(DEV_ENV_FILE); \
+fi
+	@DOCKER_BUILDKIT=1 $(DOCKER_COMPOSE) -f $(DEV_COMPOSE_FILE) --env-file $(DEV_ENV_FILE) up -d --build
+	@echo "$(GREEN)✓ Development stack is running$(NC)"
+
+prod:
+	@echo "$(BLUE)Starting production stack...$(NC)"
+	@if [ ! -f $(PROD_ENV_FILE) ]; then \
+echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; exit 1; \
+fi
+	@$(MAKE) ssl-cert
+	@DOCKER_BUILDKIT=1 $(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) --profile production up -d
+	@echo "$(GREEN)✓ Production stack is running$(NC)"
+
+stop:
+	@echo "$(BLUE)Stopping containers...$(NC)"
+	@if [ ! -f $(PROD_ENV_FILE) ]; then \
+echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; exit 1; \
+fi
+	@$(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) --profile production down
+	@echo "$(GREEN)✓ Containers stopped$(NC)"
+
+secrets:
+	@echo "$(BLUE)Generating environment secrets...$(NC)"
+	@./scripts/generate-secrets.sh --force
+	@echo "$(GREEN)✓ Secrets generated in .env.production, .env.staging, and .env.development$(NC)"
 
 # Run tests
 test:
@@ -228,7 +207,7 @@ format:
 # ============================================================================
 
 logs:
-	@$(DOCKER_COMPOSE) logs -f --tail=100
+	@$(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) logs -f --tail=100
 
 logs-ui:
 	@$(DOCKER_COMPOSE) logs -f ui --tail=100
@@ -391,10 +370,25 @@ deploy:
 	@$(MAKE) push
 	@echo "$(GREEN)✓ Deployment completed$(NC)"
 
+scale: n ?= 2
 scale:
 	@echo "$(BLUE)Scaling workers to $(n) instances...$(NC)"
 	@$(DOCKER_COMPOSE) up -d --scale worker-cpu=$(n)
 	@echo "$(GREEN)✓ Scaled to $(n) workers$(NC)"
+
+ssl-cert:
+	@if [ ! -f nginx/ssl/tls.crt ] || [ ! -f nginx/ssl/tls.key ]; then \
+echo "$(YELLOW)Generating self-signed certificate for nginx...$(NC)"; \
+		mkdir -p nginx/ssl; \
+		openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
+		  -keyout nginx/ssl/tls.key \
+		  -out nginx/ssl/tls.crt \
+		  -subj "/CN=localhost"; \
+		chmod 600 nginx/ssl/tls.key; \
+		echo "$(GREEN)✓ Self-signed certificate generated$(NC)"; \
+	else \
+		echo "$(GREEN)✓ SSL certificate already present$(NC)"; \
+fi
 
 # ============================================================================
 # Cleanup

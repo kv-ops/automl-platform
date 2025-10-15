@@ -1,0 +1,117 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: automl_postgres_dev
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-automl}
+      POSTGRES_USER: ${POSTGRES_USER:-automl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - automl_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-automl} -d ${POSTGRES_DB:-automl}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: automl_redis_dev
+    command: >
+      redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-devredis}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - dev_redis_data:/data
+    networks:
+      - automl_dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:-devredis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: ${API_DOCKERFILE:-Dockerfile}
+      target: api
+    container_name: automl_api_dev
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-devredis}@redis:6379/0
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://localhost:9000}
+      SSO_ENABLED: false
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-devsecret}
+      AUTOML_SECRET_KEY: ${AUTOML_SECRET_KEY:-devsecret}
+    volumes:
+      - ./automl_platform:/app/automl_platform
+      - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
+    command: >
+      bash -c "/usr/local/bin/wait-for-it postgres:5432 --timeout=60 && \
+               /usr/local/bin/wait-for-it redis:6379 --timeout=60 && \
+               uvicorn automl_platform.app:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - automl_dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ui:
+    build:
+      context: .
+      dockerfile: ${UI_DOCKERFILE:-Dockerfile}
+      target: ui
+    container_name: automl_ui_dev
+    environment:
+      ENVIRONMENT: development
+      API_BASE_URL: http://api:8000
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_RUN_ON_SAVE: true
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-devsession}
+    volumes:
+      - ./automl_platform:/app/automl_platform
+      - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
+    command: >
+      bash -c "/usr/local/bin/wait-for-it api:8000 --timeout=60 && streamlit run automl_platform/ui/app.py --server.port=8501 --server.address=0.0.0.0"
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - automl_dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8501/_stcore/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  automl_dev:
+    driver: bridge
+
+volumes:
+  dev_postgres_data:
+  dev_redis_data:

@@ -1,0 +1,161 @@
+{
+    "realm": "automl",
+    "enabled": true,
+    "displayName": "AutoML Platform",
+    "internationalizationEnabled": true,
+    "registrationAllowed": false,
+    "loginTheme": "keycloak",
+    "rememberMe": true,
+    "eventsEnabled": true,
+    "eventsListeners": [
+        "jboss-logging"
+    ],
+    "roles": {
+        "realm": [
+            {
+                "name": "admin",
+                "description": "Full access to the AutoML platform",
+                "composite": false,
+                "clientRole": false
+            },
+            {
+                "name": "user",
+                "description": "Standard user with permissions to create experiments",
+                "composite": false,
+                "clientRole": false
+            },
+            {
+                "name": "viewer",
+                "description": "Read-only access to dashboards and experiments",
+                "composite": false,
+                "clientRole": false
+            }
+        ]
+    },
+    "clients": [
+        {
+            "clientId": "automl-platform",
+            "name": "AutoML Platform UI",
+            "description": "Frontend client for the AutoML platform",
+            "enabled": true,
+            "publicClient": false,
+            "protocol": "openid-connect",
+            "clientAuthenticatorType": "client-secret",
+            "redirectUris": [
+                "http://localhost:8501/*",
+                "https://localhost/*"
+            ],
+            "webOrigins": [
+                "http://localhost:8501",
+                "https://localhost"
+            ],
+            "standardFlowEnabled": true,
+            "implicitFlowEnabled": false,
+            "directAccessGrantsEnabled": true,
+            "serviceAccountsEnabled": true,
+            "secret": "${env.KEYCLOAK_CLIENT_SECRET}",
+            "defaultRoles": [
+                "user"
+            ],
+            "protocolMappers": [
+                {
+                    "name": "email",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-usermodel-property-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "user.attribute": "email",
+                        "claim.name": "email",
+                        "jsonType.label": "String",
+                        "id.token.claim": "true",
+                        "access.token.claim": "true",
+                        "userinfo.token.claim": "true"
+                    }
+                },
+                {
+                    "name": "roles",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-usermodel-realm-role-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "claim.name": "roles",
+                        "jsonType.label": "String",
+                        "id.token.claim": "true",
+                        "access.token.claim": "true",
+                        "userinfo.token.claim": "true"
+                    }
+                },
+                {
+                    "name": "preferred_username",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-usermodel-property-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "user.attribute": "username",
+                        "claim.name": "preferred_username",
+                        "jsonType.label": "String",
+                        "id.token.claim": "true",
+                        "access.token.claim": "true",
+                        "userinfo.token.claim": "true"
+                    }
+                }
+            ]
+        }
+    ],
+    "users": [
+        {
+            "username": "admin",
+            "enabled": true,
+            "emailVerified": true,
+            "email": "admin@example.com",
+            "firstName": "Platform",
+            "lastName": "Admin",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "${env.KEYCLOAK_DEMO_PASSWORD:ChangeMe123!}",
+                    "temporary": true
+                }
+            ],
+            "realmRoles": [
+                "admin"
+            ]
+        },
+        {
+            "username": "data.scientist",
+            "enabled": true,
+            "emailVerified": true,
+            "email": "scientist@example.com",
+            "firstName": "Data",
+            "lastName": "Scientist",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "${env.KEYCLOAK_DEMO_PASSWORD:ChangeMe123!}",
+                    "temporary": true
+                }
+            ],
+            "realmRoles": [
+                "user"
+            ]
+        },
+        {
+            "username": "stakeholder",
+            "enabled": true,
+            "emailVerified": true,
+            "email": "stakeholder@example.com",
+            "firstName": "Business",
+            "lastName": "Stakeholder",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "${env.KEYCLOAK_DEMO_PASSWORD:ChangeMe123!}",
+                    "temporary": true
+                }
+            ],
+            "realmRoles": [
+                "viewer"
+            ]
+        }
+    ]
+}
