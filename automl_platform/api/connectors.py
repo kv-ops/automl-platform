@@ -2726,7 +2726,7 @@ def fetch_crm_data(source: str, crm_type: str, api_key: str = None,
 # ============================================================================
 
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 connector_router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -2736,7 +2736,7 @@ class ConnectorRequest(BaseModel):
     config: Dict[str, Any]
     query: Optional[str] = None
     table_name: Optional[str] = None
-    schema: Optional[str] = None
+    schema_name: Optional[str] = Field(None, alias="schema")
 
 class ExcelRequest(BaseModel):
     sheet_name: Optional[Union[str, int]] = 0
