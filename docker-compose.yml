@@ -551,6 +551,10 @@ services:
   grafana:
     image: grafana/grafana:10.3.1
     container_name: automl_grafana
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana_data:/var/lib/grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
@@ -565,10 +569,6 @@ services:
       GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://${KEYCLOAK_HOSTNAME:-localhost}:${KEYCLOAK_PORT:-8080}/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/auth
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/token
       GF_AUTH_GENERIC_OAUTH_API_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-automl}/protocol/openid-connect/userinfo
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     networks:
