@@ -565,29 +565,55 @@ L'option `storage.backend: gcs` permet de déléguer le stockage des modèles et
 
 ### Prometheus
 
-Configuration dans `monitoring/prometheus.yml` :
+Configuration dans `monitoring/prometheus/prometheus.yml` :
 
 ```yaml
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
 
 scrape_configs:
-  - job_name: 'api'
+  - job_name: prometheus
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  - job_name: api
+    metrics_path: /metrics
     static_configs:
       - targets: ['api:8000']
-    
-  - job_name: 'mlflow'
+
+  - job_name: worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['flower:5555']
+
+  - job_name: mlflow
     static_configs:
       - targets: ['mlflow:5000']
-    
-  - job_name: 'redis'
+
+  - job_name: keycloak
+    metrics_path: /metrics
+    scheme: http
     static_configs:
-      - targets: ['redis-exporter:9121']
-    
-  - job_name: 'postgres'
+      - targets: ['keycloak:8080']
+
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ['minio:9000']
+
+  - job_name: postgres-exporter
     static_configs:
       - targets: ['postgres-exporter:9187']
+
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  - job_name: nginx-exporter
+    static_configs:
+      - targets: ['nginx-exporter:9113']
 ```
 
 ### Grafana
