@@ -1,6 +1,7 @@
-# Legacy Prometheus configuration path.
-# This file mirrors monitoring/prometheus/prometheus.yml to support tooling
-# that still reads from the historical location.
+# Primary Prometheus configuration for the monitoring stack.
+# This file is mounted by docker-compose (see services.prometheus.volumes).
+# Note: monitoring/prometheus.yml is kept for backwards compatibility and
+# mirrors the content of this file for legacy tooling.
 global:
   scrape_interval: 15s
   scrape_timeout: 10s
