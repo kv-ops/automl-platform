@@ -147,14 +147,14 @@ wait-healthy:
 dev:
 	@echo "$(BLUE)Starting lightweight development stack...$(NC)"
 	@if [ ! -f $(DEV_COMPOSE_FILE) ]; then \
-echo "$(RED)Missing $(DEV_COMPOSE_FILE).$(NC)"; exit 1; \
-fi
+		echo "$(RED)Missing $(DEV_COMPOSE_FILE).$(NC)"; exit 1; \
+	fi
 	@if [ ! -f $(DEV_ENV_FILE) ]; then \
-echo "$(YELLOW)⚠️  $(DEV_ENV_FILE) not found. Falling back to .env example.$(NC)"; \
-cp .env.example $(DEV_ENV_FILE); \
-fi
+		echo "$(YELLOW)$(DEV_ENV_FILE) not found. Falling back to .env example.$(NC)"; \
+		cp .env.example $(DEV_ENV_FILE); \
+	fi
 	@DOCKER_BUILDKIT=1 $(DOCKER_COMPOSE) -f $(DEV_COMPOSE_FILE) --env-file $(DEV_ENV_FILE) up -d --build
-	@echo "$(GREEN)✓ Development stack is running$(NC)"
+	@echo "$(GREEN)Development stack is running$(NC)"
 
 prod:
 	@echo "$(BLUE)Starting production stack...$(NC)"
