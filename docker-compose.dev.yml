@@ -33,12 +33,7 @@ services:
       - dev_redis_data:/data
     networks:
       - automl_dev
-    healthcheck:
-      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:-devredis}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+  
   api:
     build:
       context: .
