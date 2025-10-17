@@ -184,7 +184,15 @@ secrets:
 # Run tests
 test:
 	@echo "$(BLUE)Running all tests...$(NC)"
-	@docker exec automl_api pytest tests/ -v --cov=automl_platform --cov-report=term-missing
+	@if command -v docker >/dev/null 2>&1 && docker ps -q -f name=automl_api >/dev/null 2>&1; then \
+		docker exec automl_api pytest tests/ -v --cov=automl_platform --cov-report=term-missing; \
+	else \
+		if python -c "import pytest_cov" >/dev/null 2>&1; then \
+			pytest tests/ -v --cov=automl_platform --cov-report=term-missing; \
+		else \
+			pytest tests/ -v; \
+		fi; \
+	fi
 
 test-ui:
 	@echo "$(BLUE)Running UI tests...$(NC)"
