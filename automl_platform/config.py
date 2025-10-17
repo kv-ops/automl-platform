@@ -167,17 +167,25 @@ def get_or_generate_secret(
     return secret
 
 
+_JWT_SECRET_CACHE: Optional[str] = None
+
+
 def require_jwt_secret() -> str:
     """Return a validated JWT secret, generating one when none is configured."""
 
-    return get_or_generate_secret(
+    global _JWT_SECRET_CACHE
+
+    if _JWT_SECRET_CACHE is not None:
+        return _JWT_SECRET_CACHE
+
+    _JWT_SECRET_CACHE = get_or_generate_secret(
         ("JWT_SECRET", "JWT_SECRET_KEY"),
         warning_message=(
             "JWT secret not configured via JWT_SECRET or JWT_SECRET_KEY. Generated a "
             "temporary secret; tokens will be invalidated on restart."
         ),
     )
-
+    return _JWT_SECRET_CACHE
 
 @dataclass
 class DatabaseConfig:
