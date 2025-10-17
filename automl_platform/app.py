@@ -54,10 +54,15 @@ except ImportError:  # pragma: no cover - optional dependency
 # AutoML Platform imports
 from automl_platform.config import (
     AutoMLConfig,
-    InsecureEnvironmentVariableError,
     load_config,
     validate_secret_value,
 )
+
+try:
+    from automl_platform.config import InsecureEnvironmentVariableError
+except ImportError:  # pragma: no cover - fallback for legacy versions
+    class InsecureEnvironmentVariableError(RuntimeError):
+        """Raised when an environment variable fails security validation."""
 from automl_platform.orchestrator import AutoMLOrchestrator
 from automl_platform.data_prep import DataPreprocessor, validate_data
 from automl_platform.model_selection import get_available_models, get_param_grid, get_cv_splitter
