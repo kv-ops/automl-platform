@@ -118,6 +118,33 @@ class LLMProvider:
         return len(text) // 4  # Rough estimate
 
 
+class NoOpLLMProvider(LLMProvider):
+    """Fallback provider used when no external LLM credentials are configured."""
+
+    def __init__(self):
+        super().__init__(api_key="", model_name="noop-llm")
+
+    async def generate(self, prompt: str, **kwargs) -> LLMResponse:
+        """Return a deterministic response indicating the LLM is not configured."""
+
+        message = (
+            "LLM not configured - operating in fallback mode. "
+            "Provide API credentials to enable intelligent responses."
+        )
+
+        return LLMResponse(
+            content=message,
+            model=self.model_name,
+            tokens_used=0,
+            cost=0.0,
+            cached=True,
+            metadata={
+                "prompt_preview": prompt[:1000],
+                "fallback": True,
+            },
+        )
+
+
 class OpenAIProvider(LLMProvider):
     """OpenAI GPT provider with GPT-4 Vision support."""
     
@@ -795,6 +822,21 @@ class EnhancedDataCleaningAgent:
                      (line.startswith('df') or line.startswith('#') or '=' in line)]
         
         return '\n'.join(code_lines)
+
+
+class DataCleaningAgent(EnhancedDataCleaningAgent):
+    """Backward compatible wrapper with a safe no-op fallback provider."""
+
+    def __init__(self, llm_provider: Optional[LLMProvider] = None):
+        provider = llm_provider or NoOpLLMProvider()
+        super().__init__(provider)
+        self._uses_noop_provider = isinstance(provider, NoOpLLMProvider)
+
+    @property
+    def uses_real_llm(self) -> bool:
+        """Return True when an actual LLM provider was supplied."""
+
+        return not self._uses_noop_provider
 
 
 class AutoMLLLMAssistant:
