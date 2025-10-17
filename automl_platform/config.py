@@ -5,9 +5,10 @@ import warnings
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Iterable, List, Dict, Any, Optional, Set, Tuple
+from typing import Iterable, List, Dict, Any, Optional, Set, Tuple, Union
 import logging
 import os
+import secrets
 from datetime import timedelta
 from enum import Enum
 
@@ -127,16 +128,54 @@ def require_secret(
     return _require_env(var_name, forbidden_values)
 
 
-def require_jwt_secret() -> str:
-    """Return a validated JWT secret from ``JWT_SECRET`` or ``JWT_SECRET_KEY``."""
+def generate_secure_secret(length_bytes: int = 32) -> str:
+    """Return a cryptographically strong random secret."""
 
-    for env_var in ("JWT_SECRET", "JWT_SECRET_KEY"):
+    return secrets.token_urlsafe(length_bytes)
+
+
+def get_or_generate_secret(
+    var_names: Union[str, Iterable[str]],
+    *,
+    length_bytes: int = 32,
+    forbidden_values: Optional[Iterable[str]] = None,
+    warning_message: Optional[str] = None,
+) -> str:
+    """Fetch a secret from the environment or generate one when absent."""
+
+    if isinstance(var_names, str):
+        names = [var_names]
+    else:
+        names = list(var_names)
+
+    for env_var in names:
         value = os.getenv(env_var)
-        if value:
-            return validate_secret_value(env_var, value)
+        if value is not None:
+            validated = validate_secret_value(env_var, value, forbidden_values)
+            if validated is not None and validated != "":
+                return validated
 
-    raise MissingEnvironmentVariableError(
-        "Either JWT_SECRET or JWT_SECRET_KEY must be defined to sign API tokens."
+    secret = generate_secure_secret(length_bytes)
+    env_display = ", ".join(names)
+    logger.warning(
+        warning_message
+        or (
+            f"Environment variable(s) {env_display} are not defined. Generated a secure "
+            "random secret for runtime use. Configure a persistent secret in production."
+        )
+    )
+    return secret
+
+
+def require_jwt_secret() -> str:
+    """Return a validated JWT secret, generating one when none is configured."""
+
+    return get_or_generate_secret(
+        ("JWT_SECRET", "JWT_SECRET_KEY"),
+        warning_message=(
+            "JWT secret not configured via JWT_SECRET or JWT_SECRET_KEY. Generated a "
+            "temporary secret; tokens will be invalidated on restart."
+        ),
     )
 
 
@@ -158,12 +197,20 @@ class DatabaseConfig:
 class SecurityConfig:
     """Security-related secrets used across the platform.
 
-    The ``AUTOML_SECRET_KEY`` environment variable **must** be defined. The
-    platform refuses to start when this secret is missing to avoid deploying a
-    predictable fallback key in production environments.
+    When ``AUTOML_SECRET_KEY`` is missing, a secure temporary value is generated
+    and a warning is emitted. Production deployments must still configure a
+    persistent secret to avoid losing sessions after restarts.
     """
 
-    secret_key: str = field(default_factory=lambda: require_secret("AUTOML_SECRET_KEY"))
+    secret_key: str = field(
+        default_factory=lambda: get_or_generate_secret(
+            "AUTOML_SECRET_KEY",
+            warning_message=(
+                "AUTOML_SECRET_KEY is not defined. Generated a temporary secure secret; "
+                "set AUTOML_SECRET_KEY to a persistent value for production deployments."
+            ),
+        )
+    )
     """Main application secret key supplied via ``AUTOML_SECRET_KEY``."""
 
     audit_encryption_key: Optional[str] = os.getenv("AUTOML_AUDIT_ENCRYPTION_KEY")
@@ -173,6 +220,7 @@ class SecurityConfig:
     """Optional encryption key for the RGPD compliance service."""
 
     def __post_init__(self) -> None:
+        validate_secret_value("AUTOML_SECRET_KEY", self.secret_key)
         validate_secret_value("AUTOML_AUDIT_ENCRYPTION_KEY", self.audit_encryption_key)
         validate_secret_value("AUTOML_RGPD_ENCRYPTION_KEY", self.rgpd_encryption_key)
 
@@ -973,7 +1021,6 @@ class APIConfig:
                 "api.redis_url must start with 'redis://' or 'rediss://'"
             )
         validate_secret_value("JWT_SECRET", self.jwt_secret)
-        validate_secret_value("JWT_SECRET_KEY", self.jwt_secret)
     
     # Rate limiting - PER PLAN
     enable_rate_limit: bool = True
