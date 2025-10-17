@@ -18,6 +18,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+_GENERATED_SECRET_CACHE: Dict[Tuple[str, ...], str] = {}
+
+
 DEFAULT_BILLING_PLAN_TYPE = "free"
 
 
@@ -148,6 +151,12 @@ def get_or_generate_secret(
     else:
         names = list(var_names)
 
+    cache_key = tuple(names)
+
+    cached_secret = _GENERATED_SECRET_CACHE.get(cache_key)
+    if cached_secret is not None:
+        return cached_secret
+
     for env_var in names:
         value = os.getenv(env_var)
         if value is not None:
@@ -164,6 +173,13 @@ def get_or_generate_secret(
             "random secret for runtime use. Configure a persistent secret in production."
         )
     )
+    _GENERATED_SECRET_CACHE[cache_key] = secret
+
+    # Populate the environment for subsequent calls within the same process so
+    # helpers relying on os.getenv retrieve a consistent value.
+    for env_var in names:
+        os.environ.setdefault(env_var, secret)
+
     return secret
 
 
