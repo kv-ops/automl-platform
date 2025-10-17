@@ -173,7 +173,7 @@ def get_or_generate_secret(
             "random secret for runtime use. Configure a persistent secret in production."
         )
     )
-     _GENERATED_SECRET_CACHE[cache_key] = secret
+    _GENERATED_SECRET_CACHE[cache_key] = secret
 
     # Populate the environment for subsequent calls within the same process so
     # helpers relying on os.getenv retrieve a consistent value.
