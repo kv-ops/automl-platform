@@ -52,8 +52,8 @@ services:
       - ./automl_platform:/app/automl_platform
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
     command: >
-      bash -c "/usr/local/bin/wait-for-it postgres:5432 --timeout=60 && \
-               /usr/local/bin/wait-for-it redis:6379 --timeout=60 && \
+      bash -c "/usr/local/bin/wait-for-it postgres:5432 -t 60 && \
+               /usr/local/bin/wait-for-it redis:6379 -t 60 && \
                uvicorn automl_platform.app:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "${API_PORT:-8000}:8000"
@@ -80,7 +80,7 @@ services:
       - ./automl_platform:/app/automl_platform
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
     command: >
-      bash -c "/usr/local/bin/wait-for-it api:8000 --timeout=60 && streamlit run automl_platform/ui/app.py --server.port=8501 --server.address=0.0.0.0"
+      bash -c "/usr/local/bin/wait-for-it api:8000 -t 60 && streamlit run automl_platform/ui/app.py --server.port=8501 --server.address=0.0.0.0"
     ports:
       - "${UI_PORT:-8501}:8501"
     depends_on:
