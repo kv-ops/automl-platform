@@ -24,16 +24,16 @@ NC := \033[0m # No Color
 
 # Default target
 help:
-@echo "Available commands:"
-@echo "  make secrets   - Generate .env.production/.env.staging/.env.development"
-@echo "  make dev       - Launch the lightweight development stack"
-@echo "  make prod      - Launch the full production stack"
-@echo "  make stop      - Stop running containers"
-@echo "  make logs      - Tail Docker Compose logs"
-@echo "  make clean     - Remove containers (keeps data volumes)"
-@echo ""
-@echo "Extended commands remain available for advanced workflows."
-@echo "Run 'make status' to inspect container health or consult README-DOCKER.md for a full guide."
+	@echo "Available commands:"
+	@echo "  make secrets   - Generate .env.production/.env.staging/.env.development"
+	@echo "  make dev       - Launch the lightweight development stack"
+	@echo "  make prod      - Launch the full production stack"
+	@echo "  make stop      - Stop running containers"
+	@echo "  make logs      - Tail Docker Compose logs"
+	@echo "  make clean     - Remove containers (keeps data volumes)"
+	@echo ""
+	@echo "Extended commands remain available for advanced workflows."
+	@echo "Run 'make status' to inspect container health or consult README-DOCKER.md for a full guide."
 
 # ============================================================================
 # Installation & Setup
@@ -147,7 +147,8 @@ wait-healthy:
 dev:
 	@echo "$(BLUE)Starting lightweight development stack...$(NC)"
 	@if [ ! -f $(DEV_COMPOSE_FILE) ]; then \
-		echo "$(RED)Missing $(DEV_COMPOSE_FILE).$(NC)"; exit 1; \
+		echo "$(RED)Missing $(DEV_COMPOSE_FILE).$(NC)"; \
+		exit 1; \
 	fi
 	@if [ ! -f $(DEV_ENV_FILE) ]; then \
 		echo "$(YELLOW)$(DEV_ENV_FILE) not found. Falling back to .env example.$(NC)"; \
@@ -159,8 +160,9 @@ dev:
 prod:
 	@echo "$(BLUE)Starting production stack...$(NC)"
 	@if [ ! -f $(PROD_ENV_FILE) ]; then \
-echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; exit 1; \
-fi
+		echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; \
+		exit 1; \
+	fi
 	@$(MAKE) ssl-cert
 	@DOCKER_BUILDKIT=1 $(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) --profile production up -d
 	@echo "$(GREEN)✓ Production stack is running$(NC)"
@@ -168,8 +170,9 @@ fi
 stop:
 	@echo "$(BLUE)Stopping containers...$(NC)"
 	@if [ ! -f $(PROD_ENV_FILE) ]; then \
-echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; exit 1; \
-fi
+		echo "$(RED)Missing $(PROD_ENV_FILE). Run 'make secrets' first.$(NC)"; \
+		exit 1; \
+	fi
 	@$(DOCKER_COMPOSE) --env-file $(PROD_ENV_FILE) --profile production down
 	@echo "$(GREEN)✓ Containers stopped$(NC)"
 
@@ -222,9 +225,9 @@ logs-error:
 	@$(DOCKER_COMPOSE) logs --tail=1000 | grep -E "ERROR|CRITICAL|Exception|Failed"
 
 status:
-	@echo "$(BLUE)╔══════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)╔═══════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║                     Service Status                           ║$(NC)"
-	@echo "$(BLUE)╚══════════════════════════════════════════════════════════════╝$(NC)"
+	@echo "$(BLUE)╚═══════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep automl || true
 	@echo ""
@@ -378,7 +381,7 @@ scale:
 
 ssl-cert:
 	@if [ ! -f nginx/ssl/tls.crt ] || [ ! -f nginx/ssl/tls.key ]; then \
-echo "$(YELLOW)Generating self-signed certificate for nginx...$(NC)"; \
+		echo "$(YELLOW)Generating self-signed certificate for nginx...$(NC)"; \
 		mkdir -p nginx/ssl; \
 		openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
 		  -keyout nginx/ssl/tls.key \
@@ -388,7 +391,7 @@ echo "$(YELLOW)Generating self-signed certificate for nginx...$(NC)"; \
 		echo "$(GREEN)✓ Self-signed certificate generated$(NC)"; \
 	else \
 		echo "$(GREEN)✓ SSL certificate already present$(NC)"; \
-fi
+	fi
 
 # ============================================================================
 # Cleanup
