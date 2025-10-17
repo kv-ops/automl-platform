@@ -1570,8 +1570,20 @@ class AutoMLConfig:
             assert self.cv_folds > 1, "cv_folds must be greater than 1"
             assert self.hpo_n_iter > 0, "hpo_n_iter must be positive"
             assert self.database.url, "database.url must be defined"
-            assert self.security.secret_key, "security.secret_key must be defined"
-            
+
+            secret_key = getattr(self.security, "secret_key", None)
+            if secret_key and str(secret_key).strip():
+                validate_secret_value("AUTOML_SECRET_KEY", secret_key)
+            else:
+                env_from_attr = (getattr(self, "environment", "") or "").strip().lower()
+                env_from_env_var = (os.getenv("ENV", "") or "").strip().lower()
+                if "production" in {env_from_attr, env_from_env_var}:
+                    raise AssertionError("security.secret_key must be defined in production environments")
+                logger.warning(
+                    "No security.secret_key configured; using ephemeral secret generated during application lifespan. "
+                    "Do not rely on this outside non-production environments."
+                )
+
             # Validate storage config
             assert self.storage.backend in ["local", "minio", "s3", "gcs", "none"], f"Invalid storage backend: {self.storage.backend}"
             if self.storage.backend in {"minio", "s3"}:
