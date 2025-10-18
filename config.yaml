@@ -17,9 +17,6 @@ database:
   audit_url: null
   rgpd_url: null
 
-# ---------- Security ----------
-security:
-
 # ---------- Storage Configuration ----------
 storage:
   backend: local  # Options: local, minio, s3, gcs
