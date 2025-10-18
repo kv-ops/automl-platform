@@ -234,6 +234,7 @@ tenant_id: default
 # ---------- Logging Configuration ----------
 log_level: INFO
 log_file: ./logs/automl.log
+log_to_mlflow: false
 
 # ---------- Infrastructure Settings ----------
 # Billing (requires database setup)
