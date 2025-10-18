@@ -190,7 +190,17 @@ class FeatureStore:
         self.backend = config.get("backend", "local")  # local, s3, minio, redis
         self.cache_enabled = config.get("cache_enabled", True)
         self.cache_ttl = config.get("cache_ttl", 3600)
-        self.default_tenant_id = config.get("default_tenant_id", "default")
+        tenant_id = config.get("tenant_id")
+        if tenant_id is None:
+            legacy_tenant = config.get("default_tenant_id")
+            if legacy_tenant is not None:
+                logger.warning(
+                    "Feature store configuration key 'default_tenant_id' is deprecated; "
+                    "use 'tenant_id' instead. Automatically mapping value '%s'.",
+                    legacy_tenant,
+                )
+                tenant_id = legacy_tenant
+        self.tenant_id = tenant_id or "default"
         
         # Storage paths
         self.base_path = Path(config.get("base_path", "./feature_store"))
@@ -464,7 +474,7 @@ class FeatureStore:
             Success status
         """
         start_time = time.time()
-        tenant_id = tenant_id or self.default_tenant_id
+        tenant_id = tenant_id or self.tenant_id
         
         if feature_set_name not in self.feature_sets:
             logger.error(f"Feature set {feature_set_name} not found")
@@ -576,7 +586,7 @@ class FeatureStore:
             DataFrame with requested features
         """
         start_time = time.time()
-        tenant_id = tenant_id or self.default_tenant_id
+        tenant_id = tenant_id or self.tenant_id
         
         # Determine feature sets
         feature_sets_involved = set()
@@ -638,7 +648,7 @@ class FeatureStore:
     def compute_statistics(self, feature_set_name: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """Compute statistics for a feature set with metrics."""
         start_time = time.time()
-        tenant_id = tenant_id or self.default_tenant_id
+        tenant_id = tenant_id or self.tenant_id
         
         try:
             # Increment operation counter
@@ -954,7 +964,7 @@ def get_feature_store():
             "cache_enabled": True,
             "cache_ttl": 3600,
             "redis_enabled": False,
-            "default_tenant_id": "default"
+            "tenant_id": "default",
         }
         _feature_store = FeatureStore(config)
     return _feature_store

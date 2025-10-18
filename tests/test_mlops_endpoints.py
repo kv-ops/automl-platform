@@ -639,8 +639,7 @@ def test_storage_service_initialization_uses_storage_config():
         auto_versioning: bool = True
         max_versions_per_model: int = 5
         cleanup_old_versions: bool = False
-        enable_multi_tenant: bool = True
-        default_tenant_id: str = "tenant-a"
+        tenant_id: str = "tenant-a"
         isolate_buckets_per_tenant: bool = True
 
     class DummyAutoMLConfig:
