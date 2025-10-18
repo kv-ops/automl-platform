@@ -248,33 +248,33 @@ connectors:
   default_connector: postgresql
   connectors:
     snowflake:
-      account: null
-      username: null
-      password: null
-      warehouse: null
-      database: null
+      account: ${SNOWFLAKE_ACCOUNT}
+      username: ${SNOWFLAKE_USER}
+      password: ${SNOWFLAKE_PASSWORD}
+      warehouse: ${SNOWFLAKE_WAREHOUSE}
+      database: ${SNOWFLAKE_DATABASE}
       schema: public
     bigquery:
-      project_id: null
-      dataset_id: null
-      credentials_path: null
+      project_id: ${GCP_PROJECT_ID}
+      dataset_id: ${BQ_DATASET_ID}
+      credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS}
     databricks:
-      host: null
-      token: null
+      host: ${DATABRICKS_HOST}
+      token: ${DATABRICKS_TOKEN}
       catalog: hive_metastore
       schema: default
     postgresql:
-      host: localhost
-      port: 5432
-      database: automl
-      username: postgres
-      password: null
+      host: ${PG_HOST:-localhost}
+      port: ${PG_PORT:-5432}
+      database: ${PG_DATABASE:-automl}
+      username: ${PG_USER:-postgres}
+      password: ${PG_PASSWORD}
     mongodb:
-      host: localhost
-      port: 27017
-      database: automl
-      username: null
-      password: null
+      host: ${MONGO_HOST:-localhost}
+      port: ${MONGO_PORT:-27017}
+      database: ${MONGO_DATABASE:-automl}
+      username: ${MONGO_USER}
+      password: ${MONGO_PASSWORD}
 
 # ---------- Streaming ----------
 streaming:
