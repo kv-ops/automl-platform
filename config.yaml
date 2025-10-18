@@ -248,15 +248,33 @@ connectors:
   default_connector: postgresql
   connectors:
     snowflake:
-      enabled: false
+      account: null
+      username: null
+      password: null
+      warehouse: null
+      database: null
+      schema: public
     bigquery:
-      enabled: false
+      project_id: null
+      dataset_id: null
+      credentials_path: null
     databricks:
-      enabled: false
+      host: null
+      token: null
+      catalog: hive_metastore
+      schema: default
     postgresql:
-      enabled: true
+      host: localhost
+      port: 5432
+      database: automl
+      username: postgres
+      password: null
     mongodb:
-      enabled: false
+      host: localhost
+      port: 27017
+      database: automl
+      username: null
+      password: null
 
 # ---------- Streaming ----------
 streaming:
