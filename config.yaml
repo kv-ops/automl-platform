@@ -20,8 +20,8 @@ database:
 # ---------- Security ----------
 security:
   secret_key: ${AUTOML_SECRET_KEY}
-  audit_encryption_key: null
-  rgpd_encryption_key: null
+  audit_encryption_key: ${AUTOML_AUDIT_ENCRYPTION_KEY}
+  rgpd_encryption_key: ${AUTOML_RGPD_ENCRYPTION_KEY}
 
 # ---------- Storage Configuration ----------
 storage:
@@ -30,14 +30,14 @@ storage:
   
   # MinIO/S3 settings
   endpoint: localhost:9000
-  access_key: null  # Inject MINIO_ACCESS_KEY via environment or secrets manager
-  secret_key: null  # Inject MINIO_SECRET_KEY via environment or secrets manager
+  access_key: ${MINIO_ACCESS_KEY}
+  secret_key: ${MINIO_SECRET_KEY}
   secure: false
   region: us-east-1
   
   # GCS settings (if backend = gcs)
-  project_id: null
-  credentials_path: null
+  project_id: ${GCP_PROJECT_ID}
+  credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS}
   
   # Buckets/containers
   models_bucket: models
