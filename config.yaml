@@ -243,7 +243,8 @@ tenant_id: default
 # ---------- Logging Configuration ----------
 log_level: INFO
 log_file: ./logs/automl.log
-log_to_mlflow: false
+log_to_mlflow: true
+mlflow_tracking_uri: http://mlflow:5000
 
 # ---------- Infrastructure Settings ----------
 # Billing (requires database setup)
