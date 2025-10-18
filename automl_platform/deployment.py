@@ -17,6 +17,8 @@ import shutil
 import tempfile
 import hashlib
 import logging
+import importlib
+from importlib import util as importlib_util
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, asdict
@@ -36,7 +38,6 @@ from sklearn2pmml import sklearn2pmml
 from sklearn2pmml.pipeline import PMMLPipeline
 import tensorflow as tf
 import torch
-import docker
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Response
 
 from automl_platform.config import (
@@ -77,6 +78,14 @@ except ImportError:
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+docker_spec = importlib_util.find_spec("docker")
+if docker_spec is not None:
+    docker = importlib.import_module("docker")
+    DOCKER_SDK_AVAILABLE = True
+else:
+    docker = None
+    DOCKER_SDK_AVAILABLE = False
 
 # ============================================================================
 # Configuration
@@ -365,7 +374,7 @@ class ModelExportService:
     
     async def _export_docker(self, model: Any, metadata: ModelMetadata, output_path: str) -> str:
         """Export model as Docker container with FastAPI serving"""
-        
+
         # Create temporary directory
         temp_dir = tempfile.mkdtemp()
         
@@ -388,9 +397,28 @@ class ModelExportService:
         dockerfile = self._generate_dockerfile(metadata)
         with open(os.path.join(temp_dir, "Dockerfile"), "w") as f:
             f.write(dockerfile)
-        
+
         # Build Docker image
-        docker_client = docker.from_env()
+        if not DOCKER_SDK_AVAILABLE:
+            logger.error("Docker SDK not available, cannot perform operation")
+            shutil.rmtree(temp_dir)
+            raise RuntimeError("Docker SDK not available for Docker export")
+
+        docker_client = None
+        try:
+            docker_client = docker.from_env()
+            docker_client.ping()
+            logger.info("Docker daemon connected successfully")
+        except docker.errors.DockerException as e:
+            logger.warning(
+                f"Docker daemon not available: {e}. Docker export features will be disabled."
+            )
+            docker_client = None
+
+        if docker_client is None:
+            logger.error("Docker client not available, cannot perform operation")
+            raise RuntimeError("Docker client not available for Docker export")
+
         image_tag = f"{DeploymentConfig.DOCKER_REGISTRY}/{metadata.model_id}:{metadata.version}"
         
         logger.info(f"Building Docker image: {image_tag}")
