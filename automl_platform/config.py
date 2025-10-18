@@ -84,6 +84,8 @@ def validate_secret_value(
 ) -> Optional[str]:
     """Validate that ``value`` is not using an insecure default secret."""
 
+    print(f"DEBUG EARLY: var_name={var_name}, value={value}")
+    
     if value is None:
         return value
 
@@ -97,7 +99,7 @@ def validate_secret_value(
     forbidden.update(_FORBIDDEN_SECRET_VALUES_BY_ENV.get(var_name, set()))
     if forbidden_values:
         forbidden.update(str(item).lower() for item in forbidden_values)
-    print(f"DEBUG: var_name={var_name}, lowered={lowered}, forbidden={forbidden}")
+   
     if lowered in forbidden:
         raise InsecureEnvironmentVariableError(
             f"Environment variable {var_name} is set to a forbidden insecure default value. "
