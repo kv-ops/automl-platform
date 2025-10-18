@@ -70,6 +70,10 @@ api:
   max_upload_size_mb: 100
   allowed_extensions: [".csv", ".parquet", ".json", ".xlsx"]
 
+# ---------- Security ----------
+security:
+  secret_key: ${AUTOML_SECRET_KEY}
+
 # ---------- Monitoring Configuration ----------
 monitoring:
   enabled: true
