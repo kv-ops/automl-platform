@@ -83,8 +83,6 @@ def validate_secret_value(
     forbidden_values: Optional[Iterable[str]] = None,
 ) -> Optional[str]:
     """Validate that ``value`` is not using an insecure default secret."""
-
-    print(f"DEBUG EARLY: var_name={var_name}, value={value}")
     
     if value is None:
         return value
