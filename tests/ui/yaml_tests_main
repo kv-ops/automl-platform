@@ -1,0 +1,161 @@
+# =========================== config.yaml ===========================
+# AutoML Platform Configuration
+
+# General settings
+random_state: 42
+n_jobs: -1
+verbose: 1
+
+# Data preprocessing
+max_missing_ratio: 0.5
+rare_category_threshold: 0.01
+high_cardinality_threshold: 20
+outlier_method: "iqr"  # Options: iqr, isolation_forest, none
+outlier_threshold: 1.5
+scaling_method: "robust"  # Options: standard, robust, minmax, none
+
+# Feature engineering  
+create_polynomial: false
+polynomial_degree: 2
+create_interactions: false
+create_datetime_features: true
+create_lag_features: false
+lag_periods: [1, 7, 30]
+
+# Text processing
+text_max_features: 100
+text_ngram_range: [1, 2]
+text_min_df: 2
+
+# Model selection
+task: "auto"  # Options: classification, regression, timeseries, auto
+cv_folds: 5
+validation_strategy: "auto"  # Options: stratified, kfold, timeseries, auto
+scoring: "auto"  # Will be determined based on task
+
+# Hyperparameter tuning
+hpo_method: "optuna"  # Options: grid, random, optuna, none
+hpo_n_iter: 20
+hpo_time_budget: 3600
+early_stopping_rounds: 50
+
+# Model training
+algorithms:
+  - all  # Use "all" to test all available models
+exclude_algorithms:
+  - GaussianProcessClassifier  # Too slow
+  - GaussianProcessRegressor  # Too slow
+ensemble_method: "voting"  # Options: voting, stacking, none
+calibrate_probabilities: false
+
+# Class imbalance
+handle_imbalance: true
+imbalance_method: "class_weight"  # Options: class_weight, smote, adasyn, none
+
+# Performance thresholds
+min_accuracy: 0.6
+min_auc: 0.6
+min_r2: 0.0
+
+# Output settings
+output_dir: "./automl_output"
+save_pipeline: true
+save_predictions: true
+save_feature_importance: true
+generate_report: true
+
+# API settings
+api_enabled: false
+api_host: "0.0.0.0"
+api_port: 8000
+
+
+# =========================== requirements.txt ===========================
+# Core dependencies
+pandas>=1.3.0
+numpy>=1.21.0
+scikit-learn>=1.0.0
+scipy>=1.7.0
+joblib>=1.1.0
+pyyaml>=5.4.0
+
+# Optional: HPO
+optuna>=2.10.0
+
+# Optional: Boosting algorithms
+xgboost>=1.5.0
+lightgbm>=3.2.0
+catboost>=1.0.0
+
+# Optional: Imbalanced learning
+imbalanced-learn>=0.8.0
+
+# Optional: Explainability
+shap>=0.40.0
+lime>=0.2.0
+
+# Optional: Time series
+statsmodels>=0.12.0
+prophet>=1.0.0
+pmdarima>=1.8.0
+
+# Optional: API
+fastapi>=0.68.0
+uvicorn>=0.15.0
+pydantic>=1.8.0
+
+# Development
+pytest>=6.0.0
+pytest-cov>=2.12.0
+black>=21.0
+flake8>=3.9.0
+mypy>=0.910
+types-PyYAML>=5.4.0
+
+
+# =========================== setup.py ===========================
+from setuptools import setup, find_packages
+
+setup(
+    name="automl-platform",
+    version="3.0.0",
+    author="AutoML Platform Team",
+    description="Production-ready AutoML platform with no data leakage",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
+    packages=find_packages(),
+    install_requires=[
+        "pandas>=1.3.0",
+        "numpy>=1.21.0",
+        "scikit-learn>=1.0.0",
+        "scipy>=1.7.0",
+        "joblib>=1.1.0",
+        "pyyaml>=5.4.0",
+    ],
+    extras_require={
+        "hpo": ["optuna>=2.10.0"],
+        "boosting": ["xgboost>=1.5.0", "lightgbm>=3.2.0", "catboost>=1.0.0"],
+        "imbalance": ["imbalanced-learn>=0.8.0"],
+        "explain": ["shap>=0.40.0", "lime>=0.2.0"],
+        "timeseries": ["statsmodels>=0.12.0", "prophet>=1.0.0", "pmdarima>=1.8.0"],
+        "api": ["fastapi>=0.68.0", "uvicorn>=0.15.0", "pydantic>=1.8.0"],
+        "dev": [
+            "pytest>=6.0.0",
+            "pytest-cov>=2.12.0",
+            "black>=21.0",
+            "flake8>=3.9.0",
+            "mypy>=0.910",
+        ],
+        "all": [
+            "optuna>=2.10.0",
+            "xgboost>=1.5.0",
+            "lightgbm>=3.2.0",
+            "catboost>=1.0.0",
+            "imbalanced-learn>=0.8.0",
+            "shap>=0.40.0",
+            "lime>=0.2.0",
+            "statsmodels>=0.12.0",
+            "prophet>=1.0.0",
+            "pmdarima>=1.8.0",
+            "fastapi>=0.68.0",
+            "uvicorn>=0.15.
