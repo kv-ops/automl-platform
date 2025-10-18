@@ -214,7 +214,7 @@ services:
       # Billing & Subscription
       STRIPE_API_KEY: ${STRIPE_API_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      BILLING_ENABLED: ${BILLING_ENABLED:-true}
+      BILLING_ENABLED: ${BILLING_ENABLED:-false}
       
       # Multi-tenant configuration
       MULTI_TENANT_ENABLED: ${MULTI_TENANT_ENABLED:-true}
