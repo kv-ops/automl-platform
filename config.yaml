@@ -19,9 +19,6 @@ database:
 
 # ---------- Security ----------
 security:
-  secret_key: ${AUTOML_SECRET_KEY}
-  audit_encryption_key: ${AUTOML_AUDIT_ENCRYPTION_KEY}
-  rgpd_encryption_key: ${AUTOML_RGPD_ENCRYPTION_KEY}
 
 # ---------- Storage Configuration ----------
 storage:
