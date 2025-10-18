@@ -787,13 +787,30 @@ class FeatureStoreConfig:
     materialization_interval: int = 3600  # seconds
     
     # Multi-tenancy
-    enable_multi_tenant: bool = True
+    tenant_id: str = "default"
     tenant_isolation: str = "logical"  # logical, physical
+    enable_multi_tenant: Optional[bool] = field(default=None, repr=False, metadata={"deprecated": True})
+    default_tenant_id: Optional[str] = field(default=None, repr=False, metadata={"deprecated": True})
 
     def __post_init__(self) -> None:
         if self.backend in {"minio", "s3"}:
             validate_secret_value("MINIO_ACCESS_KEY", self.access_key)
             validate_secret_value("MINIO_SECRET_KEY", self.secret_key)
+        if self.default_tenant_id:
+            logger.warning(
+                "FeatureStoreConfig.default_tenant_id is deprecated; use tenant_id instead. "
+                "Automatically mapping the legacy value '%s'.",
+                self.default_tenant_id,
+            )
+            self.tenant_id = self.default_tenant_id
+            self.default_tenant_id = None
+        if self.enable_multi_tenant is not None:
+            logger.warning(
+                "FeatureStoreConfig.enable_multi_tenant is deprecated and no longer used. "
+                "The configured tenant_id '%s' will determine the active tenant.",
+                self.tenant_id,
+            )
+            self.enable_multi_tenant = None
 
 
 @dataclass
@@ -841,14 +858,30 @@ class StorageConfig:
     cleanup_old_versions: bool = False
     
     # Multi-tenant
-    enable_multi_tenant: bool = True
-    default_tenant_id: str = "default"
+    tenant_id: str = "default"
     isolate_buckets_per_tenant: bool = True  # Create separate buckets per tenant
+    enable_multi_tenant: Optional[bool] = field(default=None, repr=False, metadata={"deprecated": True})
+    default_tenant_id: Optional[str] = field(default=None, repr=False, metadata={"deprecated": True})
 
     def __post_init__(self) -> None:
         if self.backend in {"minio", "s3"}:
             validate_secret_value("MINIO_ACCESS_KEY", self.access_key)
             validate_secret_value("MINIO_SECRET_KEY", self.secret_key)
+        if self.default_tenant_id:
+            logger.warning(
+                "StorageConfig.default_tenant_id is deprecated; use tenant_id instead. "
+                "Automatically mapping the legacy value '%s'.",
+                self.default_tenant_id,
+            )
+            self.tenant_id = self.default_tenant_id
+            self.default_tenant_id = None
+        if self.enable_multi_tenant is not None:
+            logger.warning(
+                "StorageConfig.enable_multi_tenant is deprecated and no longer used. "
+                "The configured tenant_id '%s' will be used for storage isolation.",
+                self.tenant_id,
+            )
+            self.enable_multi_tenant = None
 
 
 @dataclass
