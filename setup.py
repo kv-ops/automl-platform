@@ -5,12 +5,7 @@ Version 3.2.1 - Enterprise Edition with No-Code UI and Extended Connectors
 
 from setuptools import setup, find_packages
 from pathlib import Path
-
-from dependency_manifest import (
-    get_core_dependencies,
-    get_base_extras,
-    get_aggregated_extras,
-)
+import os
 
 # Read the contents of README.md
 this_directory = Path(__file__).parent
@@ -23,12 +18,496 @@ if version_file.exists():
     with open(version_file) as f:
         exec(f.read())
 
-install_requires = get_core_dependencies()
+# Core requirements - harmonized with pyproject.toml and requirements.txt
+install_requires = [
+    # Core ML libraries
+    "pandas>=2.0.0,<3.0.0",
+    "numpy>=1.24.0,<2.0.0",
+    "scikit-learn>=1.3.0,<2.0.0",
+    "scipy>=1.11.0,<2.0.0",
+    "joblib>=1.3.0",
+
+    # Configuration & Validation
+    "pyyaml>=6.0.1",
+    "pydantic>=2.5.0,<3.0.0",
+    "python-dotenv>=1.0.0",
+
+    # AutoML Core
+    "optuna>=3.4.0,<4.0.0",
+    "xgboost>=2.0.0,<3.0.0",
+    "lightgbm>=4.0.0,<5.0.0",
+    "catboost>=1.2.0,<2.0.0",
+    "imbalanced-learn>=0.10.0,<1.0.0",
+
+    # API Framework
+    "fastapi>=0.104.0,<1.0.0",
+    "uvicorn[standard]>=0.24.0,<1.0.0",
+    "starlette>=0.27.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.2.0",
+
+    # HTTP & Core Auth
+    "httpx>=0.25.0",
+    "authlib>=1.2.0",
+    "requests>=2.31.0",
+    "aiohttp>=3.9.0",
+
+    # Storage
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "redis>=5.0.0",
+    "alembic>=1.13.0",
+
+    # Security
+    "cryptography>=41.0.0",
+    "pyjwt>=2.8.0",
+    "passlib[bcrypt]>=1.7.4",
+
+    # MLOps
+    "mlflow>=2.9.0,<3.0.0",
+
+    # Model Export
+    "onnx>=1.15.0,<2.0.0",
+    "onnxruntime>=1.16.0,<2.0.0",
+    "skl2onnx>=1.16.0,<2.0.0",
+
+    # Data Quality
+    "deepchecks>=0.17.0",
+    "evidently>=0.4.0",
+
+    # UI Framework (Essential for no-code)
+    "streamlit>=1.30.0",
+    "plotly>=5.18.0",
+    "streamlit-option-menu>=0.3.6",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "altair>=4.2.1,<5.0.0",
+    "bokeh>=3.3.0",
+    "holoviews>=1.18.0",
+    "panel>=1.3.0",
+
+    # UI Components
+    "streamlit-extras>=0.3.6",
+    "streamlit-aggrid>=0.3.4",
+    "streamlit-authenticator>=0.2.3",
+    "streamlit-chat>=0.1.1",
+    "streamlit-elements>=0.1.0",
+    "streamlit-lottie>=0.0.5",
+    "streamlit-drawable-canvas>=0.9.3",
+    "streamlit-autorefresh>=1.0.1",
+    "streamlit-folium>=0.15.0",
+    "streamlit-ace>=0.1.1",
+    "streamlit-tags>=1.2.8",
+    "streamlit-tree-select>=0.0.5",
+
+    # Report Generation
+    "reportlab>=4.0.0",
+    "python-docx>=1.1.0",
+    "xlsxwriter>=3.1.0",
+    "fpdf2>=2.7.0",
+    "jinja2>=3.1.0",
+
+    # Essential connectors
+    "openpyxl>=3.1.0",
+    "gspread>=5.7.2",
+    "google-auth>=2.14.1",
+    "google-auth-oauthlib>=1.0.0",
+    "pyarrow>=14.0.0",
+    "fastparquet>=2023.10.0",
+    "xlrd>=2.0.0",
+
+    # Task Queue
+    "celery[redis]>=5.3.0",
+    "flower>=2.0.0",
+
+    # Templates
+    "chevron>=0.14.0",
+    "jsonschema>=4.20.0",
+
+    # Utilities
+    "tqdm>=4.66.0",
+    "click>=8.1.0",
+    "prometheus-client>=0.19.0",
+    "tabulate>=0.9.0",
+    "tenacity>=8.2.0",
+    "psutil>=5.9.6",
+    "python-dateutil>=2.8.0",
+    "humanize>=4.9.0",
+
+    # File Processing
+    "python-magic>=0.4.27",
+    "chardet>=5.2.0",
+    "pypdf>=3.17.0",
+
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+    "hypothesis>=6.98.0",
+
+    # Code Quality
+    "black>=24.0.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    "isort>=5.13.0",
+
+    # Documentation
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=2.0.0",
+    "myst-parser>=2.0.0",
+
+    # Development Tools
+    "ipython>=8.12.0",
+    "jupyter>=1.0.0",
+    "notebook>=7.0.0",
+    "jupyterlab>=4.0.0",
+    "tomli>=2.0.1;python_version<'3.11'",  # TOML parser for Python 3.9/3.10
+
+    # Production
+    "gunicorn>=21.2.0",
+    "supervisor>=4.2.0",
+]
 
 # Optional dependencies organized by feature - harmonized with pyproject.toml
-extras_require = get_base_extras()
-extras_require.update(get_aggregated_extras())
+extras_require = {
+    # Intelligent Agents (NEW)
+    "agents": [
+        "openai>=1.10.0",
+        "beautifulsoup4>=4.11.0",
+        "tiktoken>=0.6.0",
+    ],
 
+    # Extended connectors
+    "connectors": [
+        "xlrd>=2.0.1",
+        "google-auth-httplib2>=0.2.0",
+        "pygsheets>=2.0.6",
+        "hubspot-api-client>=8.2.0",
+        "simple-salesforce>=1.12.5",
+        "pipedrive-python-lib>=1.2.0",
+        "zoho-crm>=0.5.0",
+        "snowflake-connector-python>=3.7.0",
+        "google-cloud-bigquery>=3.15.0",
+        "databricks-connect>=14.1.0",
+        "pyodbc>=5.0.1",
+        "cx_Oracle>=8.3.0",
+        "pymongo>=4.6.0",
+        "cassandra-driver>=3.29.0",
+        "elasticsearch>=8.12.0",
+        "influxdb-client>=1.40.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
+    ],
+
+    # Enhanced UI/Dashboard components
+    "ui_advanced": [
+        "streamlit-webrtc>=0.47.0",
+        "voila>=0.5.0",
+        "papermill>=2.5.0",
+    ],
+
+    # Report generation
+    "reporting": [
+        "weasyprint>=60.0",
+        "python-pptx>=0.6.0",
+    ],
+
+    # Enhanced Authentication & SSO
+    "auth": [
+        "python-keycloak>=3.7.0",
+        "python-saml>=1.15.0",
+        "okta>=2.9.0",
+        "python-jose[cryptography]>=3.3.0",
+        "msal>=1.26.0",
+        "oauthlib>=3.2.0",
+    ],
+
+    # SSO (subset for compatibility)
+    "sso": [
+        "python-keycloak>=3.7.0",
+        "python-saml>=1.15.0",
+        "okta>=2.9.0",
+        "authlib>=1.2.0",
+    ],
+
+    # GPU Computing & Acceleration
+   "gpu": [
+    "cupy-cuda11x>=12.0.0,<13.0.0",
+    "pycuda>=2022.2.2",  # AJOUTÉ
+    "numba[cuda]>=0.58.0",
+    "gputil>=1.4.0",
+    "nvidia-ml-py3>=7.352.0",
+    "pynvml>=11.5.0",
+    "gpustat>=1.1.1",
+    "onnxruntime-gpu>=1.16.0,<2.0.0",
+    "pytorch-memlab>=0.3.0",
+    "torch-tb-profiler>=0.4.0",
+    ],
+
+    # Distributed GPU training
+    "distributed-gpu": [
+        "horovod>=0.28.0,<1.0.0",
+        "fairscale>=0.4.0,<1.0.0",
+        "deepspeed>=0.12.0,<1.0.0",
+    ],
+
+    # AutoML GPU
+    "automl-gpu": [
+        "autogluon[torch]>=1.0.0",
+        "nni>=3.0,<4.0",
+    ],
+
+    # GPU serving
+    "serving-gpu": [
+        "tritonclient[all]>=2.40.0",
+    ],
+
+    # Alternative GPU
+    "gpu-alt": [
+        "jax[cuda11_pip]>=0.4.20",
+    ],
+
+    # Hyperparameter optimization
+    "hpo": [
+        "optuna-dashboard>=0.13.0",
+        "hyperopt>=0.2.7",
+        "scikit-optimize>=0.9.0",
+        "nevergrad>=0.6.0",
+    ],
+
+    # Deep learning
+    "deep": [
+        "tensorflow>=2.15.0,<3.0.0",
+        "torch>=2.1.0,<3.0.0",
+        "torchvision>=0.16.0,<1.0.0",
+        "torchaudio>=2.1.0,<3.0.0",
+        "pytorch-tabnet>=4.1.0",
+        "pytorch-lightning>=2.1.0",
+        "transformers>=4.36.0",
+    ],
+
+    # Model explainability
+    "explain": [
+        "shap>=0.43.0",
+        "lime>=0.2.0",
+        "eli5>=0.13.0",
+        "interpret>=0.4.0",
+        "alibi>=0.9.0",
+        "captum>=0.7.0",
+    ],
+
+    # Time series
+    "timeseries": [
+        "statsmodels>=0.14.0",
+        "prophet>=1.1.5",
+        "pmdarima>=2.0.0",
+        "sktime>=0.24.0",
+        "tsfresh>=0.20.0",
+        "darts>=0.26.0",
+        "neuralforecast>=1.6.0",
+    ],
+
+    # NLP
+    "nlp": [
+        "sentence-transformers>=2.2.0",
+        "nltk>=3.8.0",
+        "spacy>=3.7.0",
+        "gensim>=4.3.0",
+        "textblob>=0.17.0",
+        "langdetect>=1.0.9",
+        "textstat>=0.7.3",
+    ],
+
+    # Computer Vision
+    "vision": [
+        "opencv-python>=4.8.0",
+        "pillow>=10.0.0",
+        "albumentations>=1.3.0",
+        "torchvision>=0.16.0",
+        "supervision>=0.17.0",
+        "ultralytics>=8.1.0",
+    ],
+
+    # Enhanced API features
+    "api": [
+        "websockets>=12.0",
+        "slowapi>=0.1.9",
+        "python-socketio>=5.11.0",
+        "fastapi-limiter>=0.1.5",
+        "fastapi-versioning>=0.10.0",
+    ],
+
+    # Storage
+    "storage": [
+        "minio>=7.2.0",
+        "boto3>=1.34.0",
+        "google-cloud-storage>=2.10.0",
+        "azure-storage-blob>=12.19.0",
+        "aioboto3>=12.0.0",
+        "snowflake-connector-python>=3.7.0",
+        "mysqlclient>=2.2.0",
+        "pymysql>=1.1.0",
+    ],
+
+    # Distributed Computing
+    "distributed": [
+        "ray[default,train,tune]>=2.8.0,<3.0.0",
+        "dask[complete]>=2023.12.0",
+        "dramatiq[redis]>=1.15.0",
+    ],
+
+    # MLOps & Model Management
+    "mlops": [
+        "dvc>=3.48.0",
+        "wandb>=0.16.0",
+        "neptune-client>=1.8.0",
+        "bentoml>=1.1.0",
+        "great-expectations>=0.18.0",
+    ],
+
+    # Workflow Orchestration
+    "orchestration": [
+        "apache-airflow>=2.8.0",
+        "prefect>=2.14.0",
+        "dagster>=1.6.0",
+        "kedro>=0.19.0",
+        "luigi>=3.5.0",
+    ],
+
+    # Model Export & Serving
+    "export": [
+        "sklearn2pmml>=0.104.0",
+        "tensorflow-lite>=2.15.0",
+        "coremltools>=7.1",
+        "tensorflowjs>=4.17.0",
+    ],
+
+    # Streaming & Real-time
+    "streaming": [
+        "kafka-python>=2.0.2",
+        "confluent-kafka>=2.3.0",
+        "pulsar-client>=3.4.0",
+        "redis-py-cluster>=2.1.0",
+        "faust-streaming>=0.10.0",
+        "aiokafka>=0.10.0",
+    ],
+
+    # Feature Store
+    "feature-store": [
+        "feast>=0.36.0",
+        "featuretools>=1.28.0",
+        "featureform>=1.12.0",
+    ],
+
+    # Monitoring & Observability
+    "monitoring": [
+        "opentelemetry-api>=1.22.0",
+        "opentelemetry-sdk>=1.22.0",
+        "opentelemetry-instrumentation-fastapi>=0.43b0",
+        "jaeger-client>=4.8.0",
+        "sentry-sdk>=1.40.0",
+        "datadog>=0.49.0",
+        "prometheus-fastapi-instrumentator>=6.1.0",
+    ],
+
+    # LLM Integration
+    "llm": [
+        "openai>=1.10.0",
+        "anthropic>=0.8.0",
+        "langchain>=0.1.0",
+        "langchain-community>=0.0.20",
+        "llama-index>=0.10.0",
+        "chromadb>=0.4.22",
+        "tiktoken>=0.6.0",
+        "instructor>=0.5.0",
+    ],
+
+    # Visualization (beyond core)
+    "viz": [
+        "hvplot>=0.9.0",
+    ],
+
+    # Development & Testing (beyond core)
+    "dev": [
+        "pytest-mock>=3.12.0",
+        "pytest-benchmark>=4.0.0",
+        "faker>=22.0.0",
+        "factory-boy>=3.3.0",
+        "pre-commit>=3.6.0",
+        "bandit>=1.7.0",
+        "safety>=3.0.0",
+        "locust>=2.20.0",
+    ],
+
+    # Documentation (beyond core)
+    "docs": [
+        "sphinx-autodoc-typehints>=1.25.0",
+        "sphinx-copybutton>=0.5.0",
+        "jupyter-book>=0.15.0",
+        "mkdocs>=1.5.0",
+        "mkdocs-material>=9.5.0",
+    ],
+
+    # Cloud providers
+    "cloud": [
+        "boto3>=1.34.0",
+        "s3fs>=2024.2.0",
+        "google-cloud-bigquery>=3.15.0",
+        "google-cloud-storage>=2.10.0",
+        "azure-storage-blob>=12.19.0",
+        "azure-identity>=1.15.0",
+        "snowflake-connector-python>=3.7.0",
+        "databricks-sql-connector>=2.9.0",
+    ],
+
+    # Production deployment
+    "production": [
+        "docker>=7.0.0",
+        "kubernetes>=29.0.0",
+        "nginx>=0.2.0",
+    ],
+}
+
+# Meta-extras that combine multiple groups
+extras_require["nocode"] = list(set(
+    extras_require["connectors"] +
+    extras_require["ui_advanced"] +
+    extras_require["reporting"] +
+    extras_require["viz"] +
+    ["jupyter>=1.0.0", "notebook>=7.0.0"]
+))
+
+extras_require["enterprise"] = list(set(
+    extras_require["api"] +
+    extras_require["storage"] +
+    extras_require["distributed"] +
+    extras_require["mlops"] +
+    extras_require["monitoring"] +
+    extras_require["auth"] +
+    extras_require["orchestration"] +
+    extras_require["export"] +
+    extras_require["streaming"] +
+    extras_require["cloud"] +
+    extras_require["nocode"] +
+    extras_require["connectors"]
+))
+
+extras_require["gpu-complete"] = list(set(
+    extras_require["gpu"] +
+    extras_require["deep"] +
+    extras_require["distributed-gpu"] +
+    extras_require["automl-gpu"] +
+    extras_require["serving-gpu"]
+))
+
+# Combine all extras
+all_extras = []
+for key, extra in extras_require.items():
+    if key not in ["nocode", "enterprise", "gpu-complete"]:  # Avoid duplicates from meta-extras
+        all_extras.extend(extra)
+extras_require["all"] = list(set(all_extras))
+
+# Setup configuration
 setup(
     # Package metadata
     name="automl-platform",
