@@ -244,12 +244,19 @@ billing:
 
 # ---------- Data Connectors ----------
 connectors:
-  # Enable specific connectors as needed
-  snowflake_enabled: false
-  bigquery_enabled: false
-  databricks_enabled: false
-  postgresql_enabled: true
-  mongodb_enabled: false
+  enabled: true
+  default_connector: postgresql
+  connectors:
+    snowflake:
+      enabled: false
+    bigquery:
+      enabled: false
+    databricks:
+      enabled: false
+    postgresql:
+      enabled: true
+    mongodb:
+      enabled: false
 
 # ---------- Streaming ----------
 streaming:
