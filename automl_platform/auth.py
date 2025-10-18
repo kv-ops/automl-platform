@@ -882,6 +882,36 @@ def require_permission(resource: str, action: str):
     return decorator
 
 
+def permission_dependency(resource: str, action: str):
+    """Create a FastAPI dependency that enforces RBAC permissions."""
+
+    async def dependency(
+        request: Request,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> User:
+        # Ensure state is populated for downstream handlers expecting it
+        if not getattr(request.state, "user", None):
+            request.state.user = current_user
+        if not getattr(request.state, "db", None):
+            request.state.db = db
+
+        rbac_service = RBACService(db)
+        resource_owner_id = request.path_params.get("owner_id")
+
+        if not rbac_service.check_permission(
+            current_user, resource, action, resource_owner_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied for {action} on {resource}",
+            )
+
+        return current_user
+
+    return dependency
+
+
 def require_plan(min_plan: PlanType):
     """Decorator to check user plan"""
     def decorator(func):
