@@ -8,6 +8,8 @@ import uuid
 import hashlib
 import json
 import logging
+import importlib
+from importlib import util as importlib_util
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
@@ -19,16 +21,21 @@ import psutil
 import resource
 
 # Docker and Kubernetes
-try:
-    import docker
+docker_spec = importlib_util.find_spec("docker")
+if docker_spec is not None:
+    docker = importlib.import_module("docker")
     DOCKER_AVAILABLE = True
-except ImportError:
+else:
+    docker = None
     DOCKER_AVAILABLE = False
 
-try:
+k8s_spec = importlib_util.find_spec("kubernetes")
+if k8s_spec is not None:
     from kubernetes import client, config as k8s_config
     KUBERNETES_AVAILABLE = True
-except ImportError:
+else:
+    client = None
+    k8s_config = None
     KUBERNETES_AVAILABLE = False
 
 # Security
@@ -164,10 +171,18 @@ class TenantManager:
         self.Session = sessionmaker(bind=self.engine)
         
         # Initialize Docker client if available
+        self.docker_client = None
         if DOCKER_AVAILABLE:
-            self.docker_client = docker.from_env()
-        else:
-            self.docker_client = None
+            try:
+                docker_client = docker.from_env()
+                docker_client.ping()
+                logger.info("Docker daemon connected successfully")
+                self.docker_client = docker_client
+            except docker.errors.DockerException as e:
+                logger.warning(
+                    f"Docker daemon not available: {e}. Docker export features will be disabled."
+                )
+                self.docker_client = None
         
         # Initialize Kubernetes client if available
         if KUBERNETES_AVAILABLE:
@@ -304,6 +319,7 @@ class TenantManager:
     def _create_docker_network(self, tenant_id: str):
         """Create isolated Docker network for tenant."""
         if not self.docker_client:
+            logger.error("Docker client not available, cannot perform operation")
             return
         
         try:
@@ -540,6 +556,7 @@ class ResourceMonitor:
     async def _check_docker_resources(self, tenant_id: str):
         """Check Docker container resources for tenant."""
         if not self.tenant_manager.docker_client:
+            logger.error("Docker client not available, cannot perform operation")
             return
         
         try:
@@ -618,11 +635,11 @@ class DeploymentManager:
     def __init__(self, tenant_manager: TenantManager):
         self.tenant_manager = tenant_manager
     
-    def deploy_model_docker(self, tenant_id: str, model_path: str, 
+    def deploy_model_docker(self, tenant_id: str, model_path: str,
                            port: int = 8000) -> Optional[str]:
         """Deploy model as Docker container."""
         if not self.tenant_manager.docker_client:
-            logger.error("Docker not available")
+            logger.error("Docker client not available, cannot perform operation")
             return None
         
         try:

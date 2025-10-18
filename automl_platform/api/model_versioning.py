@@ -7,6 +7,8 @@ Place dans: automl_platform/api/model_versioning.py
 
 import json
 import logging
+import importlib
+from importlib import util as importlib_util
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,6 +40,14 @@ from infrastructure import TenantManager, SecurityManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _load_docker_module():
+    """Return the docker module if available, else None."""
+    docker_spec = importlib_util.find_spec("docker")
+    if docker_spec is None:
+        return None
+    return importlib.import_module("docker")
 
 # Déclaration des métriques Prometheus
 ml_model_versions_total = Gauge(
@@ -1538,14 +1548,36 @@ class ModelVersionManager:
             
             if self.config.storage.backend == "local":
                 # Nettoyage Docker
-                import docker
-                client = docker.from_env()
+                docker_module = _load_docker_module()
+                if docker_module is None:
+                    logger.warning(
+                        "Docker SDK not available. Docker cleanup features will be disabled."
+                    )
+                    model_version.container_id = None
+                    return
+
+                docker_client = None
                 try:
-                    container = client.containers.get(model_version.container_id)
+                    docker_client = docker_module.from_env()
+                    docker_client.ping()
+                    logger.info("Docker daemon connected successfully")
+                except docker_module.errors.DockerException as e:
+                    logger.warning(
+                        f"Docker daemon not available: {e}. Docker export features will be disabled."
+                    )
+                    docker_client = None
+
+                if docker_client is None:
+                    logger.error("Docker client not available, cannot perform operation")
+                    model_version.container_id = None
+                    return
+
+                try:
+                    container = docker_client.containers.get(model_version.container_id)
                     container.stop()
                     container.remove()
                     logger.info(f"Container {model_version.container_id} nettoyé")
-                except:
+                except Exception:
                     pass
             else:
                 # Nettoyage Kubernetes
