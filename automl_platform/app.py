@@ -104,7 +104,7 @@ from automl_platform.ab_testing import ABTestingService, MetricsComparator
 
 # Authentication
 from automl_platform.auth import TokenService, RBACService, QuotaService, AuditService as BasicAuditService, auth_router
-from automl_platform.auth import get_current_user, require_permission, require_plan
+from automl_platform.auth import get_current_user, permission_dependency, require_plan
 
 # SSO, Advanced Audit, and RGPD imports
 from automl_platform.sso_service import SSOService, SSOProvider
@@ -633,7 +633,7 @@ class ConsentUpdate(BaseModel):
 
 @rgpd_router.post(
     "/requests",
-    dependencies=[Depends(require_permission("rgpd", "create"))],
+    dependencies=[Depends(permission_dependency("rgpd", "create"))],
 )
 async def create_rgpd_request(
     request: RGPDRequestCreate,
@@ -692,7 +692,7 @@ async def get_rgpd_request_status(
 
 @rgpd_router.post(
     "/consent",
-    dependencies=[Depends(require_permission("rgpd", "consent"))],
+    dependencies=[Depends(permission_dependency("rgpd", "consent"))],
 )
 async def update_consent(
     consent: ConsentUpdate,
@@ -742,7 +742,7 @@ async def get_user_consents(
 
 @rgpd_router.get(
     "/data-mapping",
-    dependencies=[Depends(require_permission("rgpd", "admin"))],
+    dependencies=[Depends(permission_dependency("rgpd", "admin"))],
 )
 async def get_data_mapping(
     tenant_id: Optional[str] = None,
@@ -757,7 +757,7 @@ async def get_data_mapping(
 
 @rgpd_router.get(
     "/compliance-report",
-    dependencies=[Depends(require_permission("rgpd", "admin"))],
+    dependencies=[Depends(permission_dependency("rgpd", "admin"))],
 )
 async def get_compliance_report(
     start_date: Optional[datetime] = None,
