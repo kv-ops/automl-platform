@@ -1545,6 +1545,8 @@ class ModelVersionManager:
         
         try:
             from infrastructure import DeploymentManager
+
+            cleanup_successful = False
             
             if self.config.storage.backend == "local":
                 # Nettoyage Docker
@@ -1553,7 +1555,6 @@ class ModelVersionManager:
                     logger.warning(
                         "Docker SDK not available. Docker cleanup features will be disabled."
                     )
-                    model_version.container_id = None
                     return
 
                 docker_client = None
@@ -1569,23 +1570,34 @@ class ModelVersionManager:
 
                 if docker_client is None:
                     logger.error("Docker client not available, cannot perform operation")
-                    model_version.container_id = None
                     return
 
                 try:
                     container = docker_client.containers.get(model_version.container_id)
                     container.stop()
                     container.remove()
+                    cleanup_successful = True
                     logger.info(f"Container {model_version.container_id} nettoyé")
-                except Exception:
-                    pass
+                except docker_module.errors.NotFound:
+                    cleanup_successful = True
+                    logger.info(
+                        "Container %s already removed or not found during cleanup",
+                        model_version.container_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to clean up container %s: %s",
+                        model_version.container_id,
+                        e,
+                    )
             else:
                 # Nettoyage Kubernetes
                 # Implémenter selon votre configuration K8s
                 pass
-            
-            model_version.container_id = None
-            
+
+            if cleanup_successful:
+                model_version.container_id = None
+        
         except Exception as e:
             logger.error(f"Erreur lors du nettoyage du déploiement: {e}")
     
