@@ -48,13 +48,17 @@ api:
   enabled: true
   host: 0.0.0.0
   port: 8000
+environment:
+  CONFIG_PATH: /app/config.yaml  # ou le chemin correct vers votre fichier
+volumes:
+  - ./config.yaml:/app/config.yaml:ro
   
   # Security
   enable_auth: false
   jwt_secret: ${JWT_SECRET_KEY}
   jwt_algorithm: HS256
   jwt_expiration_minutes: 60
-  redis_url: redis://localhost:6379  # Obligatoire pour le cache d'authentification (modifiable via REDIS_URL)
+  redis_url: redis://:${REDIS_PASSWORD:-devredis}@redis:6379/0
   
   # Rate limiting
   enable_rate_limit: true
