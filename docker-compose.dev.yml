@@ -48,8 +48,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:-devredis}@redis:6379/0
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://localhost:9000}
       SSO_ENABLED: false
-      JWT_SECRET_KEY: 32f287e73d986d5a7ee01eb19a766817199b23322ffc97ee18970f8569520e93
-      AUTOML_SECRET_KEY: a5ccc4b7f7fc263545b8284b929da247f6d6136a719cfee867a4f9bbb09d95e6
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+      AUTOML_SECRET_KEY: ${AUTOML_SECRET_KEY:?AUTOML_SECRET_KEY must be set}
     volumes:
       - ./automl_platform:/app/automl_platform
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
