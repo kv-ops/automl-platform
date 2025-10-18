@@ -33,6 +33,27 @@ services:
       - dev_redis_data:/data
     networks:
       - automl_dev
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    container_name: automl_mlflow_dev
+    environment:
+      BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
+      ARTIFACT_ROOT: ./mlflow_artifacts
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_USER:-mlflow}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:-mlflowpass}
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
+      --default-artifact-root ./mlflow_artifacts
+      --host 0.0.0.0
+      --port 5000
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    depends_on:
+      - postgres
+    networks:
+      - automl_dev
   
   api:
     build:
