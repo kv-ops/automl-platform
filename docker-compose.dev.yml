@@ -40,6 +40,8 @@ services:
       dockerfile: ${API_DOCKERFILE:-Dockerfile}
       target: api
     container_name: automl_api_dev
+    env_file:
+      - dev.env
     environment:
       ENVIRONMENT: development
       DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
