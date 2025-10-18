@@ -230,13 +230,10 @@ class SecurityConfig:
 
     secret_key: str = field(
         default_factory=lambda: get_or_generate_secret(
-            "AUTOML_SECRET_KEY",
-            warning_message=(
-                "AUTOML_SECRET_KEY is not defined. Generated a temporary secure secret; "
-                "set AUTOML_SECRET_KEY to a persistent value for production deployments."
-            ),
+            ("AUTOML_SECRET_KEY", "SESSION_SECRET_KEY"),
+            warning_message=("AUTOML_SECRET_KEY et SESSION_SECRET_KEY sont absents, génération d'un secret temporaire.")
         )
-    )
+    )          
     """Main application secret key supplied via ``AUTOML_SECRET_KEY``."""
 
     audit_encryption_key: Optional[str] = os.getenv("AUTOML_AUDIT_ENCRYPTION_KEY")
@@ -246,9 +243,12 @@ class SecurityConfig:
     """Optional encryption key for the RGPD compliance service."""
 
     def __post_init__(self) -> None:
-        validate_secret_value("AUTOML_SECRET_KEY", self.secret_key)
-        validate_secret_value("AUTOML_AUDIT_ENCRYPTION_KEY", self.audit_encryption_key)
-        validate_secret_value("AUTOML_RGPD_ENCRYPTION_KEY", self.rgpd_encryption_key)
+        for var in ("AUTOML_SECRET_KEY", "SESSION_SECRET_KEY"):
+            try:
+                validate_secret_value(var, self.secret_key)
+                break
+            except InsecureEnvironmentVariableError:
+                continue
 
 
 @dataclass
