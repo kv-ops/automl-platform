@@ -631,7 +631,10 @@ class ConsentUpdate(BaseModel):
     data_categories: Optional[List[str]] = Field(None, description="Categories of data")
     expires_in_days: Optional[int] = Field(365, description="Consent expiration in days")
 
-@rgpd_router.post("/requests", dependencies=[Depends(require_permission("rgpd:create"))])
+@rgpd_router.post(
+    "/requests",
+    dependencies=[Depends(require_permission("rgpd", "create"))],
+)
 async def create_rgpd_request(
     request: RGPDRequestCreate,
     current_user: Dict = Depends(get_current_user)
@@ -687,7 +690,10 @@ async def get_rgpd_request_status(
         "deadline": (datetime.utcnow() + timedelta(days=30)).isoformat()
     }
 
-@rgpd_router.post("/consent", dependencies=[Depends(require_permission("rgpd:consent"))])
+@rgpd_router.post(
+    "/consent",
+    dependencies=[Depends(require_permission("rgpd", "consent"))],
+)
 async def update_consent(
     consent: ConsentUpdate,
     req: Request,
@@ -734,7 +740,10 @@ async def get_user_consents(
     consents = app.state.rgpd_service.get_user_consents(current_user["user_id"])
     return {"consents": consents}
 
-@rgpd_router.get("/data-mapping", dependencies=[Depends(require_permission("rgpd:admin"))])
+@rgpd_router.get(
+    "/data-mapping",
+    dependencies=[Depends(require_permission("rgpd", "admin"))],
+)
 async def get_data_mapping(
     tenant_id: Optional[str] = None,
     current_user: Dict = Depends(get_current_user)
@@ -746,7 +755,10 @@ async def get_data_mapping(
     mapping = app.state.rgpd_service.get_data_mapping(tenant_id)
     return {"data_mapping": mapping}
 
-@rgpd_router.get("/compliance-report", dependencies=[Depends(require_permission("rgpd:admin"))])
+@rgpd_router.get(
+    "/compliance-report",
+    dependencies=[Depends(require_permission("rgpd", "admin"))],
+)
 async def get_compliance_report(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
