@@ -47,7 +47,7 @@ services:
       CONFIG_PATH: /app/config.yaml
       AUTOML_SECRET_KEY: ${AUTOML_SECRET_KEY}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
+      DATABASE_URL: ${POSTGRES_PASSWORD:-devpassword}
       REDIS_URL: redis://:${REDIS_PASSWORD:-devredis}@redis:6379/0
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://localhost:9000}
       SSO_ENABLED: false
