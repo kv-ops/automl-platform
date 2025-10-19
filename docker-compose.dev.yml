@@ -92,8 +92,8 @@ services:
       - ./automl_platform:/app/automl_platform
       - ./config.yaml:/app/config.yaml:ro
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
-      - ./alembic.ini:/app/alembic.ini
-      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./alembic:/app/alembic
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       bash -c "/usr/local/bin/wait-for-it postgres:5432 -t 60 && \
