@@ -1,3 +1,40 @@
-FROM ghcr.io/mlflow/mlflow:v2.10.0
+# Use Python 3.11 slim image
+FROM python:3.11-slim
 
-RUN pip install psycopg2-binary
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MLflow and required dependencies
+RUN pip install --upgrade pip && \
+    pip install \
+    mlflow==2.9.2 \
+    psycopg2-binary==2.9.9 \
+    boto3==1.29.0 \
+    protobuf==3.20.3
+
+# Create non-root user
+RUN useradd -m -u 1000 mlflow && \
+    mkdir -p /mlflow && \
+    chown -R mlflow:mlflow /mlflow /app
+
+# Switch to non-root user
+USER mlflow
+
+# Expose MLflow server port
+EXPOSE 5000
+
+# Default command
+CMD ["mlflow", "server", "--host", "0.0.0.0", "--port", "5000"]
