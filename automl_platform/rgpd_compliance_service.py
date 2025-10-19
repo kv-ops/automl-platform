@@ -18,6 +18,8 @@ from types import SimpleNamespace
 import uuid
 import secrets
 
+from automl_platform.config import DatabaseConfig
+
 # Try importing optional dependencies
 try:
     from cryptography.fernet import Fernet
@@ -479,9 +481,13 @@ class RGPDComplianceService:
         # Initialize database
         if SQLALCHEMY_AVAILABLE:
             try:
-                self.engine = get_rgpd_engine(self.database_url)
+                helper_url_override = None
+                if self.database_url and self.database_url != DatabaseConfig().rgpd_url:
+                    helper_url_override = self.database_url
+
+                self.engine = get_rgpd_engine(helper_url_override)
                 Base.metadata.create_all(self.engine)
-                self.SessionLocal = get_rgpd_sessionmaker(self.database_url)
+                self.SessionLocal = get_rgpd_sessionmaker(helper_url_override)
             except:
                 self.SessionLocal = None
                 self.engine = None
