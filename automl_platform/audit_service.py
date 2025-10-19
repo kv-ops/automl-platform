@@ -197,8 +197,11 @@ class AuditService:
     ):
         # Database setup
         self.database_url = database_url or os.getenv(
-            "AUDIT_DATABASE_URL",
-            "postgresql://user:pass@localhost/audit"
+            "AUTOML_AUDIT_DATABASE_URL",
+            os.getenv(
+                "AUDIT_DATABASE_URL",
+                "postgresql://user:pass@localhost/audit"
+            )
         )
         self.engine = create_engine(self.database_url)
         Base.metadata.create_all(self.engine)
@@ -222,7 +225,7 @@ class AuditService:
     
     def _generate_encryption_key(self) -> bytes:
         """Generate encryption key from environment or create new"""
-        key_string = os.getenv("AUDIT_ENCRYPTION_KEY")
+        key_string = os.getenv("AUTOML_AUDIT_ENCRYPTION_KEY") or os.getenv("AUDIT_ENCRYPTION_KEY")
         if key_string:
             return base64.b64decode(key_string)
         

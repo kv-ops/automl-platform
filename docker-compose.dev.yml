@@ -95,8 +95,8 @@ services:
       MLFLOW_DATABASE_URL: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl
       
       # Base de données Audit & RGPD
-      AUDIT_DATABASE_URL: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl_audit
-      RGPD_DATABASE_URL: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl_audit
+      AUTOML_AUDIT_DATABASE_URL: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl_audit
+      AUTOML_RGPD_DATABASE_URL: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl_audit
       
       REDIS_URL: redis://:${REDIS_PASSWORD:-devredis}@redis:6379/0
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://localhost:9000}

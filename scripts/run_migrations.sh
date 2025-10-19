@@ -39,11 +39,11 @@ check_env() {
         exit 1
     fi
     
-    if [ -z "$AUDIT_DATABASE_URL" ]; then
-        error "AUDIT_DATABASE_URL not set"
+    if [ -z "$AUTOML_AUDIT_DATABASE_URL" ]; then
+        error "AUTOML_AUDIT_DATABASE_URL not set"
         exit 1
     fi
-    
+
     info "Environment variables validated"
 }
 
