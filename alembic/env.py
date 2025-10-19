@@ -23,7 +23,17 @@ if config.config_file_name is not None:
 from automl_platform.auth import Base as AuthBase
 from automl_platform.api.infrastructure import Base as InfraBase
 
-target_metadata = AuthBase.metadata
+# Combiner les deux métadonnées
+from sqlalchemy import MetaData
+combined_metadata = MetaData()
+
+for table in AuthBase.metadata.tables.values():
+    table.to_metadata(combined_metadata)
+
+for table in InfraBase.metadata.tables.values():
+    table.to_metadata(combined_metadata)
+
+target_metadata = combined_metadata
 
 import os
 
