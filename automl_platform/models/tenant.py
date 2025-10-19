@@ -12,12 +12,10 @@ Utilisation:
 
 from sqlalchemy import Column, String, Integer, DateTime, Boolean, JSON
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 import uuid
 
-# Base SQLAlchemy dédiée pour le modèle Tenant
-Base = declarative_base()
+from automl_platform.models.base import Base
 
 
 class Tenant(Base):
@@ -26,6 +24,7 @@ class Tenant(Base):
     Combine les champs de auth.py et infrastructure.py.
     """
     __tablename__ = 'tenants'
+    __table_args__ = {'schema': 'public'}
     
     # ========================================================================
     # Clé primaire
