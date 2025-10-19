@@ -21,13 +21,10 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 
-# Import all models for autogenerate support
 from automl_platform.auth import Base as AuthBase
-from automl_platform.auth import User, Role, Permission, Project, APIKey, AuditLog
-from automl_platform.models.tenant import Base as TenantBase, Tenant
-from automl_platform.audit_service import Base as AuditBase, AuditLogModel 
+from automl_platform.models.tenant import Base as TenantBase
+from automl_platform.audit_service import Base as AuditBase
 
-# Alembic voit toutes les tables via la liste de metadata
 target_metadata = [AuthBase.metadata, TenantBase.metadata, AuditBase.metadata]
 
 import os
