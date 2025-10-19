@@ -234,6 +234,8 @@ services:
       - shared_models:/app/models
       - api_logs:/app/logs
       - ./config:/app/config:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./alembic:/app/alembic:ro
     ports:
       - "${API_PORT:-8000}:8000"
     networks:
