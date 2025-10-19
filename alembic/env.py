@@ -20,23 +20,16 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
+
+# Import all models for autogenerate support
 from automl_platform.auth import Base as AuthBase
-from automl_platform.api.infrastructure import Base as InfraBase
+from automl_platform.models.tenant import Base as TenantBase
 
-# Combiner les deux métadonnées
-from sqlalchemy import MetaData
-combined_metadata = MetaData()
-
-for table in AuthBase.metadata.tables.values():
-    table.to_metadata(combined_metadata)
-
-for table in InfraBase.metadata.tables.values():
-    table.to_metadata(combined_metadata)
-
-target_metadata = combined_metadata
+# Alembic supporte nativement une liste de MetaData
+# Pas besoin de fusion manuelle avec to_metadata()
+target_metadata = [AuthBase.metadata, TenantBase.metadata]
 
 import os
-
 
 logger = logging.getLogger("alembic.env")
 
@@ -49,7 +42,7 @@ def get_url():
         logger.info("Using database URL from environment variable")
         return env_url
 
-    fallback_url = "postgresql://automl:password@localhost:5432/automl"
+    fallback_url = "postgresql://automl:password@localhost:5432/automl_app"
     logger.warning(
         "AUTOML_DATABASE_URL not set; falling back to %s. "
         "Set AUTOML_DATABASE_URL (or DATABASE_URL) to avoid connection hangs during startup.",
