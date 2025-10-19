@@ -47,13 +47,13 @@ create_role_if_missing() {
     log "Ensuring role '${role_name}' exists (${role_comment})"
     psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
         DO
-        $$
+        \\$\$
         BEGIN
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role_name}') THEN
                 EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L;', '${role_name}', '${role_password}');
             END IF;
         END
-        $$;
+        \\$\$;
 EOSQL
 }
 
