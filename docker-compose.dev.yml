@@ -84,6 +84,7 @@ services:
     environment:
       ENVIRONMENT: development
       CONFIG_PATH: /app/config.yaml
+      AUTOML_DATABASE_URL: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl
       REDIS_URL: redis://:${REDIS_PASSWORD:-devredis}@redis:6379/0
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://localhost:9000}
       SSO_ENABLED: false
