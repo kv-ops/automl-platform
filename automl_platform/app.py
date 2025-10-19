@@ -288,7 +288,9 @@ async def lifespan(app: FastAPI):
     logger.info("Running database migrations...")
     from alembic import command
     from alembic.config import Config as AlembicConfig
-    alembic_cfg = AlembicConfig("alembic.ini")
+    import os
+    alembic_ini_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+    alembic_cfg = AlembicConfig(alembic_ini_path)
     command.upgrade(alembic_cfg, "head")
     logger.info("Database migrations completed")
 
