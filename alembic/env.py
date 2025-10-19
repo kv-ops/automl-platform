@@ -21,11 +21,14 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 
-from automl_platform.auth import Base as AuthBase
-from automl_platform.models.tenant import Base as TenantBase
-from automl_platform.audit_service import Base as AuditBase
+from automl_platform.models.base import Base, AuditBase
 
-target_metadata = [AuthBase.metadata, TenantBase.metadata, AuditBase.metadata]
+# Import models to ensure tables are registered with the shared metadata
+import automl_platform.auth  # noqa: F401
+import automl_platform.models.tenant  # noqa: F401
+import automl_platform.audit_service  # noqa: F401
+
+target_metadata = [Base.metadata, AuditBase.metadata]
 
 import os
 

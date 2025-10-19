@@ -20,8 +20,7 @@ import gzip
 import base64
 
 import redis
-from sqlalchemy import Column, String, DateTime, Integer, JSON, Text, Boolean, Index
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, String, DateTime, Integer, JSON, Text, Boolean, Index, ForeignKey
 
 from automl_platform.database import get_audit_engine, get_audit_sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
@@ -29,9 +28,11 @@ import pandas as pd
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+from automl_platform.models.base import AuditBase
+
 logger = logging.getLogger(__name__)
 
-Base = declarative_base()
+Base = AuditBase
 
 
 class AuditEventType(Enum):
@@ -131,7 +132,7 @@ class AuditEvent:
 class AuditLogModel(Base):
     """SQLAlchemy model for audit logs"""
     __tablename__ = "audit_logs_v2"
-    
+
     # Primary key
     event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     
@@ -143,8 +144,8 @@ class AuditLogModel(Base):
     severity = Column(String(20), nullable=False, index=True)
     
     # Actor information with indexes
-    user_id = Column(String(255), index=True)
-    tenant_id = Column(String(255), index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('public.users.id'), index=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey('public.tenants.id'), index=True)
     session_id = Column(String(255))
     ip_address = Column(String(45))
     user_agent = Column(Text)
@@ -182,6 +183,7 @@ class AuditLogModel(Base):
         Index('idx_tenant_timestamp', 'tenant_id', 'timestamp'),
         Index('idx_resource', 'resource_type', 'resource_id'),
         Index('idx_retention', 'retention_expires'),
+        {'schema': 'audit'},
     )
 
 
