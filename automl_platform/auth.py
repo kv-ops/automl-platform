@@ -28,15 +28,17 @@ from fastapi import Depends, HTTPException, Security, status, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, EmailStr, Field, validator
-from sqlalchemy import Column, String, DateTime, Boolean, Integer, JSON, ForeignKey, Table, create_engine
+from sqlalchemy import Column, String, DateTime, Boolean, Integer, JSON, ForeignKey, Table
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, Session, sessionmaker
+from sqlalchemy.orm import relationship, Session
 from sqlalchemy.dialects.postgresql import UUID
 from authlib.integrations.starlette_client import OAuth
 from starlette.config import Config
 import httpx
 from prometheus_client import Counter, Histogram
 import time
+
+from automl_platform.database import get_app_engine, get_app_sessionmaker
 
 # Import from automl_platform modules
 try:
@@ -89,7 +91,10 @@ class AuthConfig:
     SESSION_TTL = 3600  # 1 hour
     
     # Database
-    DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/mlops")
+    DATABASE_URL = os.getenv(
+        "DATABASE_URL",
+        os.getenv("AUTOML_DATABASE_URL", "sqlite:///automl.db"),
+    )
     
     # Rate limiting (like DataRobot's worker limits)
     RATE_LIMIT_ENABLED = True
@@ -108,8 +113,8 @@ class AuthConfig:
 # ============================================================================
 
 # Create database engine
-engine = create_engine(AuthConfig.DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = get_app_engine(AuthConfig.DATABASE_URL)
+SessionLocal = get_app_sessionmaker(AuthConfig.DATABASE_URL)
 Base = declarative_base()
 
 # ============================================================================
