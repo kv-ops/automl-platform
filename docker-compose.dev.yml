@@ -86,6 +86,8 @@ services:
       - ./automl_platform:/app/automl_platform
       - ./config.yaml:/app/config.yaml:ro
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./alembic:/app/alembic:ro
     command: >
       bash -c "/usr/local/bin/wait-for-it postgres:5432 -t 60 && \
                /usr/local/bin/wait-for-it redis:6379 -t 60 && \
