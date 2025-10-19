@@ -171,35 +171,7 @@ class User(Base):
     audit_logs = relationship("AuditLog", back_populates="user")
 
 
-class Tenant(Base):
-    """Tenant model for multi-tenant isolation"""
-    __tablename__ = "tenants"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), unique=True, nullable=False)
-    subdomain = Column(String(100), unique=True)
-    
-    # Resource isolation (like H2O AI Cloud namespaces)
-    k8s_namespace = Column(String(100))
-    minio_bucket = Column(String(100))
-    database_schema = Column(String(100))
-    
-    # Quotas and limits
-    plan_type = Column(String(50), default=PlanType.ENTERPRISE.value)
-    max_users = Column(Integer, default=100)
-    max_projects = Column(Integer, default=50)
-    max_storage_gb = Column(Integer, default=1000)
-    
-    # Billing
-    billing_email = Column(String(255))
-    stripe_customer_id = Column(String(255))
-    trial_ends_at = Column(DateTime)
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
-    
-    # Relationships
-    users = relationship("User", backref="tenant")
+from automl_platform.models.tenant import Tenant
 
 
 class Role(Base):
