@@ -16,6 +16,7 @@ MONITORING_USER="${POSTGRES_MONITORING_USER:?POSTGRES_MONITORING_USER must be se
 MONITORING_PASSWORD="${POSTGRES_MONITORING_PASSWORD:?POSTGRES_MONITORING_PASSWORD must be set}"
 BACKUP_USER="${POSTGRES_BACKUP_USER:?POSTGRES_BACKUP_USER must be set}"
 BACKUP_PASSWORD="${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD must be set}"
+DOLLAR_SIGN='$'
 
 create_database() {
     local database="$1"
@@ -47,13 +48,13 @@ create_role_if_missing() {
     log "Ensuring role '${role_name}' exists (${role_comment})"
     psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
         DO
-        \\$\$
+        ${DOLLAR_SIGN}${DOLLAR_SIGN}
         BEGIN
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role_name}') THEN
                 EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L;', '${role_name}', '${role_password}');
             END IF;
         END
-        \\$\$;
+        ${DOLLAR_SIGN}${DOLLAR_SIGN}
 EOSQL
 }
 
