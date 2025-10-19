@@ -49,9 +49,10 @@ from automl_platform.config import InsecureEnvironmentVariableError, validate_se
 
 # Database
 import sqlalchemy
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, JSON
+from sqlalchemy import Column, String, Integer, DateTime, Boolean, JSON
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+
+from automl_platform.database import get_app_engine, get_app_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -153,11 +154,11 @@ from automl_platform.models.tenant import Tenant as TenantModel, Base as TenantB
 
 class TenantManager:
     """Manages multi-tenant isolation and resource allocation."""
-    
-    def __init__(self, db_url: str = "sqlite:///tenants.db"):
-        self.engine = create_engine(db_url)
+
+    def __init__(self, db_url: Optional[str] = None):
+        self.engine = get_app_engine(db_url)
         TenantBase.metadata.create_all(self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+        self.Session = get_app_sessionmaker(db_url)
         
         # Initialize Docker client if available
         self.docker_client = None
