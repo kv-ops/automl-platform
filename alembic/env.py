@@ -3,6 +3,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from sqlalchemy.engine import make_url
 
 from alembic import context
 
@@ -85,26 +86,40 @@ def run_migrations_online() -> None:
 
     """
     from sqlalchemy import create_engine
+
+    database_url = get_url()
+    url = make_url(database_url)
+
     connect_args = {}
-    timeout_value = os.getenv("AUTOML_DB_CONNECT_TIMEOUT") or os.getenv("DB_CONNECT_TIMEOUT")
-    if timeout_value:
-        try:
-            connect_args["connect_timeout"] = int(timeout_value)
-        except ValueError:
-            logger.warning(
-                "Invalid connect timeout '%s'. Falling back to driver default.",
-                timeout_value,
-            )
+    if url.get_backend_name() == "postgresql":
+        timeout_value = os.getenv("AUTOML_DB_CONNECT_TIMEOUT") or os.getenv("DB_CONNECT_TIMEOUT")
+        if timeout_value:
+            try:
+                connect_args["connect_timeout"] = int(timeout_value)
+            except ValueError:
+                logger.warning(
+                    "Invalid connect timeout '%s'. Falling back to driver default.",
+                    timeout_value,
+                )
 
-    if "connect_timeout" not in connect_args:
-        connect_args["connect_timeout"] = 10
+        if "connect_timeout" not in connect_args:
+            connect_args["connect_timeout"] = 10
 
-    logger.info(
-        "Creating database engine with connect_timeout=%s", connect_args["connect_timeout"]
-    )
+        logger.info(
+            "Creating PostgreSQL database engine with connect_timeout=%s",
+            connect_args["connect_timeout"],
+        )
+    else:
+        logger.info(
+            "Creating %s database engine without connect_timeout override",
+            url.get_backend_name(),
+        )
 
     connectable = create_engine(
-        get_url(), poolclass=pool.NullPool, connect_args=connect_args, pool_pre_ping=True
+        database_url,
+        poolclass=pool.NullPool,
+        connect_args=connect_args,
+        pool_pre_ping=True,
     )
 
     with connectable.connect() as connection:
