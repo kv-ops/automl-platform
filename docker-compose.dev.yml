@@ -84,9 +84,12 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
-      - postgres
-      - redis
-      - mlflow
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mlflow:
+        condition: service_started
     networks:
       - automl_dev
 
