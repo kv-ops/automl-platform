@@ -23,7 +23,7 @@ if config.config_file_name is not None:
 from automl_platform.auth import Base as AuthBase
 from automl_platform.api.infrastructure import Base as InfraBase
 
-target_metadata = InfraBase.metadata
+target_metadata = AuthBase.metadata
 
 import os
 
