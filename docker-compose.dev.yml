@@ -18,13 +18,13 @@ services:
       POSTGRES_MULTIPLE_DATABASES: automl,automl_app,automl_audit
     volumes:
       - dev_postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
+      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/01-init-multi-db.sh:ro
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     networks:
       - automl_dev
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-automl} -d ${POSTGRES_DB:-automl}"]
+      test: ["CMD-SHELL", "pg_isready -U automl -d automl"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,6 +43,11 @@ services:
       - dev_redis_data:/data
     networks:
       - automl_dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mlflow:
     build:
@@ -66,7 +71,8 @@ services:
     ports:
       - "${MLFLOW_PORT:-5001}:5000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - automl_dev
   
@@ -76,9 +82,6 @@ services:
       dockerfile: ${API_DOCKERFILE:-Dockerfile}
       target: api
     container_name: automl_api_dev
-    # Run as root in development to ensure access to /var/run/docker.sock.
-    # For production, prefer matching the host docker group's GID and adding
-    # the container user to that group instead of running as root.
     user: "0:0"
     privileged: true
     env_file:
@@ -119,7 +122,7 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       mlflow:
         condition: service_started
     networks:
