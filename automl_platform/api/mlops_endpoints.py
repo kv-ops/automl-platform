@@ -42,29 +42,29 @@ except Exception as exc:  # pragma: no cover - defensive fallback for optional d
     config = None
 
 def _extract_storage_parameters(storage_config: Any) -> Tuple[str, Dict[str, Any]]:
-    """Return backend identifier and keyword arguments for the storage service.
-
-    The backend string is returned separately so that the caller can pass it as
-    an explicit ``backend=`` keyword argument to :class:`StorageService`
-    (a.k.a. :class:`StorageManager`). This avoids relying on positional
-    arguments while still ensuring that the backend is the first parameter the
-    manager receives. The accompanying dictionary contains only the options
-    relevant for the chosen backend.
-    """
+    """Return backend identifier and keyword arguments for the storage service."""
 
     if storage_config is None:
         return "local", {}
 
     if is_dataclass(storage_config):
         storage_dict = asdict(storage_config)
+    elif isinstance(storage_config, dict):
+        storage_dict = dict(storage_config)
     else:
-        storage_dict = vars(storage_config).copy() if hasattr(storage_config, '__dict__') else {}
-    
-    backend = storage_dict.pop("backend", "local")
+        storage_dict = {
+            key: value
+            for key, value in vars(storage_config).items()
+            if not key.startswith("__")
+        }
 
-    sanitized_kwargs = {k: v for k, v in storage_dict.items() if v is not None}
-    
-    return backend, sanitized_kwargs
+    backend = storage_dict.pop("backend", getattr(storage_config, "backend", "local"))
+
+    sanitized_kwargs = {
+        key: value
+        for key, value in storage_dict.items()
+        if value is not None
+    }
 
     # Ensure sensitive fields that might not be part of the dataclass (e.g. dynamically
     # attached encryption keys) are propagated correctly.
