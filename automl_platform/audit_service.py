@@ -208,7 +208,6 @@ class AuditService:
                 or os.getenv("AUDIT_DATABASE_URL")
                 or "postgresql://user:pass@localhost/audit"
             )
-        )
 
         self.database_url = resolved_database_url
 
