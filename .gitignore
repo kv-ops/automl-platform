@@ -222,6 +222,7 @@ $RECYCLE.BIN/
 .env.development
 .env.staging
 dev.env
+dev.env.local
 config_local.yaml
 config_local.yml
 secrets.yaml
