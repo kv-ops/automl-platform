@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import uuid
 
-from automl_platform.models.base import Base
+from automl_platform.models.base import Base, public_table_args
 
 
 class Tenant(Base):
@@ -24,7 +24,7 @@ class Tenant(Base):
     Combine les champs de auth.py et infrastructure.py.
     """
     __tablename__ = 'tenants'
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     # ========================================================================
     # Clé primaire
