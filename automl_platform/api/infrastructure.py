@@ -127,39 +127,7 @@ class TenantConfig:
         return features_by_plan.get(self.plan, features_by_plan["free"])
 
 
-class TenantModel(Base):
-    """SQLAlchemy model for tenant storage."""
-    __tablename__ = 'tenants'
-    
-    tenant_id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    plan = Column(String, default='free')
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Resource limits
-    max_cpu_cores = Column(Integer, default=2)
-    max_memory_gb = Column(Integer, default=4)
-    max_storage_gb = Column(Integer, default=10)
-    max_gpu_hours = Column(Integer, default=0)
-    max_concurrent_jobs = Column(Integer, default=1)
-    
-    # Usage tracking
-    current_cpu_usage = Column(Integer, default=0)
-    current_memory_usage = Column(Integer, default=0)
-    current_storage_usage = Column(Integer, default=0)
-    gpu_hours_used = Column(Integer, default=0)
-    
-    # Security
-    encryption_key = Column(String)
-    api_key_hash = Column(String)
-    
-    # Status
-    is_active = Column(Boolean, default=True)
-    is_suspended = Column(Boolean, default=False)
-    
-    # Metadata
-    metadata_json = Column(JSON, default={})
+from automl_platform.models.tenant import Tenant as TenantModel
 
 
 class TenantManager:
