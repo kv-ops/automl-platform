@@ -54,6 +54,8 @@ from sqlalchemy.ext.declarative import declarative_base
 
 from automl_platform.database import get_app_engine, get_app_sessionmaker
 
+from automl_platform.database import get_app_engine, get_app_sessionmaker
+
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
