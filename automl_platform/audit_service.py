@@ -20,9 +20,10 @@ import gzip
 import base64
 
 import redis
-from sqlalchemy import create_engine, Column, String, DateTime, Integer, JSON, Text, Boolean, Index
+from sqlalchemy import Column, String, DateTime, Integer, JSON, Text, Boolean, Index
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+
+from automl_platform.database import get_audit_engine, get_audit_sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
 import pandas as pd
 from cryptography.hazmat.primitives import hashes
@@ -203,9 +204,9 @@ class AuditService:
                 "postgresql://user:pass@localhost/audit"
             )
         )
-        self.engine = create_engine(self.database_url)
+        self.engine = get_audit_engine(self.database_url)
         Base.metadata.create_all(self.engine)
-        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.SessionLocal = get_audit_sessionmaker(self.database_url)
         
         # Redis for caching and real-time alerts
         self.redis_client = redis_client or redis.from_url(
