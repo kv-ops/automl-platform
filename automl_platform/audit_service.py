@@ -64,16 +64,81 @@ else:
 # Base declarative registry for audit tables
 Base = AuditBase
 
-_REMOTE_USERS = Table(
-    'users',
-    MetaData(),
-    Column('id', UUID(as_uuid=True)),
-)
-_REMOTE_TENANTS = Table(
-    'tenants',
-    MetaData(),
-    Column('id', UUID(as_uuid=True)),
-)
+_REMOTE_REFERENCE_TABLES = {
+    True: {
+        'users': Table(
+            'users',
+            MetaData(),
+            Column('id', UUID(as_uuid=True)),
+            schema='public',
+        ),
+        'tenants': Table(
+            'tenants',
+            MetaData(),
+            Column('id', UUID(as_uuid=True)),
+            schema='public',
+        ),
+    },
+    False: {
+        'users': Table(
+            'users',
+            MetaData(),
+            Column('id', UUID(as_uuid=True)),
+        ),
+        'tenants': Table(
+            'tenants',
+            MetaData(),
+            Column('id', UUID(as_uuid=True)),
+        ),
+    },
+}
+
+def _configure_audit_schema(supports_schemas: bool) -> None:
+    """Update audit table metadata for the current database backend."""
+
+    schema_args = audit_table_args(supports_schemas)
+    schema = schema_args.get("schema")
+
+    # Align declarative metadata
+    AuditBase.metadata.schema = schema
+
+    # Ensure the mapped table reflects the new schema configuration
+    table = AuditLogModel.__table__ if 'AuditLogModel' in globals() else None
+    if table is not None:
+        table.schema = schema
+
+    if table is not None:
+        # Keep foreign-key targets aligned with the resolved schema. The
+        # original constraint elements cache their target specification, so we
+        # need to rewrite the "schema.table.column" strings whenever the
+        # backend support changes.
+        remote_tables = _REMOTE_REFERENCE_TABLES[supports_schemas]
+
+        for fk in table.foreign_key_constraints:
+            if fk.name not in ('fk_audit_logs_user_id', 'fk_audit_logs_tenant_id'):
+                continue
+            table_name = 'users' if 'user' in fk.name else 'tenants'
+            remote_table = remote_tables[table_name]
+            schema_token = remote_table.schema if remote_table.schema else None
+            column_tokens = [schema_token, remote_table.name, 'id']
+
+            for element in fk.elements:
+                element._colspec = remote_table.c.id
+                element._column_tokens = column_tokens
+                element._table = remote_table
+                element._column = remote_table.c.id
+                element._table_column = remote_table.c.id
+                element._resolved = remote_table.c.id
+                element._unresolvable = False
+                element._references_table = remote_table
+
+            fk._set_parent(table)
+
+        table_args = list(AuditLogModel._base_table_args)
+        if schema_args:
+            table_args.append(schema_args)
+        AuditLogModel.__table_args__ = tuple(table_args)
+
 
 
 def _configure_audit_schema(supports_schemas: bool) -> None:
@@ -253,10 +318,11 @@ class AuditLogModel(Base):
         Index('idx_retention', 'retention_expires'),
     ]
 
+    _initial_remote = _REMOTE_REFERENCE_TABLES[_AUDIT_SUPPORTS_SCHEMAS]
     _base_table_args.append(
         ForeignKeyConstraint(
             ['user_id'],
-            [_REMOTE_USERS.c.id],
+            [_initial_remote['users'].c.id],
             link_to_name=True,
             use_alter=True,
             name='fk_audit_logs_user_id',
@@ -265,7 +331,7 @@ class AuditLogModel(Base):
     _base_table_args.append(
         ForeignKeyConstraint(
             ['tenant_id'],
-            [_REMOTE_TENANTS.c.id],
+            [_initial_remote['tenants'].c.id],
             link_to_name=True,
             use_alter=True,
             name='fk_audit_logs_tenant_id',
