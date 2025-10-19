@@ -10,6 +10,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-automl}
       POSTGRES_USER: ${POSTGRES_USER:-automl}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_MONITORING_USER: ${POSTGRES_MONITORING_USER:-monitoring}
+      POSTGRES_MONITORING_PASSWORD: ${POSTGRES_MONITORING_PASSWORD:-monitorpass}
+      POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER:-backup_user}
+      POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD:-backuppass}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-automl}
     volumes:
       - dev_postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
