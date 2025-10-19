@@ -121,10 +121,12 @@ def _configure_audit_schema(supports_schemas: bool) -> None:
             remote_table = remote_tables[table_name]
             schema_token = remote_table.schema if remote_table.schema else None
             column_tokens = [schema_token, remote_table.name, 'id']
+            string_colspec = '.'.join(token for token in column_tokens if token)
 
             for element in fk.elements:
                 element._colspec = remote_table.c.id
                 element._column_tokens = column_tokens
+                element._string_colspec = string_colspec
                 element._table = remote_table
                 element._column = remote_table.c.id
                 element._table_column = remote_table.c.id
