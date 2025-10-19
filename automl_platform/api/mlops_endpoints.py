@@ -57,22 +57,14 @@ def _extract_storage_parameters(storage_config: Any) -> Tuple[str, Dict[str, Any
 
     if is_dataclass(storage_config):
         storage_dict = asdict(storage_config)
-    elif isinstance(storage_config, dict):
-        storage_dict = dict(storage_config)
     else:
-        storage_dict = {
-            key: value
-            for key, value in vars(storage_config).items()
-            if not key.startswith("__")
-        }
+        storage_dict = vars(storage_config).copy() if hasattr(storage_config, '__dict__') else {}
+    
+    backend = storage_dict.pop("backend", "local")
 
-    backend = storage_dict.pop("backend", getattr(storage_config, "backend", "local"))
-
-    sanitized_kwargs = {
-        key: value
-        for key, value in storage_dict.items()
-        if value is not None
-    }
+    sanitized_kwargs = {k: v for k, v in storage_dict.items() if v is not None}
+    
+    return backend, sanitized_kwargs
 
     # Ensure sensitive fields that might not be part of the dataclass (e.g. dynamically
     # attached encryption keys) are propagated correctly.
