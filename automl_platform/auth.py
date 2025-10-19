@@ -113,14 +113,8 @@ class AuthConfig:
 # ============================================================================
 
 # Create database engine
-_auth_db_override = os.getenv("DATABASE_URL")
-
-if _auth_db_override:
-    SessionLocal = get_app_sessionmaker(_auth_db_override)
-    engine = SessionLocal.kw["bind"]
-else:
-    engine = get_app_engine()
-    SessionLocal = get_app_sessionmaker()
+engine = get_app_engine(AuthConfig.DATABASE_URL)
+SessionLocal = get_app_sessionmaker(AuthConfig.DATABASE_URL)
 Base = declarative_base()
 
 # ============================================================================
