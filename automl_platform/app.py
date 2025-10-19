@@ -284,6 +284,14 @@ async def lifespan(app: FastAPI):
     primary_db_url = getattr(database_cfg, 'url', None) or getattr(config, 'database_url', 'sqlite:///automl.db')
     app.state.tenant_manager = TenantManager(db_url=primary_db_url)
 
+    # Run database migrations
+    logger.info("Running database migrations...")
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+    alembic_cfg = AlembicConfig("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Database migrations completed")
+
     secret_key = (
         os.getenv("AUTOML_SECRET_KEY")
         or getattr(security_cfg, 'secret_key', None)
