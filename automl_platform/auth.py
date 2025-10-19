@@ -91,7 +91,10 @@ class AuthConfig:
     SESSION_TTL = 3600  # 1 hour
     
     # Database
-    DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/mlops")
+    DATABASE_URL = os.getenv(
+        "DATABASE_URL",
+        os.getenv("AUTOML_DATABASE_URL", "sqlite:///automl.db"),
+    )
     
     # Rate limiting (like DataRobot's worker limits)
     RATE_LIMIT_ENABLED = True
@@ -110,9 +113,8 @@ class AuthConfig:
 # ============================================================================
 
 # Create database engine
-_auth_db_override = AuthConfig.DATABASE_URL if "DATABASE_URL" in os.environ else None
-engine = get_app_engine(_auth_db_override)
-SessionLocal = get_app_sessionmaker(_auth_db_override)
+engine = get_app_engine(AuthConfig.DATABASE_URL)
+SessionLocal = get_app_sessionmaker(AuthConfig.DATABASE_URL)
 Base = declarative_base()
 
 # ============================================================================
