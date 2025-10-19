@@ -49,7 +49,7 @@ script_location = %(here)s/alembic
 AUTOML_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_app
 
 # Base audit (Logs, RGPD, conformité)
-AUDIT_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_audit
+AUTOML_AUDIT_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_audit
 
 # Base MLflow (tracking - géré par MLflow, pas Alembic)
 MLFLOW_DATABASE_URL=postgresql://user:pass@postgres:5432/automl

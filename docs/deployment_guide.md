@@ -817,7 +817,7 @@ Pour obtenir de l'aide :
 
 ### Checklist de production
 
-- [ ] Variables d'environnement sécurisées
+- [ ] Variables d'environnement sécurisées (`AUTOML_DATABASE_URL`, `AUTOML_AUDIT_DATABASE_URL`, `AUTOML_RGPD_DATABASE_URL`, secrets applicatifs)
 - [ ] HTTPS configuré
 - [ ] Sauvegardes automatiques activées
 - [ ] Monitoring en place

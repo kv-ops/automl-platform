@@ -27,6 +27,7 @@ import logging
 from io import BytesIO
 import time
 from enum import Enum
+from urllib.parse import urlparse, urlunparse
 
 # Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -127,6 +128,31 @@ from automl_platform.scheduler import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _mask_dsn(dsn: Optional[str]) -> str:
+    """Sanitize DSN by masking credentials before logging."""
+
+    if not dsn:
+        return "<non configuré>"
+
+    try:
+        parsed = urlparse(dsn)
+    except Exception:
+        return "<DSN invalide>"
+
+    netloc = parsed.netloc
+    if "@" in netloc:
+        credentials, host = netloc.split("@", 1)
+        if ":" in credentials:
+            username, _ = credentials.split(":", 1)
+            credentials = f"{username}:***"
+        elif credentials:
+            credentials = "***"
+        netloc = f"{credentials}@{host}"
+
+    sanitized = parsed._replace(netloc=netloc)
+    return urlunparse(sanitized)
 
 # ============================================================================
 # Configuration
@@ -361,7 +387,22 @@ async def lifespan(app: FastAPI):
         redis_client=app.state.billing_manager.redis_client if hasattr(app.state.billing_manager, 'redis_client') else None,
         encryption_key=audit_encryption_key
     )
-    
+    if getattr(database_cfg, 'audit_url', None):
+        logger.info(
+            "Audit service configuré avec une base dédiée (AUTOML_AUDIT_DATABASE_URL): %s",
+            _mask_dsn(audit_db_url),
+        )
+    elif getattr(config, 'audit_database_url', None):
+        logger.info(
+            "Audit service configuré avec une base dédiée depuis le fichier de configuration: %s",
+            _mask_dsn(audit_db_url),
+        )
+    else:
+        logger.info(
+            "Audit service réutilise la base principale: %s",
+            _mask_dsn(audit_db_url),
+        )
+
     # Initialize RGPD Compliance Service
     logger.info("Initializing RGPD Compliance Service...")
     rgpd_db_url = (
@@ -377,6 +418,21 @@ async def lifespan(app: FastAPI):
         audit_service=app.state.audit_service,
         encryption_key=rgpd_encryption_key
     )
+    if getattr(database_cfg, 'rgpd_url', None):
+        logger.info(
+            "RGPD service configuré avec une base dédiée (AUTOML_RGPD_DATABASE_URL): %s",
+            _mask_dsn(rgpd_db_url),
+        )
+    elif getattr(config, 'rgpd_database_url', None):
+        logger.info(
+            "RGPD service configuré avec une base dédiée depuis le fichier de configuration: %s",
+            _mask_dsn(rgpd_db_url),
+        )
+    else:
+        logger.info(
+            "RGPD service réutilise la base principale: %s",
+            _mask_dsn(rgpd_db_url),
+        )
     
     # Initialize LLM assistant if configured
     if hasattr(config, 'llm') and config.llm.enabled:
