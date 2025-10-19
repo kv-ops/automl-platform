@@ -1,3 +1,4 @@
+import logging
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -26,8 +27,25 @@ target_metadata = [AuthBase.metadata, InfraBase.metadata]
 
 import os
 
+
+logger = logging.getLogger("alembic.env")
+
+
 def get_url():
-    return os.getenv("AUTOML_DATABASE_URL") or "postgresql://automl:password@localhost:5432/automl"
+    """Resolve the database URL used by Alembic."""
+
+    env_url = os.getenv("AUTOML_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if env_url:
+        logger.info("Using database URL from environment variable")
+        return env_url
+
+    fallback_url = "postgresql://automl:password@localhost:5432/automl"
+    logger.warning(
+        "AUTOML_DATABASE_URL not set; falling back to %s. "
+        "Set AUTOML_DATABASE_URL (or DATABASE_URL) to avoid connection hangs during startup.",
+        fallback_url,
+    )
+    return fallback_url
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -67,7 +85,27 @@ def run_migrations_online() -> None:
 
     """
     from sqlalchemy import create_engine
-    connectable = create_engine(get_url(), poolclass=pool.NullPool)
+    connect_args = {}
+    timeout_value = os.getenv("AUTOML_DB_CONNECT_TIMEOUT") or os.getenv("DB_CONNECT_TIMEOUT")
+    if timeout_value:
+        try:
+            connect_args["connect_timeout"] = int(timeout_value)
+        except ValueError:
+            logger.warning(
+                "Invalid connect timeout '%s'. Falling back to driver default.",
+                timeout_value,
+            )
+
+    if "connect_timeout" not in connect_args:
+        connect_args["connect_timeout"] = 10
+
+    logger.info(
+        "Creating database engine with connect_timeout=%s", connect_args["connect_timeout"]
+    )
+
+    connectable = create_engine(
+        get_url(), poolclass=pool.NullPool, connect_args=connect_args, pool_pre_ping=True
+    )
 
     with connectable.connect() as connection:
         context.configure(
