@@ -61,9 +61,10 @@ Base = declarative_base()
 @dataclass
 class TenantConfig:
     """Tenant configuration and resource limits."""
-    tenant_id: str
+
+    id: str
     name: str
-    plan: str  # free, starter, professional, enterprise
+    plan_type: str  # free, starter, professional, enterprise
     created_at: datetime
     
     # Resource limits
@@ -84,8 +85,28 @@ class TenantConfig:
     features: Dict[str, bool] = None
     
     def __post_init__(self):
+        # Ensure identifiers are always exposed as strings to avoid UUID vs str
+        # mismatches when the value propagates through JWT payloads or API
+        # responses.
+        self.id = str(self.id)
+
+        if not isinstance(self.plan_type, str):
+            self.plan_type = getattr(self.plan_type, "value", str(self.plan_type))
+
         if self.features is None:
             self.features = self._get_default_features()
+
+    @property
+    def tenant_id(self) -> str:
+        """Backward compatible alias for legacy code paths."""
+
+        return self.id
+
+    @property
+    def plan(self) -> str:
+        """Backward compatible alias returning the tenant plan."""
+
+        return self.plan_type
     
     def _get_default_features(self) -> Dict[str, bool]:
         """Get default features based on plan."""
@@ -124,10 +145,10 @@ class TenantConfig:
                 "custom_features": True
             }
         }
-        return features_by_plan.get(self.plan, features_by_plan["free"])
+        return features_by_plan.get(self.plan_type, features_by_plan["free"])
 
 
-from automl_platform.models.tenant import Tenant as TenantModel
+from automl_platform.models.tenant import Tenant as TenantModel, Base as TenantBase
 
 
 class TenantManager:
@@ -135,7 +156,7 @@ class TenantManager:
     
     def __init__(self, db_url: str = "sqlite:///tenants.db"):
         self.engine = create_engine(db_url)
-        Base.metadata.create_all(self.engine)
+        TenantBase.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         
         # Initialize Docker client if available
@@ -166,16 +187,47 @@ class TenantManager:
         else:
             self.k8s_v1 = None
             self.k8s_apps = None
-    
+
+    @staticmethod
+    def _parse_tenant_uuid(tenant_id: Any) -> Optional[uuid.UUID]:
+        """Best-effort conversion of tenant identifiers to UUID objects."""
+
+        if isinstance(tenant_id, uuid.UUID):
+            return tenant_id
+
+        if isinstance(tenant_id, str):
+            try:
+                return uuid.UUID(tenant_id)
+            except ValueError:
+                return None
+
+        return None
+
+    def _get_tenant_model(self, session, tenant_id: Any) -> Optional[TenantModel]:
+        """Retrieve a tenant model handling UUID/string identifiers transparently."""
+
+        if tenant_id is None:
+            return None
+
+        uuid_value = self._parse_tenant_uuid(tenant_id)
+        query = session.query(TenantModel)
+
+        if uuid_value is not None:
+            tenant = query.filter(TenantModel.id == uuid_value).first()
+            if tenant:
+                return tenant
+
+        return query.filter(TenantModel.id == str(tenant_id)).first()
+
     def create_tenant(self, name: str, plan: str = "free") -> TenantConfig:
         """Create a new tenant with isolated resources."""
-        tenant_id = str(uuid.uuid4())
-        
+        tenant_uuid = uuid.uuid4()
+
         # Create tenant config
         tenant_config = TenantConfig(
-            tenant_id=tenant_id,
+            id=tenant_uuid,
             name=name,
-            plan=plan,
+            plan_type=plan,
             created_at=datetime.utcnow()
         )
         
@@ -186,28 +238,29 @@ class TenantManager:
         session = self.Session()
         try:
             tenant_model = TenantModel(
-                tenant_id=tenant_id,
+                id=tenant_uuid,
                 name=name,
-                plan=plan,
+                plan_type=tenant_config.plan_type,
                 max_cpu_cores=tenant_config.max_cpu_cores,
                 max_memory_gb=tenant_config.max_memory_gb,
                 max_storage_gb=tenant_config.max_storage_gb,
                 max_gpu_hours=tenant_config.max_gpu_hours,
                 max_concurrent_jobs=tenant_config.max_concurrent_jobs,
-                encryption_key=encryption_key.decode()
+                encryption_key=encryption_key.decode(),
+                metadata_json={"features": tenant_config.features}
             )
             session.add(tenant_model)
             session.commit()
-            
+
             # Create isolated namespace if Kubernetes available
             if self.k8s_v1:
-                self._create_kubernetes_namespace(tenant_id, tenant_config)
-            
+                self._create_kubernetes_namespace(tenant_config.id, tenant_config)
+
             # Create Docker network if Docker available
             if self.docker_client:
-                self._create_docker_network(tenant_id)
-            
-            logger.info(f"Created tenant: {tenant_id} ({name})")
+                self._create_docker_network(tenant_config.id)
+
+            logger.info(f"Created tenant: {tenant_config.id} ({name})")
             return tenant_config
             
         except Exception as e:
@@ -221,14 +274,14 @@ class TenantManager:
         """Create Kubernetes namespace with resource quotas."""
         if not self.k8s_v1:
             return
-        
+
         # Create namespace
         namespace = client.V1Namespace(
             metadata=client.V1ObjectMeta(
                 name=f"tenant-{tenant_id[:8]}",
                 labels={
                     "tenant_id": tenant_id,
-                    "plan": config.plan
+                    "plan_type": config.plan_type
                 }
             )
         )
@@ -301,36 +354,41 @@ class TenantManager:
         except Exception as e:
             logger.error(f"Failed to create Docker network: {e}")
     
-    def get_tenant(self, tenant_id: str) -> Optional[TenantConfig]:
+    def get_tenant(self, tenant_id: Any) -> Optional[TenantConfig]:
         """Get tenant configuration."""
         session = self.Session()
         try:
-            tenant = session.query(TenantModel).filter_by(tenant_id=tenant_id).first()
+            tenant = self._get_tenant_model(session, tenant_id)
             if tenant:
+                features = None
+                if isinstance(tenant.metadata_json, dict):
+                    features = tenant.metadata_json.get("features", tenant.metadata_json)
+
                 return TenantConfig(
-                    tenant_id=tenant.tenant_id,
+                    id=tenant.id,
                     name=tenant.name,
-                    plan=tenant.plan,
+                    plan_type=tenant.plan_type,
                     created_at=tenant.created_at,
                     max_cpu_cores=tenant.max_cpu_cores,
                     max_memory_gb=tenant.max_memory_gb,
                     max_storage_gb=tenant.max_storage_gb,
                     max_gpu_hours=tenant.max_gpu_hours,
-                    max_concurrent_jobs=tenant.max_concurrent_jobs
+                    max_concurrent_jobs=tenant.max_concurrent_jobs,
+                    features=features
                 )
             return None
         finally:
             session.close()
-    
-    def check_resource_limits(self, tenant_id: str, 
+
+    def check_resource_limits(self, tenant_id: str,
                             resource_type: str, requested: int) -> bool:
         """Check if tenant has available resources."""
         session = self.Session()
         try:
-            tenant = session.query(TenantModel).filter_by(tenant_id=tenant_id).first()
+            tenant = self._get_tenant_model(session, tenant_id)
             if not tenant:
                 return False
-            
+
             if resource_type == "cpu":
                 return tenant.current_cpu_usage + requested <= tenant.max_cpu_cores
             elif resource_type == "memory":
@@ -353,7 +411,7 @@ class TenantManager:
         """Allocate resources to tenant."""
         session = self.Session()
         try:
-            tenant = session.query(TenantModel).filter_by(tenant_id=tenant_id).first()
+            tenant = self._get_tenant_model(session, tenant_id)
             if not tenant:
                 return False
             
@@ -384,7 +442,7 @@ class TenantManager:
         """Release allocated resources."""
         session = self.Session()
         try:
-            tenant = session.query(TenantModel).filter_by(tenant_id=tenant_id).first()
+            tenant = self._get_tenant_model(session, tenant_id)
             if tenant:
                 tenant.current_cpu_usage = max(0, tenant.current_cpu_usage - cpu)
                 tenant.current_memory_usage = max(0, tenant.current_memory_usage - memory)

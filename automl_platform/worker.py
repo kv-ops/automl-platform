@@ -515,7 +515,7 @@ def train_full_pipeline(self, job_id: str, dataset_url: str, config_dict: Dict[s
             'billing_info': {
                 'compute_hours': (time.time() - self.start_time) / 3600,
                 'storage_mb': storage_mb,
-                'tenant_plan': tenant.plan if tenant else 'unknown'
+                'tenant_plan': tenant.plan_type if tenant else 'unknown'
             }
         }
         
@@ -873,7 +873,7 @@ def train_neural_pipeline_gpu(self, job_id: str, dataset_url: str, config_dict: 
             'billing_info': {
                 'gpu_hours': gpu_hours,
                 'gpu_name': gpu_name if TORCH_AVAILABLE else None,
-                'tenant_plan': tenant.plan
+                'tenant_plan': tenant.plan_type
             }
         }
         

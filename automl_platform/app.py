@@ -816,23 +816,37 @@ async def get_current_tenant(credentials: HTTPAuthorizationCredentials = Depends
         return {
             "tenant_id": "default",
             "user_id": "anonymous",
+            "plan_type": PlanType.FREE.value,
             "plan": PlanType.FREE.value,
             "limits": PLAN_LIMITS[PlanType.FREE.value]
         }
-    
+
     token = credentials.credentials
     try:
         # Verify JWT token using TokenService
         payload = app.state.token_service.verify_token(token)
-        
+
         # Get tenant information
-        tenant = app.state.tenant_manager.get_tenant(payload.get("tenant_id", "default"))
-        
+        payload_tenant_id = payload.get("tenant_id")
+        tenant = (
+            app.state.tenant_manager.get_tenant(payload_tenant_id)
+            if payload_tenant_id
+            else None
+        )
+
+        if tenant is None:
+            plan_type = PlanType.FREE.value
+            tenant_identifier = str(payload_tenant_id or "default")
+        else:
+            plan_type = tenant.plan_type
+            tenant_identifier = tenant.id
+
         return {
-            "tenant_id": tenant.tenant_id,
+            "tenant_id": tenant_identifier,
             "user_id": payload["sub"],
-            "plan": tenant.plan,
-            "limits": PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS[PlanType.FREE.value])
+            "plan_type": plan_type,
+            "plan": plan_type,
+            "limits": PLAN_LIMITS.get(plan_type, PLAN_LIMITS[PlanType.FREE.value])
         }
         
     except Exception as e:
