@@ -38,7 +38,7 @@ from prometheus_client import Counter, Histogram
 import time
 
 from automl_platform.database import get_app_engine, get_app_sessionmaker
-from automl_platform.models.base import Base
+from automl_platform.models.base import Base, public_table_args, qualify
 
 # Import from automl_platform modules
 try:
@@ -127,36 +127,38 @@ else:
 # ============================================================================
 
 # Association tables for many-to-many relationships
+_PUBLIC_SCHEMA = public_table_args().get('schema')
+
 user_roles = Table(
     'user_roles',
     Base.metadata,
-    Column('user_id', UUID(as_uuid=True), ForeignKey('public.users.id')),
-    Column('role_id', UUID(as_uuid=True), ForeignKey('public.roles.id')),
-    schema='public',
+    Column('user_id', UUID(as_uuid=True), ForeignKey(qualify('users.id'))),
+    Column('role_id', UUID(as_uuid=True), ForeignKey(qualify('roles.id'))),
+    schema=_PUBLIC_SCHEMA,
 )
 
 role_permissions = Table(
     'role_permissions',
     Base.metadata,
-    Column('role_id', UUID(as_uuid=True), ForeignKey('public.roles.id')),
-    Column('permission_id', UUID(as_uuid=True), ForeignKey('public.permissions.id')),
-    schema='public',
+    Column('role_id', UUID(as_uuid=True), ForeignKey(qualify('roles.id'))),
+    Column('permission_id', UUID(as_uuid=True), ForeignKey(qualify('permissions.id'))),
+    schema=_PUBLIC_SCHEMA,
 )
 
 project_users = Table(
     'project_users',
     Base.metadata,
-    Column('project_id', UUID(as_uuid=True), ForeignKey('public.projects.id')),
-    Column('user_id', UUID(as_uuid=True), ForeignKey('public.users.id')),
+    Column('project_id', UUID(as_uuid=True), ForeignKey(qualify('projects.id'))),
+    Column('user_id', UUID(as_uuid=True), ForeignKey(qualify('users.id'))),
     Column('role', String(50)),  # project-specific role
-    schema='public',
+    schema=_PUBLIC_SCHEMA,
 )
 
 
 class User(Base):
     """User model with multi-tenant support"""
     __tablename__ = "users"
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
@@ -164,7 +166,7 @@ class User(Base):
     password_hash = Column(String(255))
     
     # Multi-tenant fields
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey('public.tenants.id'), nullable=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey(qualify('tenants.id')), nullable=True)
     organization = Column(String(255))
     
     # Plan and quotas (like DataRobot's worker limits)
@@ -197,13 +199,13 @@ from automl_platform.models.tenant import Tenant
 class Role(Base):
     """Role model for RBAC (like DataRobot's custom roles)"""
     __tablename__ = "roles"
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(100), unique=True, nullable=False)
     description = Column(String(500))
     is_system = Column(Boolean, default=False)  # System roles can't be deleted
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey('public.tenants.id'))
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey(qualify('tenants.id')))
     
     # Relationships
     users = relationship("User", secondary=user_roles, back_populates="roles")
@@ -213,7 +215,7 @@ class Role(Base):
 class Permission(Base):
     """Permission model for fine-grained access control"""
     __tablename__ = "permissions"
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     resource = Column(String(100), nullable=False)  # datasets, models, projects, etc.
@@ -227,12 +229,12 @@ class Permission(Base):
 class Project(Base):
     """Project model for workspace isolation"""
     __tablename__ = "projects"
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey('public.tenants.id'), nullable=True)
-    owner_id = Column(UUID(as_uuid=True), ForeignKey('public.users.id'), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey(qualify('tenants.id')), nullable=True)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey(qualify('users.id')), nullable=False)
     
     # Access control
     is_public = Column(Boolean, default=False)
@@ -247,12 +249,12 @@ class Project(Base):
 class APIKey(Base):
     """API Key model for machine authentication"""
     __tablename__ = "api_keys"
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     key_hash = Column(String(255), unique=True, nullable=False)
     name = Column(String(100))
-    user_id = Column(UUID(as_uuid=True), ForeignKey('public.users.id'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey(qualify('users.id')), nullable=False)
     
     # Scopes and permissions
     scopes = Column(JSON)  # ["read:models", "write:datasets", etc.]
@@ -274,11 +276,11 @@ class APIKey(Base):
 class AuditLog(Base):
     """Audit log for compliance and security"""
     __tablename__ = "audit_logs"
-    __table_args__ = {'schema': 'public'}
+    __table_args__ = public_table_args()
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('public.users.id'), nullable=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey('public.tenants.id'), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey(qualify('users.id')), nullable=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey(qualify('tenants.id')), nullable=True)
     
     action = Column(String(100), nullable=False)
     resource_type = Column(String(50))

@@ -20,7 +20,19 @@ import gzip
 import base64
 
 import redis
-from sqlalchemy import Column, String, DateTime, Integer, JSON, Text, Boolean, Index, ForeignKey
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    JSON,
+    MetaData,
+    String,
+    Table,
+    Text,
+)
 
 from automl_platform.database import get_audit_engine, get_audit_sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
@@ -28,11 +40,47 @@ import pandas as pd
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from automl_platform.models.base import AuditBase
+from automl_platform.config import DatabaseConfig
+from automl_platform.models.base import (
+    AuditBase,
+    audit_table_args,
+    database_supports_schemas,
+)
 
 logger = logging.getLogger(__name__)
 
+_AUDIT_URL_OVERRIDE = (
+    os.getenv("AUTOML_AUDIT_DATABASE_URL")
+    or os.getenv("AUDIT_DATABASE_URL")
+)
+
+if _AUDIT_URL_OVERRIDE:
+    _AUDIT_SUPPORTS_SCHEMAS = database_supports_schemas(_AUDIT_URL_OVERRIDE)
+else:
+    _db_config = DatabaseConfig()
+    _AUDIT_URL_FALLBACK = getattr(_db_config, "audit_url", None) or getattr(_db_config, "url", None)
+    _AUDIT_SUPPORTS_SCHEMAS = database_supports_schemas(_AUDIT_URL_FALLBACK)
+
+_AUDIT_SCHEMA_ARGS = audit_table_args(_AUDIT_SUPPORTS_SCHEMAS)
+
+# Ensure the declarative metadata matches the resolved schema support
+AuditBase.metadata.schema = _AUDIT_SCHEMA_ARGS.get("schema")
+
 Base = AuditBase
+
+_REMOTE_SCHEMA = 'public' if _AUDIT_SUPPORTS_SCHEMAS else None
+_REMOTE_USERS = Table(
+    'users',
+    MetaData(),
+    Column('id', UUID(as_uuid=True)),
+    schema=_REMOTE_SCHEMA,
+)
+_REMOTE_TENANTS = Table(
+    'tenants',
+    MetaData(),
+    Column('id', UUID(as_uuid=True)),
+    schema=_REMOTE_SCHEMA,
+)
 
 
 class AuditEventType(Enum):
@@ -144,8 +192,8 @@ class AuditLogModel(Base):
     severity = Column(String(20), nullable=False, index=True)
     
     # Actor information with indexes
-    user_id = Column(UUID(as_uuid=True), ForeignKey('public.users.id'), index=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey('public.tenants.id'), index=True)
+    user_id = Column(UUID(as_uuid=True), index=True)
+    tenant_id = Column(UUID(as_uuid=True), index=True)
     session_id = Column(String(255))
     ip_address = Column(String(45))
     user_agent = Column(Text)
@@ -178,13 +226,36 @@ class AuditLogModel(Base):
     signature = Column(Text)  # Digital signature
     
     # Indexes for common queries
-    __table_args__ = (
+    _table_args = [
         Index('idx_user_timestamp', 'user_id', 'timestamp'),
         Index('idx_tenant_timestamp', 'tenant_id', 'timestamp'),
         Index('idx_resource', 'resource_type', 'resource_id'),
         Index('idx_retention', 'retention_expires'),
-        {'schema': 'audit'},
+    ]
+
+    _table_args.append(
+        ForeignKeyConstraint(
+            ['user_id'],
+            [_REMOTE_USERS.c.id],
+            link_to_name=True,
+            use_alter=True,
+            name='fk_audit_logs_user_id',
+        )
     )
+    _table_args.append(
+        ForeignKeyConstraint(
+            ['tenant_id'],
+            [_REMOTE_TENANTS.c.id],
+            link_to_name=True,
+            use_alter=True,
+            name='fk_audit_logs_tenant_id',
+        )
+    )
+
+    if _AUDIT_SCHEMA_ARGS:
+        _table_args.append(_AUDIT_SCHEMA_ARGS)
+
+    __table_args__ = tuple(_table_args)
 
 
 class AuditService:
@@ -201,25 +272,28 @@ class AuditService:
         # Database setup
         explicit_database_url = database_url
         if explicit_database_url is not None:
-            self.database_url = explicit_database_url
+            resolved_database_url = explicit_database_url
             self.engine = get_audit_engine(explicit_database_url)
             self.SessionLocal = get_audit_sessionmaker(explicit_database_url)
         else:
             resolved_database_url = (
                 os.getenv("AUTOML_AUDIT_DATABASE_URL")
                 or os.getenv("AUDIT_DATABASE_URL")
+                or getattr(DatabaseConfig(), "audit_url", None)
+                or getattr(DatabaseConfig(), "url", None)
                 or "postgresql://user:pass@localhost/audit"
             )
 
-        self.database_url = resolved_database_url
-
-        if database_url is None:
             os.environ.setdefault("AUTOML_AUDIT_DATABASE_URL", resolved_database_url)
             self.engine = get_audit_engine()
             self.SessionLocal = get_audit_sessionmaker()
-        else:
-            self.engine = get_audit_engine(resolved_database_url)
-            self.SessionLocal = get_audit_sessionmaker(resolved_database_url)
+
+        self.database_url = resolved_database_url
+
+        if explicit_database_url is not None:
+            # Align metadata schema when explicit URLs override defaults
+            actual_support = database_supports_schemas(resolved_database_url)
+            AuditBase.metadata.schema = audit_table_args(actual_support).get("schema")
 
         Base.metadata.create_all(self.engine)
         
