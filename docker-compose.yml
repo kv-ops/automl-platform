@@ -5,12 +5,13 @@ services:
   # Core Infrastructure Services
   # ============================================================================
   
-  # PostgreSQL - Single database for all services
+  # PostgreSQL - Multiple databases for different services
   postgres:
     image: postgres:15-alpine
     container_name: automl_postgres
     environment:
-      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-automl,keycloak,airflow,metadata}
+      # Bases de données : automl (MLflow), automl_app (API/Auth), automl_audit (Audit/RGPD), keycloak, airflow, metadata
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-automl,automl_app,automl_audit,keycloak,airflow,metadata}
       POSTGRES_DB: automl
       POSTGRES_USER: ${POSTGRES_USER:-automl}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
@@ -20,7 +21,7 @@ services:
       POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
+      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/01-init-multi-db.sh:ro
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     networks:
@@ -49,7 +50,7 @@ services:
     networks:
       - automl_network
     healthcheck:
-      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -167,8 +168,18 @@ services:
       AUTOML_EXPERT_MODE: ${AUTOML_EXPERT_MODE:-false}
       AUTOML_SECRET_KEY: ${AUTOML_SECRET_KEY:?AUTOML_SECRET_KEY must be set}
 
-      # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
+      # Base de données application (Auth + API data)
+      AUTOML_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
+      
+      # Base de données MLflow (tracking uniquement)
+      MLFLOW_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
+      
+      # Base de données Audit & RGPD
+      AUTOML_AUDIT_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_audit
+      AUTOML_RGPD_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_audit
+      
+      # Base metadata (optionnelle)
       METADATA_DB_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/metadata
       
       # Redis
@@ -335,6 +346,7 @@ services:
     image: ghcr.io/mlflow/mlflow:v2.10.0
     container_name: automl_mlflow
     environment:
+      # MLflow utilise uniquement la base 'automl' pour le tracking
       BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
       ARTIFACT_ROOT: s3://models/
       AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
@@ -391,7 +403,10 @@ services:
       # Connections
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
+      
+      # Base de données application
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
+      AUTOML_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
       
       # Storage
       MINIO_ENDPOINT: minio:9000
@@ -440,7 +455,7 @@ services:
     environment:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
+      DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
     volumes:
       - ./automl_platform:/app/automl_platform:ro
       - celerybeat_data:/app/celerybeat
