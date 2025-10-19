@@ -61,26 +61,46 @@ else:
     _AUDIT_URL_FALLBACK = getattr(_db_config, "audit_url", None) or getattr(_db_config, "url", None)
     _AUDIT_SUPPORTS_SCHEMAS = database_supports_schemas(_AUDIT_URL_FALLBACK)
 
-_AUDIT_SCHEMA_ARGS = audit_table_args(_AUDIT_SUPPORTS_SCHEMAS)
-
-# Ensure the declarative metadata matches the resolved schema support
-AuditBase.metadata.schema = _AUDIT_SCHEMA_ARGS.get("schema")
-
+# Base declarative registry for audit tables
 Base = AuditBase
 
-_REMOTE_SCHEMA = 'public' if _AUDIT_SUPPORTS_SCHEMAS else None
 _REMOTE_USERS = Table(
     'users',
     MetaData(),
     Column('id', UUID(as_uuid=True)),
-    schema=_REMOTE_SCHEMA,
 )
 _REMOTE_TENANTS = Table(
     'tenants',
     MetaData(),
     Column('id', UUID(as_uuid=True)),
-    schema=_REMOTE_SCHEMA,
 )
+
+
+def _configure_audit_schema(supports_schemas: bool) -> None:
+    """Update audit table metadata for the current database backend."""
+
+    schema_args = audit_table_args(supports_schemas)
+    schema = schema_args.get("schema")
+
+    # Align declarative metadata
+    AuditBase.metadata.schema = schema
+
+    # Ensure the mapped table reflects the new schema configuration
+    table = AuditLogModel.__table__ if 'AuditLogModel' in globals() else None
+    if table is not None:
+        table.schema = schema
+
+    # Foreign-key targets should live in the public schema when supported
+    remote_schema = 'public' if supports_schemas else None
+    for remote in (_REMOTE_USERS, _REMOTE_TENANTS):
+        remote.schema = remote_schema
+
+    if table is not None:
+        table_args = list(AuditLogModel._base_table_args)
+        if schema_args:
+            table_args.append(schema_args)
+        AuditLogModel.__table_args__ = tuple(table_args)
+
 
 
 class AuditEventType(Enum):
@@ -226,14 +246,14 @@ class AuditLogModel(Base):
     signature = Column(Text)  # Digital signature
     
     # Indexes for common queries
-    _table_args = [
+    _base_table_args = [
         Index('idx_user_timestamp', 'user_id', 'timestamp'),
         Index('idx_tenant_timestamp', 'tenant_id', 'timestamp'),
         Index('idx_resource', 'resource_type', 'resource_id'),
         Index('idx_retention', 'retention_expires'),
     ]
 
-    _table_args.append(
+    _base_table_args.append(
         ForeignKeyConstraint(
             ['user_id'],
             [_REMOTE_USERS.c.id],
@@ -242,7 +262,7 @@ class AuditLogModel(Base):
             name='fk_audit_logs_user_id',
         )
     )
-    _table_args.append(
+    _base_table_args.append(
         ForeignKeyConstraint(
             ['tenant_id'],
             [_REMOTE_TENANTS.c.id],
@@ -252,10 +272,11 @@ class AuditLogModel(Base):
         )
     )
 
-    if _AUDIT_SCHEMA_ARGS:
-        _table_args.append(_AUDIT_SCHEMA_ARGS)
+    __table_args__ = tuple(_base_table_args)
 
-    __table_args__ = tuple(_table_args)
+
+# Ensure table metadata reflects the resolved schema support at import time
+_configure_audit_schema(_AUDIT_SUPPORTS_SCHEMAS)
 
 
 class AuditService:
@@ -290,10 +311,12 @@ class AuditService:
 
         self.database_url = resolved_database_url
 
-        if explicit_database_url is not None:
-            # Align metadata schema when explicit URLs override defaults
-            actual_support = database_supports_schemas(resolved_database_url)
-            AuditBase.metadata.schema = audit_table_args(actual_support).get("schema")
+        # Align metadata, table args, and remote schema references with the
+        # resolved database URL. This is required when explicit URLs override
+        # the import-time configuration or when environment variables change
+        # after module import.
+        actual_support = database_supports_schemas(resolved_database_url)
+        _configure_audit_schema(actual_support)
 
         Base.metadata.create_all(self.engine)
         
