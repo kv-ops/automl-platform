@@ -20,7 +20,7 @@ BACKUP_PASSWORD="${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD must be se
 create_database() {
     local database="$1"
     log "Ensuring database '${database}' exists"
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<-EOSQL
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
         SELECT 'CREATE DATABASE "${database}"'
         WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${database}')\gexec
         GRANT ALL PRIVILEGES ON DATABASE "${database}" TO "${PRIMARY_USER}";
@@ -29,7 +29,7 @@ EOSQL
 
 configure_main_database() {
     log "Configuring primary database '${PRIMARY_DB}'"
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$PRIMARY_DB" <<-EOSQL
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$PRIMARY_DB" <<EOSQL
         CREATE SCHEMA IF NOT EXISTS automl AUTHORIZATION "${PRIMARY_USER}";
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
         CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -45,7 +45,7 @@ create_role_if_missing() {
     local role_password="$2"
     local role_comment="$3"
     log "Ensuring role '${role_name}' exists (${role_comment})"
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<-EOSQL
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
         DO
         $$
         BEGIN
@@ -59,7 +59,7 @@ EOSQL
 
 configure_monitoring_role() {
     create_role_if_missing "$MONITORING_USER" "$MONITORING_PASSWORD" "monitoring user"
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$PRIMARY_DB" <<-EOSQL
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$PRIMARY_DB" <<EOSQL
         GRANT CONNECT ON DATABASE "${PRIMARY_DB}" TO "${MONITORING_USER}";
         GRANT USAGE ON SCHEMA automl TO "${MONITORING_USER}";
         GRANT SELECT ON ALL TABLES IN SCHEMA automl TO "${MONITORING_USER}";
@@ -71,7 +71,7 @@ EOSQL
 configure_backup_role() {
     create_role_if_missing "$BACKUP_USER" "$BACKUP_PASSWORD" "backup user"
     for database in ${POSTGRES_MULTIPLE_DATABASES//,/ }; do
-        psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<-EOSQL
+        psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
             GRANT CONNECT ON DATABASE "${database}" TO "${BACKUP_USER}";
             GRANT USAGE ON SCHEMA public TO "${BACKUP_USER}";
             GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${BACKUP_USER}";
@@ -79,7 +79,7 @@ configure_backup_role() {
                 GRANT SELECT ON TABLES TO "${BACKUP_USER}";
 EOSQL
     done
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<-EOSQL
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
         ALTER ROLE "${BACKUP_USER}" WITH REPLICATION;
 EOSQL
 }
@@ -97,23 +97,23 @@ configure_additional_databases() {
 
         case "$database" in
             keycloak)
-                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<-EOSQL
+                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
                     ALTER DATABASE "${database}" SET log_statement = 'all';
                     ALTER DATABASE "${database}" SET log_min_duration_statement = 250;
-                EOSQL
+EOSQL
                 ;;
             airflow)
-                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<-EOSQL
+                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
                     CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
                     ALTER DATABASE "${database}" SET timezone TO 'UTC';
-                EOSQL
+EOSQL
                 ;;
             metadata)
-                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<-EOSQL
+                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
                     CREATE SCHEMA IF NOT EXISTS models;
                     CREATE SCHEMA IF NOT EXISTS experiments;
                     CREATE SCHEMA IF NOT EXISTS datasets;
-                EOSQL
+EOSQL
                 ;;
         esac
     done
@@ -121,7 +121,7 @@ configure_additional_databases() {
 
 apply_cluster_tuning() {
     log "Applying PostgreSQL performance settings"
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<-EOSQL
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
         ALTER SYSTEM SET shared_buffers = '256MB';
         ALTER SYSTEM SET work_mem = '4MB';
         ALTER SYSTEM SET maintenance_work_mem = '64MB';
