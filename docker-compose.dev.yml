@@ -51,13 +51,13 @@ services:
     env_file:
       - dev.env
     environment:
-      BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
+      BACKEND_STORE_URI: postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl
       ARTIFACT_ROOT: ./mlflow_artifacts
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_USER:-mlflow}
       MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:-mlflowpass}
     command: >
       mlflow server
-      --backend-store-uri postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
+      --backend-store-uri postgresql://automl:Tn4BgBIwhfaoaxAZ97wAgE%2B7z210EVHkWILMHKEaWD0%3D@postgres:5432/automl
       --default-artifact-root ./mlflow_artifacts
       --host 0.0.0.0
       --port 5000
