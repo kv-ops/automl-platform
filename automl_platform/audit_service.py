@@ -141,6 +141,33 @@ def _configure_audit_schema(supports_schemas: bool) -> None:
 
 
 
+def _configure_audit_schema(supports_schemas: bool) -> None:
+    """Update audit table metadata for the current database backend."""
+
+    schema_args = audit_table_args(supports_schemas)
+    schema = schema_args.get("schema")
+
+    # Align declarative metadata
+    AuditBase.metadata.schema = schema
+
+    # Ensure the mapped table reflects the new schema configuration
+    table = AuditLogModel.__table__ if 'AuditLogModel' in globals() else None
+    if table is not None:
+        table.schema = schema
+
+    # Foreign-key targets should live in the public schema when supported
+    remote_schema = 'public' if supports_schemas else None
+    for remote in (_REMOTE_USERS, _REMOTE_TENANTS):
+        remote.schema = remote_schema
+
+    if table is not None:
+        table_args = list(AuditLogModel._base_table_args)
+        if schema_args:
+            table_args.append(schema_args)
+        AuditLogModel.__table_args__ = tuple(table_args)
+
+
+
 class AuditEventType(Enum):
     """Types of audit events"""
     # Authentication
