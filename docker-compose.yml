@@ -161,7 +161,6 @@ services:
         - INSTALL_MODE=saas
         - ENABLE_GPU=${ENABLE_GPU:-false}
     container_name: automl_api
-    privileged: true
     environment:
       # Operation Mode
       AUTOML_MODE: ${AUTOML_MODE:-saas}
@@ -235,7 +234,6 @@ services:
       - shared_models:/app/models
       - api_logs:/app/logs
       - ./config:/app/config:ro
-      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${API_PORT:-8000}:8000"
     networks:
