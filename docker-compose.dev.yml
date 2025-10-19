@@ -35,7 +35,9 @@ services:
       - automl_dev
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.10.0
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
     container_name: automl_mlflow_dev
     environment:
       BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
