@@ -197,21 +197,24 @@ class AuditService:
         encryption_key: bytes = None
     ):
         # Database setup
-        explicit_database_url = database_url
-        if explicit_database_url is not None:
-            self.database_url = explicit_database_url
-            self.engine = get_audit_engine(explicit_database_url)
-            self.SessionLocal = get_audit_sessionmaker(explicit_database_url)
-        else:
-            resolved_database_url = (
-                os.getenv("AUTOML_AUDIT_DATABASE_URL")
-                or os.getenv("AUDIT_DATABASE_URL")
-                or "postgresql://user:pass@localhost/audit"
-            )
+        resolved_database_url = (
+            database_url
+            or os.getenv("AUTOML_AUDIT_DATABASE_URL")
+            or os.getenv("AUDIT_DATABASE_URL")
+            or "postgresql://user:pass@localhost/audit"
         )
-        self.engine = get_audit_engine(self.database_url)
+
+        self.database_url = resolved_database_url
+
+        if database_url is None:
+            os.environ.setdefault("AUTOML_AUDIT_DATABASE_URL", resolved_database_url)
+            self.engine = get_audit_engine()
+            self.SessionLocal = get_audit_sessionmaker()
+        else:
+            self.engine = get_audit_engine(resolved_database_url)
+            self.SessionLocal = get_audit_sessionmaker(resolved_database_url)
+
         Base.metadata.create_all(self.engine)
-        self.SessionLocal = get_audit_sessionmaker(self.database_url)
         
         # Redis for caching and real-time alerts
         self.redis_client = redis_client or redis.from_url(
