@@ -79,6 +79,7 @@ services:
     command: >
       bash -c "/usr/local/bin/wait-for-it postgres:5432 -t 60 && \
                /usr/local/bin/wait-for-it redis:6379 -t 60 && \
+               /usr/local/bin/wait-for-it mlflow:5000 -t 60 && \
                uvicorn automl_platform.app:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "${API_PORT:-8000}:8000"
