@@ -51,6 +51,7 @@ from automl_platform.config import InsecureEnvironmentVariableError, validate_se
 import sqlalchemy
 from sqlalchemy import Column, String, Integer, DateTime, Boolean, JSON
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
 from automl_platform.database import get_app_engine, get_app_sessionmaker
 
@@ -158,7 +159,12 @@ class TenantManager:
     def __init__(self, db_url: Optional[str] = None):
         self.engine = get_app_engine(db_url)
         TenantBase.metadata.create_all(self.engine)
-        self.Session = get_app_sessionmaker(db_url)
+        if db_url:
+            self.Session = sessionmaker(
+                autocommit=False, autoflush=False, bind=self.engine
+            )
+        else:
+            self.Session = get_app_sessionmaker()
         
         # Initialize Docker client if available
         self.docker_client = None
