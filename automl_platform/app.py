@@ -27,7 +27,7 @@ import logging
 from io import BytesIO
 import time
 from enum import Enum
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 # Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -151,7 +151,27 @@ def _mask_dsn(dsn: Optional[str]) -> str:
             credentials = "***"
         netloc = f"{credentials}@{host}"
 
-    sanitized = parsed._replace(netloc=netloc)
+    sensitive_keys = {
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "access_token",
+        "api_key",
+        "apikey",
+    }
+
+    query_params = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in sensitive_keys
+    ]
+
+    sanitized = parsed._replace(
+        netloc=netloc,
+        query=urlencode(query_params, doseq=True) if query_params else "",
+    )
     return urlunparse(sanitized)
 
 # ============================================================================
