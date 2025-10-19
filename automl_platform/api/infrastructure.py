@@ -210,12 +210,17 @@ class TenantManager:
             return None
 
         uuid_value = self._parse_tenant_uuid(tenant_id)
-        query = session.query(TenantModel)
+        if uuid_value is None:
+            # Legacy identifiers like "default" should not trigger a UUID
+            # comparison because SQLAlchemy will attempt to coerce the string to
+            # a UUID and raise a ValueError. Returning None preserves the
+            # previous graceful degradation behaviour for unknown tenants.
+            return None
 
-        if uuid_value is not None:
-            tenant = query.filter(TenantModel.id == uuid_value).first()
-            if tenant:
-                return tenant
+        query = session.query(TenantModel)
+        tenant = query.filter(TenantModel.id == uuid_value).first()
+        if tenant:
+            return tenant
 
         return query.filter(TenantModel.id == str(tenant_id)).first()
 
