@@ -207,13 +207,13 @@ def require_jwt_secret() -> str:
 class DatabaseConfig:
     """Database configuration for core, audit and compliance services."""
 
-    url: str = os.getenv("AUTOML_DATABASE_URL", "sqlite:///automl.db")
+    url: str = field(default_factory=lambda: os.getenv("AUTOML_DATABASE_URL", "sqlite:///automl.db"))
     """Primary application database URL."""
 
-    audit_url: Optional[str] = os.getenv("AUTOML_AUDIT_DATABASE_URL")
+    audit_url: Optional[str] = field(default_factory=lambda: os.getenv("AUTOML_AUDIT_DATABASE_URL"))
     """Optional database URL dedicated to the audit service."""
 
-    rgpd_url: Optional[str] = os.getenv("AUTOML_RGPD_DATABASE_URL")
+    rgpd_url: Optional[str] = field(default_factory=lambda: os.getenv("AUTOML_RGPD_DATABASE_URL"))
     """Optional database URL dedicated to RGPD compliance storage."""
 
 
