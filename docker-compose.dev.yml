@@ -4,6 +4,8 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: automl_postgres_dev
+    env_file:
+      - dev.env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-automl}
       POSTGRES_USER: ${POSTGRES_USER:-automl}
@@ -25,6 +27,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: automl_redis_dev
+    env_file:
+      - dev.env
     command: >
       redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-devredis}
     ports:
@@ -39,6 +43,8 @@ services:
       context: .
       dockerfile: Dockerfile.mlflow
     container_name: automl_mlflow_dev
+    env_file:
+      - dev.env
     environment:
       BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-automl}
       ARTIFACT_ROOT: ./mlflow_artifacts
