@@ -74,6 +74,7 @@ services:
       dockerfile: ${API_DOCKERFILE:-Dockerfile}
       target: api
     container_name: automl_api_dev
+    privileged: true
     env_file:
       - dev.env
     environment:
@@ -88,6 +89,7 @@ services:
       - ./scripts/wait-for-it.sh:/usr/local/bin/wait-for-it:ro
       - ./alembic.ini:/app/alembic.ini:ro
       - ./alembic:/app/alembic:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       bash -c "/usr/local/bin/wait-for-it postgres:5432 -t 60 && \
                /usr/local/bin/wait-for-it redis:6379 -t 60 && \
