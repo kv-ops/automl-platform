@@ -7,9 +7,9 @@ services:
     env_file:
       - dev.env
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-automl}
-      POSTGRES_USER: ${POSTGRES_USER:-automl}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: automl
+      POSTGRES_USER: automl
+      POSTGRES_PASSWORD: Tn4BgBIwhfaoaxAZ97wAgE+7z210EVHkWILMHKEaWD0=
       POSTGRES_MONITORING_USER: ${POSTGRES_MONITORING_USER:-monitoring}
       POSTGRES_MONITORING_PASSWORD: ${POSTGRES_MONITORING_PASSWORD:-monitorpass}
       POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER:-backup_user}
