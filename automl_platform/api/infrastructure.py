@@ -60,6 +60,36 @@ logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
+# Tenant model definition
+class Tenant(Base):
+    __tablename__ = 'tenants'
+    
+    id = Column(String(36), primary_key=True)  # UUID as string
+    name = Column(String(255), nullable=False)
+    plan_type = Column(String(50), nullable=False, default='free')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+    
+    # Resource limits
+    max_cpu_cores = Column(Integer, default=2)
+    max_memory_gb = Column(Integer, default=4)
+    max_storage_gb = Column(Integer, default=10)
+    max_gpu_hours = Column(Integer, default=0)
+    max_concurrent_jobs = Column(Integer, default=1)
+    
+    # Current usage
+    current_cpu_usage = Column(Integer, default=0)
+    current_memory_usage = Column(Integer, default=0)
+    current_storage_usage = Column(Integer, default=0)
+    gpu_hours_used = Column(Integer, default=0)
+    
+    # Security
+    encryption_key = Column(String(500))
+    metadata_json = Column(JSON)
+
+# Aliases for backward compatibility
+TenantModel = Tenant
+TenantBase = Base
 
 @dataclass
 class TenantConfig:
@@ -149,9 +179,6 @@ class TenantConfig:
             }
         }
         return features_by_plan.get(self.plan_type, features_by_plan["free"])
-
-
-from automl_platform.models.tenant import Tenant as TenantModel, Base as TenantBase
 
 
 class TenantManager:
