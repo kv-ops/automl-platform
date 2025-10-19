@@ -74,6 +74,10 @@ services:
       dockerfile: ${API_DOCKERFILE:-Dockerfile}
       target: api
     container_name: automl_api_dev
+    # Run as root in development to ensure access to /var/run/docker.sock.
+    # For production, prefer matching the host docker group's GID and adding
+    # the container user to that group instead of running as root.
+    user: "0:0"
     privileged: true
     env_file:
       - dev.env
