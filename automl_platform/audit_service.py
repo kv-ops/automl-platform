@@ -197,11 +197,17 @@ class AuditService:
         encryption_key: bytes = None
     ):
         # Database setup
-        resolved_database_url = (
-            database_url
-            or os.getenv("AUTOML_AUDIT_DATABASE_URL")
-            or os.getenv("AUDIT_DATABASE_URL")
-            or "postgresql://user:pass@localhost/audit"
+        explicit_database_url = database_url
+        if explicit_database_url is not None:
+            self.database_url = explicit_database_url
+            self.engine = get_audit_engine(explicit_database_url)
+            self.SessionLocal = get_audit_sessionmaker(explicit_database_url)
+        else:
+            resolved_database_url = (
+                os.getenv("AUTOML_AUDIT_DATABASE_URL")
+                or os.getenv("AUDIT_DATABASE_URL")
+                or "postgresql://user:pass@localhost/audit"
+            )
         )
 
         self.database_url = resolved_database_url

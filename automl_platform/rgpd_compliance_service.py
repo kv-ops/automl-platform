@@ -36,10 +36,10 @@ except ImportError:
     redis = SimpleNamespace(Redis=None)
 
 try:
-    from sqlalchemy import create_engine, Column, String, DateTime, Boolean, JSON, Text, Integer
+    from sqlalchemy import Column, String, DateTime, Boolean, JSON, Text, Integer
     from sqlalchemy.ext.declarative import declarative_base
-    from sqlalchemy.orm import sessionmaker, Session
     from sqlalchemy.dialects.postgresql import UUID
+    from automl_platform.database import get_rgpd_engine, get_rgpd_sessionmaker
     Base = declarative_base()
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
@@ -474,14 +474,17 @@ class RGPDComplianceService:
                 "postgresql://user:pass@localhost/rgpd"
             )
         
+        self.engine = None
+
         # Initialize database
-        if SQLALCHEMY_AVAILABLE and database_url:
+        if SQLALCHEMY_AVAILABLE:
             try:
-                self.engine = create_engine(self.database_url)
+                self.engine = get_rgpd_engine(self.database_url)
                 Base.metadata.create_all(self.engine)
-                self.SessionLocal = sessionmaker(bind=self.engine)
+                self.SessionLocal = get_rgpd_sessionmaker(self.database_url)
             except:
                 self.SessionLocal = None
+                self.engine = None
         else:
             self.SessionLocal = None
         
