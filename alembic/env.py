@@ -125,9 +125,14 @@ def run_migrations_online() -> None:
         pool_pre_ping=True,
     )
 
+    is_postgres = url.get_backend_name() == "postgresql"
+
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_schemas=is_postgres,
+            version_table_schema="public" if is_postgres else None,
         )
 
         with context.begin_transaction():
