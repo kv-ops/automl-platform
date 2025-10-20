@@ -71,7 +71,15 @@ EOSQL
 
 configure_backup_role() {
     create_role_if_missing "$BACKUP_USER" "$BACKUP_PASSWORD" "backup user"
+    if [[ -z "${POSTGRES_MULTIPLE_DATABASES:-}" ]]; then
+        log "No additional databases configured for backup grants"
+        return
+    fi
     for database in ${POSTGRES_MULTIPLE_DATABASES//,/ }; do
+        if ! psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$PRIMARY_DB" -tAc "SELECT 1 FROM pg_database WHERE datname = '${database}'" | grep -q 1; then
+            log "Skipping backup grants for missing database '${database}'"
+            continue
+        fi
         psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
             GRANT CONNECT ON DATABASE "${database}" TO "${BACKUP_USER}";
             GRANT USAGE ON SCHEMA public TO "${BACKUP_USER}";
@@ -192,6 +200,7 @@ main() {
     configure_main_database
     configure_backup_role
     configure_additional_databases
+    configure_backup_role
     configure_monitoring_role
     apply_cluster_tuning
     log "PostgreSQL initialization completed"
