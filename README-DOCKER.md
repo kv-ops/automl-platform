@@ -169,5 +169,3 @@ open http://localhost:3000             # Grafana
 - Les dashboards Grafana sont provisionnés automatiquement depuis `monitoring/grafana/dashboards/`.
 - Les exporter Prometheus (`postgres-exporter`, `redis-exporter`) sont activés par défaut et nécessitent les rôles générés via `scripts/init-multi-db.sh`.
 - Le fichier `.dockerignore` exclut les artefacts de build et les jeux de données volumineux pour accélérer les builds.
-
-Bonnes démos !
