@@ -12,11 +12,15 @@ Ce projet utilise **2 bases PostgreSQL principales** pour isolation et conformit
 │                     (géré par MLflow)        │
 │                                              │
 │  📦 automl_app    → Auth + Application      │
-│                     (schémas `public` +      │
-│                      `audit`, gérés par      │
-│                      Alembic)                │
+│                     ├─ schéma `public`      │
+│                     │    (données app)      │
+│                     └─ schéma `audit`       │
+│                          (journaux)         │
+│                     (gérés par Alembic)     │
 └─────────────────────────────────────────────┘
 ```
+
+Le schéma `public` contient les tables métier de l'application alors que le schéma `audit` regroupe les journaux et traces de conformité. Alembic gère désormais les migrations des **deux schémas** depuis la même base `automl_app`, ce qui remplace l'ancien modèle basé sur une base dédiée `automl_audit`.
 
 ## 🗂️ Structure des fichiers
 
@@ -53,6 +57,8 @@ AUTOML_AUDIT_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_app
 # Base MLflow (tracking - géré par MLflow, pas Alembic)
 MLFLOW_DATABASE_URL=postgresql://user:pass@postgres:5432/automl
 ```
+
+> ℹ️ **Note :** la séparation fonctionnelle entre données applicatives et audit se fait désormais au niveau des schémas (`public`/`audit`) dans la base `automl_app`. La variable `AUTOML_AUDIT_DATABASE_URL` reste disponible pour compatibilité, mais elle pointe vers la même base que `AUTOML_DATABASE_URL`.
 
 ## 🚀 Commandes principales
 
@@ -131,7 +137,7 @@ Les migrations gèrent les tables suivantes :
 
 ### Schéma audit (dans automl_app, optionnel)
 
-Si configuré via `alembic_audit.ini`, gère :
+Les tables suivantes vivent dans le schéma `audit` de `automl_app` (l'ancienne base `automl_audit` n'est plus utilisée) :
 
 - **audit_events** : Événements d'audit détaillés
 - **gdpr_requests** : Requêtes RGPD/GDPR
