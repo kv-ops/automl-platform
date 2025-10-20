@@ -21,6 +21,26 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 
+import sys
+import types
+from pathlib import Path
+
+
+def _ensure_package_stub(package: str, package_dir: Path) -> None:
+    """Register a lightweight package module to avoid heavy side effects."""
+
+    if package in sys.modules:
+        return
+
+    module = types.ModuleType(package)
+    module.__path__ = [str(package_dir)]
+    sys.modules[package] = module
+
+
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+_PACKAGE_DIR = _ROOT_DIR / "automl_platform"
+_ensure_package_stub("automl_platform", _PACKAGE_DIR)
+
 from automl_platform.models.base import Base, AuditBase
 
 # Import models to ensure tables are registered with the shared metadata
@@ -70,11 +90,16 @@ def run_migrations_offline() -> None:
 
     """
     url = get_url()
+    url_obj = make_url(url)
+    is_postgres = url_obj.get_backend_name() == "postgresql"
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=is_postgres,
+        version_table_schema="public" if is_postgres else None,
     )
 
     with context.begin_transaction():

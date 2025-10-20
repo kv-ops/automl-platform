@@ -47,8 +47,13 @@ __email__ = "support@automl-platform.com"
 
 # Core imports for easy access
 from .config import AutoMLConfig, load_config
-from .orchestrator import AutoMLOrchestrator
-from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
+
+try:
+    from .orchestrator import AutoMLOrchestrator
+    ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    AutoMLOrchestrator = None
+    ORCHESTRATOR_AVAILABLE = False
 
 try:
     from .enhanced_orchestrator import EnhancedAutoMLOrchestrator
@@ -147,15 +152,26 @@ except ImportError:
     ExportConfig = None
 
 # A/B Testing
-from .ab_testing import (
-    ABTestingService,
-    TestStatus,
-    ModelType,
-    ABTestConfig,
-    ABTestResult,
-    MetricsComparator,
-    StatisticalTester
-)
+try:
+    from .ab_testing import (
+        ABTestingService,
+        TestStatus,
+        ModelType,
+        ABTestConfig,
+        ABTestResult,
+        MetricsComparator,
+        StatisticalTester,
+    )
+    AB_TESTING_AVAILABLE = True
+except ImportError:
+    ABTestingService = None
+    TestStatus = None
+    ModelType = None
+    ABTestConfig = None
+    ABTestResult = None
+    MetricsComparator = None
+    StatisticalTester = None
+    AB_TESTING_AVAILABLE = False
 
 # Autoscaling and Resource Management
 from .autoscaling import (
