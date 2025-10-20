@@ -10,8 +10,8 @@ services:
     image: postgres:15-alpine
     container_name: automl_postgres
     environment:
-      # Bases de données : automl (MLflow), automl_app (API/Auth), automl_audit (Audit/RGPD), keycloak, airflow, metadata
-      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-automl,automl_app,automl_audit,keycloak,airflow,metadata}
+      # Bases de données : automl (MLflow), automl_app (API/Auth + Audit/RGPD), keycloak, airflow, metadata
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-automl,automl_app,keycloak,airflow,metadata}
       POSTGRES_DB: automl
       POSTGRES_USER: ${POSTGRES_USER:-automl}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
@@ -175,9 +175,9 @@ services:
       # Base de données MLflow (tracking uniquement)
       MLFLOW_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl
       
-      # Base de données Audit & RGPD
-      AUTOML_AUDIT_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_audit
-      AUTOML_RGPD_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_audit
+      # Base de données Audit & RGPD (schéma "audit" dans automl_app)
+      AUTOML_AUDIT_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
+      AUTOML_RGPD_DATABASE_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/automl_app
       
       # Base metadata (optionnelle)
       METADATA_DB_URL: postgresql://${POSTGRES_USER:-automl}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/metadata

@@ -1,6 +1,6 @@
 """
 Centralized database connections for AutoML Platform.
-Manages connections to: automl_app, automl_audit, automl (MLflow).
+Manages connections to: automl_app (public + audit schemas) and automl (MLflow).
 """
 from functools import lru_cache
 from typing import Optional
@@ -54,7 +54,7 @@ def get_app_engine(url: Optional[str] = None) -> Engine:
 
 def get_audit_engine(url: Optional[str] = None) -> Engine:
     """
-    Get SQLAlchemy engine for audit database (automl_audit).
+    Get SQLAlchemy engine for audit schema (automl_app).
     Used for: Audit logs, compliance tracking.
     
     Args:
@@ -83,8 +83,8 @@ def get_audit_engine(url: Optional[str] = None) -> Engine:
 
 def get_rgpd_engine(url: Optional[str] = None) -> Engine:
     """
-    Get SQLAlchemy engine for RGPD database (automl_audit).
-    Note: RGPD uses the same database as audit, but separate schema/tables.
+    Get SQLAlchemy engine for RGPD schema (automl_app).
+    Note: RGPD shares the audit schema inside automl_app.
     
     Args:
         url: Optional database URL (for testing). If None, uses DatabaseConfig.

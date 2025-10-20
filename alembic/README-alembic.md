@@ -2,7 +2,7 @@
 
 ## 📋 Architecture Multi-Base
 
-Ce projet utilise **3 bases PostgreSQL séparées** pour isolation et conformité :
+Ce projet utilise **2 bases PostgreSQL principales** pour isolation et conformité :
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -12,10 +12,9 @@ Ce projet utilise **3 bases PostgreSQL séparées** pour isolation et conformit�
 │                     (géré par MLflow)        │
 │                                              │
 │  📦 automl_app    → Auth + Application      │
-│                     (géré par Alembic)       │
-│                                              │
-│  📦 automl_audit  → Audit + RGPD            │
-│                     (géré par Alembic)       │
+│                     (schémas `public` +      │
+│                      `audit`, gérés par      │
+│                      Alembic)                │
 └─────────────────────────────────────────────┘
 ```
 
@@ -48,8 +47,8 @@ script_location = %(here)s/alembic
 # Base application (Auth, Users, Tenants, Projects)
 AUTOML_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_app
 
-# Base audit (Logs, RGPD, conformité)
-AUTOML_AUDIT_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_audit
+# Base audit (Logs, RGPD, conformité) - partage la base automl_app (schéma `audit`)
+AUTOML_AUDIT_DATABASE_URL=postgresql://user:pass@postgres:5432/automl_app
 
 # Base MLflow (tracking - géré par MLflow, pas Alembic)
 MLFLOW_DATABASE_URL=postgresql://user:pass@postgres:5432/automl
@@ -130,9 +129,9 @@ Les migrations gèrent les tables suivantes :
 - **projects** : Projets des utilisateurs
 - **user_roles, role_permissions, project_users** : Tables de liaison
 
-### Base automl_audit (optionnel)
+### Schéma audit (dans automl_app, optionnel)
 
-Si configuré séparément, gère :
+Si configuré via `alembic_audit.ini`, gère :
 
 - **audit_events** : Événements d'audit détaillés
 - **gdpr_requests** : Requêtes RGPD/GDPR
