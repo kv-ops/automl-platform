@@ -110,6 +110,7 @@ configure_additional_databases() {
 
         case "$database" in
             automl_app)
+                create_role_if_missing "$BACKUP_USER" "$BACKUP_PASSWORD" "backup user"
                 psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
                     DO
                     $$
