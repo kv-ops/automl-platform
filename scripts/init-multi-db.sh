@@ -71,6 +71,9 @@ EOSQL
 
 configure_backup_role() {
     create_role_if_missing "$BACKUP_USER" "$BACKUP_PASSWORD" "backup user"
+    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
+        ALTER ROLE "${BACKUP_USER}" WITH REPLICATION;
+EOSQL
     if [[ -z "${POSTGRES_MULTIPLE_DATABASES:-}" ]]; then
         log "No additional databases configured for backup grants"
         return
@@ -100,9 +103,6 @@ configure_backup_role() {
             $$;
 EOSQL
     done
-    psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
-        ALTER ROLE "${BACKUP_USER}" WITH REPLICATION;
-EOSQL
 }
 
 configure_additional_databases() {
