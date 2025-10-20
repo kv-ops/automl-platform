@@ -198,6 +198,7 @@ EOSQL
 
 main() {
     configure_main_database
+    configure_backup_role
     configure_additional_databases
     configure_backup_role
     configure_monitoring_role
