@@ -119,7 +119,8 @@ def _configure_audit_schema(supports_schemas: bool) -> None:
                 continue
             table_name = 'users' if 'user' in fk.name else 'tenants'
             remote_table = remote_tables[table_name]
-            schema_token = remote_table.schema if remote_table.schema else None
+            schema_token = 'public' if supports_schemas else None
+            remote_table.schema = schema_token
             column_tokens = [schema_token, remote_table.name, 'id']
             string_colspec = '.'.join(token for token in column_tokens if token)
 
@@ -136,33 +137,6 @@ def _configure_audit_schema(supports_schemas: bool) -> None:
 
             fk._set_parent(table)
 
-        table_args = list(AuditLogModel._base_table_args)
-        if schema_args:
-            table_args.append(schema_args)
-        AuditLogModel.__table_args__ = tuple(table_args)
-
-
-
-def _configure_audit_schema(supports_schemas: bool) -> None:
-    """Update audit table metadata for the current database backend."""
-
-    schema_args = audit_table_args(supports_schemas)
-    schema = schema_args.get("schema")
-
-    # Align declarative metadata
-    AuditBase.metadata.schema = schema
-
-    # Ensure the mapped table reflects the new schema configuration
-    table = AuditLogModel.__table__ if 'AuditLogModel' in globals() else None
-    if table is not None:
-        table.schema = schema
-
-    # Foreign-key targets should live in the public schema when supported
-    remote_schema = 'public' if supports_schemas else None
-    for remote in (_REMOTE_USERS, _REMOTE_TENANTS):
-        remote.schema = remote_schema
-
-    if table is not None:
         table_args = list(AuditLogModel._base_table_args)
         if schema_args:
             table_args.append(schema_args)
