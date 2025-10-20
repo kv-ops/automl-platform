@@ -100,7 +100,7 @@ Les services Prometheus, Grafana, exporters Redis/Postgres et le reverse proxy N
 
 ## 8. Scripts opérationnels
 
-- `scripts/init-multi-db.sh` : crée les bases `automl`, `keycloak`, `airflow`, `metadata` et provisionne les rôles `monitoring` / `backup_user` avec privilèges minimaux.
+- `scripts/init-multi-db.sh` : crée les bases `automl`, `automl_app` (schéma `audit` inclus), `keycloak`, `airflow`, `metadata` et provisionne les rôles `monitoring` / `backup_user` avec privilèges minimaux.
 - `scripts/wait-for-it.sh` : utilitaire générique pour attendre qu’un service TCP réponde.
 - `scripts/generate-secrets.sh` : génération des secrets (`make secrets`).
 - `scripts/backup.sh` : sauvegarde PostgreSQL (`pg_dumpall`) + mirroring MinIO + archivage des configs (Nginx/Keycloak/monitoring).

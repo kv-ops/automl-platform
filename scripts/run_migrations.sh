@@ -5,7 +5,7 @@
 # Architecture:
 #   - automl       : MLflow tracking (géré par MLflow, pas Alembic)
 #   - automl_app   : Auth + Application (migrations via alembic.ini)
-#   - automl_audit : Audit + RGPD (migrations via alembic_audit.ini si créé)
+#   - audit        : Schéma `audit` dans automl_app (migrations via alembic_audit.ini si créé)
 
 set -e
 
@@ -70,7 +70,7 @@ migrate_app() {
     fi
 }
 
-# Migration pour automl_audit (optionnel si alembic_audit.ini existe)
+# Migration pour le schéma audit (optionnel si alembic_audit.ini existe)
 migrate_audit() {
     # Vérifier si une configuration séparée existe pour audit
     if [ ! -f "alembic_audit.ini" ]; then
@@ -79,7 +79,7 @@ migrate_audit() {
         return 0
     fi
     
-    info "Migrating automl_audit database..."
+    info "Migrating audit schema (automl_app)..."
     
     # Créer le dossier versions si nécessaire
     mkdir -p alembic/versions/audit
@@ -88,9 +88,9 @@ migrate_audit() {
     alembic -c alembic_audit.ini upgrade head
     
     if [ $? -eq 0 ]; then
-        info "automl_audit migrations completed ✓"
+        info "Audit schema migrations completed ✓"
     else
-        error "automl_audit migrations failed"
+        error "Audit schema migrations failed"
         exit 1
     fi
 }
@@ -117,7 +117,7 @@ generate_audit_migration() {
         exit 1
     fi
     
-    info "Generating migration for automl_audit: $message"
+    info "Generating migration for audit schema (automl_app): $message"
     alembic -c alembic_audit.ini revision --autogenerate -m "$message"
 }
 
@@ -130,7 +130,7 @@ show_status() {
     
     if [ -f "alembic_audit.ini" ]; then
         echo ""
-        info "Migration status for automl_audit:"
+        info "Migration status for audit schema (automl_app):"
         alembic -c alembic_audit.ini current
         echo ""
         alembic -c alembic_audit.ini history --verbose | head -20
@@ -191,7 +191,7 @@ case "$1" in
         echo "Notes:"
         echo "  - automl       : MLflow database (managed by MLflow, not Alembic)"
         echo "  - automl_app   : Application database (uses alembic.ini)"
-        echo "  - automl_audit : Audit database (uses alembic_audit.ini if exists)"
+        echo "  - audit        : Audit schema in automl_app (uses alembic_audit.ini if exists)"
         exit 1
         ;;
 esac

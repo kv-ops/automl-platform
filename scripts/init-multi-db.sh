@@ -78,6 +78,18 @@ configure_backup_role() {
             GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${BACKUP_USER}";
             ALTER DEFAULT PRIVILEGES IN SCHEMA public
                 GRANT SELECT ON TABLES TO "${BACKUP_USER}";
+            DO
+            $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.schemata WHERE schema_name = 'audit'
+                ) THEN
+                    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I;', 'audit', '${BACKUP_USER}');
+                    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I;', 'audit', '${BACKUP_USER}');
+                    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON TABLES TO %I;', 'audit', '${BACKUP_USER}');
+                END IF;
+            END
+            $$;
 EOSQL
     done
     psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" <<EOSQL
@@ -97,6 +109,45 @@ configure_additional_databases() {
         create_database "$database"
 
         case "$database" in
+            automl_app)
+                psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
+                    DO
+                    $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_namespace WHERE nspname = 'public'
+                        ) THEN
+                            EXECUTE format('CREATE SCHEMA %I AUTHORIZATION %I;', 'public', '${PRIMARY_USER}');
+                        ELSE
+                            EXECUTE format('ALTER SCHEMA %I OWNER TO %I;', 'public', '${PRIMARY_USER}');
+                        END IF;
+                    END
+                    $$;
+
+                    CREATE SCHEMA IF NOT EXISTS audit AUTHORIZATION "${PRIMARY_USER}";
+                    ALTER SCHEMA audit OWNER TO "${PRIMARY_USER}";
+                    ALTER DATABASE "${database}" SET search_path TO public,audit;
+
+                    GRANT USAGE ON SCHEMA audit TO "${PRIMARY_USER}";
+                    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+                        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${PRIMARY_USER}";
+                    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+                        GRANT USAGE, SELECT ON SEQUENCES TO "${PRIMARY_USER}";
+                    ALTER DEFAULT PRIVILEGES IN SCHEMA audit
+                        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${PRIMARY_USER}";
+                    ALTER DEFAULT PRIVILEGES IN SCHEMA audit
+                        GRANT USAGE, SELECT ON SEQUENCES TO "${PRIMARY_USER}";
+
+                    GRANT USAGE ON SCHEMA public TO "${BACKUP_USER}";
+                    GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${BACKUP_USER}";
+                    GRANT USAGE ON SCHEMA audit TO "${BACKUP_USER}";
+                    GRANT SELECT ON ALL TABLES IN SCHEMA audit TO "${BACKUP_USER}";
+                    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+                        GRANT SELECT ON TABLES TO "${BACKUP_USER}";
+                    ALTER DEFAULT PRIVILEGES IN SCHEMA audit
+                        GRANT SELECT ON TABLES TO "${BACKUP_USER}";
+                EOSQL
+                ;;
             keycloak)
                 psql -v ON_ERROR_STOP=1 --username "$PRIMARY_USER" --dbname "$database" <<EOSQL
                     ALTER DATABASE "${database}" SET log_statement = 'all';
