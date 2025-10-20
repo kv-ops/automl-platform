@@ -190,9 +190,9 @@ EOSQL
 
 main() {
     configure_main_database
+    configure_backup_role
     configure_additional_databases
     configure_monitoring_role
-    configure_backup_role
     apply_cluster_tuning
     log "PostgreSQL initialization completed"
 }
