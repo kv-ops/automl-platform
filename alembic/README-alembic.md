@@ -270,7 +270,3 @@ psql $AUTOML_DATABASE_URL -c "SELECT version();"
    git add alembic/versions/XXXXX_add_tenant_new_field.py
    git commit -m "feat: add tenant new_field"
    ```
-
----
-
-**Note** : Ce README est maintenu manuellement. Pour toute question, consulter l'équipe DevOps.
