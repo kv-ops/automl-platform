@@ -90,11 +90,16 @@ def run_migrations_offline() -> None:
 
     """
     url = get_url()
+    url_obj = make_url(url)
+    is_postgres = url_obj.get_backend_name() == "postgresql"
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=is_postgres,
+        version_table_schema="public" if is_postgres else None,
     )
 
     with context.begin_transaction():
