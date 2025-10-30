@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, MagicMock
 import jwt
+import redis
 
 # Import auth components
 try:
@@ -664,6 +665,36 @@ class TestAuditService:
         if AuditSeverity is not None:
             assert kwargs["severity"] == AuditSeverity.WARNING
 
+    def test_log_action_backend_failure_is_nonfatal(self, audit_service, audit_backend, caplog):
+        """Audit backend failures should not break auth flows."""
+        audit_backend.log_event.side_effect = redis.exceptions.ConnectionError("redis down")
+
+        with caplog.at_level("WARNING"):
+            audit_service.log_action(
+                user_id=str(uuid.uuid4()),
+                tenant_id=str(uuid.uuid4()),
+                action="login",
+                response_status=200,
+                ip_address="10.0.0.1",
+            )
+
+        assert "Audit backend Redis logging failed" in caplog.text
+
+    def test_log_action_generic_backend_failure_is_nonfatal(self, audit_service, audit_backend, caplog):
+        """Unexpected backend errors should be logged and ignored."""
+        audit_backend.log_event.side_effect = RuntimeError("boom")
+
+        with caplog.at_level("ERROR"):
+            audit_service.log_action(
+                user_id=str(uuid.uuid4()),
+                tenant_id=str(uuid.uuid4()),
+                action="logout",
+                response_status=200,
+                ip_address="10.0.0.2",
+            )
+
+        assert "Audit backend logging failed" in caplog.text
+
     def test_get_audit_logs(self, audit_service, audit_backend):
         """Test retrieving audit logs."""
         tenant_id = str(uuid.uuid4())
@@ -685,6 +716,40 @@ class TestAuditService:
             end_date=None,
             limit=50,
         )
+
+    def test_get_audit_logs_backend_failure_is_nonfatal(self, audit_service, audit_backend, caplog):
+        """Audit backend failures while searching should not break auth flows."""
+        tenant_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
+
+        audit_backend.search.side_effect = redis.exceptions.ConnectionError("redis down")
+
+        with caplog.at_level("WARNING"):
+            logs = audit_service.get_audit_logs(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                limit=10,
+            )
+
+        assert logs == []
+        assert "Audit backend Redis search failed" in caplog.text
+
+    def test_get_audit_logs_generic_backend_failure_is_nonfatal(self, audit_service, audit_backend, caplog):
+        """Unexpected backend errors during search should be logged and ignored."""
+        tenant_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
+
+        audit_backend.search.side_effect = RuntimeError("boom")
+
+        with caplog.at_level("ERROR"):
+            logs = audit_service.get_audit_logs(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                limit=5,
+            )
+
+        assert logs == []
+        assert "Audit backend search failed" in caplog.text
 
 
 # ============================================================================

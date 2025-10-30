@@ -734,20 +734,32 @@ class AuditService:
             elif response_status >= 400:
                 severity = AuditSeverity.WARNING
 
-        backend.log_event(
-            event_type=event_type,
-            action=action,
-            description=action,
-            severity=severity,
-            user_id=str(user_id) if user_id is not None else None,
-            tenant_id=str(tenant_id) if tenant_id is not None else None,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            request_data=request_data,
-            response_status=response_status,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
+        try:
+            backend.log_event(
+                event_type=event_type,
+                action=action,
+                description=action,
+                severity=severity,
+                user_id=str(user_id) if user_id is not None else None,
+                tenant_id=str(tenant_id) if tenant_id is not None else None,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                request_data=request_data,
+                response_status=response_status,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        except redis.exceptions.RedisError as exc:
+            logger.warning(
+                "Audit backend Redis logging failed for action %s; continuing without audit trail: %s",
+                action_key or action,
+                exc,
+            )
+        except Exception:
+            logger.exception(
+                "Audit backend logging failed for action %s; continuing without audit trail",
+                action_key or action,
+            )
         
         # Update metrics
         if action == "login":
@@ -766,13 +778,27 @@ class AuditService:
         """Retrieve audit logs with filtering"""
         backend = _get_audit_backend()
 
-        return backend.search(
-            tenant_id=str(tenant_id) if tenant_id is not None else None,
-            user_id=str(user_id) if user_id is not None else None,
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit,
-        )
+        try:
+            return backend.search(
+                tenant_id=str(tenant_id) if tenant_id is not None else None,
+                user_id=str(user_id) if user_id is not None else None,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        except redis.exceptions.RedisError as exc:
+            logger.warning(
+                "Audit backend Redis search failed for tenant %s; returning no audit logs: %s",
+                tenant_id,
+                exc,
+            )
+        except Exception:
+            logger.exception(
+                "Audit backend search failed for tenant %s; returning no audit logs",
+                tenant_id,
+            )
+
+        return []
 
 
 # ============================================================================
