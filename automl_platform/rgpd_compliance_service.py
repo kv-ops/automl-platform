@@ -407,7 +407,12 @@ class AuditService:
 
 # Try importing from existing audit_service if available
 try:
-    from .audit_service import AuditService as RealAuditService, AuditEventType, AuditSeverity
+    from .audit_service import (
+        AuditService as RealAuditService,
+        AuditEventType,
+        AuditSeverity,
+        AuditLogModel,
+    )
     # Use the real service if available
     if 'AuditEventType' not in locals():
         AuditEventType = Enum('AuditEventType', {
@@ -440,6 +445,7 @@ except ImportError:
         'ERROR': 'error',
         'CRITICAL': 'critical'
     })
+    AuditLogModel = None
 
 # ==================== MAIN SERVICE ====================
 
@@ -1130,10 +1136,60 @@ class RGPDComplianceService:
     def _anonymize_ml_data(self, user_id: str) -> int:
         """Anonymize ML data for user"""
         return 5  # Mock: number of ML records anonymized
-    
+
     def _anonymize_audit_logs(self, user_id: str) -> int:
         """Anonymize audit logs for user"""
-        return 10  # Mock: number of audit logs anonymized
+        if not user_id:
+            return 0
+
+        backend_session_factory = getattr(self.audit_service, "SessionLocal", None)
+
+        if callable(backend_session_factory) and AuditLogModel is not None:
+            session = backend_session_factory()
+            try:
+                identifier = user_id
+                try:
+                    identifier = uuid.UUID(str(user_id))
+                except (ValueError, TypeError, AttributeError):
+                    identifier = user_id
+
+                records = session.query(AuditLogModel).filter(
+                    AuditLogModel.user_id == identifier
+                ).all()
+
+                if not records:
+                    session.rollback()
+                    return 0
+
+                for record in records:
+                    record.user_id = None
+                    metadata = getattr(record, "event_metadata", None)
+                    if isinstance(metadata, dict) and "user_id" in metadata:
+                        metadata["user_id"] = "ANONYMIZED"
+                        record.event_metadata = metadata
+
+                session.commit()
+                return len(records)
+            except Exception as exc:
+                session.rollback()
+                logger.error("Failed to anonymize audit logs", exc_info=exc)
+                raise
+            finally:
+                session.close()
+
+        if hasattr(self.audit_service, "events"):
+            count = 0
+            for event in getattr(self.audit_service, "events", []):
+                if event.get('user_id') != user_id:
+                    continue
+                event['user_id'] = None
+                metadata = event.get('metadata')
+                if isinstance(metadata, dict) and 'user_id' in metadata:
+                    metadata['user_id'] = 'ANONYMIZED'
+                count += 1
+            return count
+
+        return 0
     
     def _calculate_avg_processing_time(self, requests) -> float:
         """Calculate average processing time in days"""

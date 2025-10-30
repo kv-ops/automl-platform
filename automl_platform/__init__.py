@@ -375,8 +375,7 @@ try:
         Role,
         Permission,
         Project,
-        APIKey,
-        AuditLog
+        APIKey
     )
     AUTH_MODULE_AVAILABLE = True
 except ImportError:
@@ -402,7 +401,6 @@ except ImportError:
     Permission = None
     Project = None
     APIKey = None
-    AuditLog = None
 
 try:
     from .sso_service import SSOService, SSOProvider

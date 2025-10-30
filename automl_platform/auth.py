@@ -39,6 +39,11 @@ import time
 
 from automl_platform.database import get_app_engine, get_app_sessionmaker
 from automl_platform.models.base import Base, public_table_args, qualify
+from automl_platform.audit_service import (
+    AuditService as AuditTrailService,
+    AuditEventType,
+    AuditSeverity,
+)
 
 # Import from automl_platform modules
 try:
@@ -105,7 +110,7 @@ class AuthConfig:
     
     # Audit logging
     AUDIT_LOG_ENABLED = True
-    AUDIT_LOG_TABLE = "audit_logs"
+    AUDIT_LOG_TABLE = "audit_logs_v2"
 
 
 # ============================================================================
@@ -121,6 +126,17 @@ if _auth_db_override:
 else:
     engine = get_app_engine()
     SessionLocal = get_app_sessionmaker()
+
+
+_audit_backend = None
+
+
+def _get_audit_backend() -> AuditTrailService:
+    """Lazily instantiate and reuse the central audit trail service."""
+    global _audit_backend
+    if _audit_backend is None:
+        _audit_backend = AuditTrailService()
+    return _audit_backend
 
 # ============================================================================
 # Database Models (PostgreSQL)
@@ -190,7 +206,6 @@ class User(Base):
     roles = relationship("Role", secondary=user_roles, back_populates="users")
     api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
     projects = relationship("Project", secondary=project_users, back_populates="users")
-    audit_logs = relationship("AuditLog", back_populates="user")
 
 
 from automl_platform.models.tenant import Tenant
@@ -271,31 +286,6 @@ class APIKey(Base):
     
     # Relationships
     user = relationship("User", back_populates="api_keys")
-
-
-class AuditLog(Base):
-    """Audit log for compliance and security"""
-    __tablename__ = "audit_logs"
-    __table_args__ = public_table_args()
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey(qualify('users.id')), nullable=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey(qualify('tenants.id')), nullable=True)
-    
-    action = Column(String(100), nullable=False)
-    resource_type = Column(String(50))
-    resource_id = Column(String(255))
-    
-    ip_address = Column(String(45))
-    user_agent = Column(String(500))
-    
-    request_data = Column(JSON)
-    response_status = Column(Integer)
-    
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    
-    # Relationships
-    user = relationship("User", back_populates="audit_logs")
 
 
 # ============================================================================
@@ -700,16 +690,21 @@ class QuotaService:
 # ============================================================================
 
 class AuditService:
-    """Service for audit logging and compliance"""
-    
+    """High-level audit facade that delegates to the central audit backend instead of managing ORM models itself."""
+
     def __init__(self, db: Session):
         self.db = db
-        
+
         # Metrics for monitoring
         self.auth_attempts = Counter('auth_attempts_total', 'Total authentication attempts')
         self.auth_failures = Counter('auth_failures_total', 'Total authentication failures')
         self.api_calls = Counter('api_calls_total', 'Total API calls', ['endpoint', 'method'])
         self.api_latency = Histogram('api_latency_seconds', 'API latency', ['endpoint'])
+
+    _ACTION_EVENT_MAP = {
+        "login": AuditEventType.LOGIN,
+        "logout": AuditEventType.LOGOUT,
+    }
     
     def log_action(
         self,
@@ -727,23 +722,32 @@ class AuditService:
         if not AuthConfig.AUDIT_LOG_ENABLED:
             return
         
-        audit_log = AuditLog(
-            user_id=uuid.UUID(user_id) if user_id else None,
-            tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
+        backend = _get_audit_backend()
+
+        action_key = (action or "").lower()
+        event_type = self._ACTION_EVENT_MAP.get(action_key, AuditEventType.DATA_READ)
+
+        severity = AuditSeverity.INFO
+        if response_status is not None:
+            if response_status >= 500:
+                severity = AuditSeverity.ERROR
+            elif response_status >= 400:
+                severity = AuditSeverity.WARNING
+
+        backend.log_event(
+            event_type=event_type,
             action=action,
+            description=action,
+            severity=severity,
+            user_id=str(user_id) if user_id is not None else None,
+            tenant_id=str(tenant_id) if tenant_id is not None else None,
             resource_type=resource_type,
             resource_id=resource_id,
             request_data=request_data,
             response_status=response_status,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
-        
-        self.db.add(audit_log)
-        try:
-            self.db.commit()
-        except:
-            self.db.rollback()
         
         # Update metrics
         if action == "login":
@@ -758,18 +762,17 @@ class AuditService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         limit: int = 100
-    ) -> List[AuditLog]:
+    ) -> List[Dict[str, Any]]:
         """Retrieve audit logs with filtering"""
-        query = self.db.query(AuditLog).filter_by(tenant_id=tenant_id)
-        
-        if user_id:
-            query = query.filter_by(user_id=user_id)
-        if start_date:
-            query = query.filter(AuditLog.timestamp >= start_date)
-        if end_date:
-            query = query.filter(AuditLog.timestamp <= end_date)
-        
-        return query.order_by(AuditLog.timestamp.desc()).limit(limit).all()
+        backend = _get_audit_backend()
+
+        return backend.search(
+            tenant_id=str(tenant_id) if tenant_id is not None else None,
+            user_id=str(user_id) if user_id is not None else None,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
 
 
 # ============================================================================
