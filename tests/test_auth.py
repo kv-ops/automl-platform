@@ -53,6 +53,12 @@ except ImportError:
     RateLimiter = None
     AuthConfig = None
 
+try:
+    from automl_platform.audit_service import AuditEventType, AuditSeverity
+except ImportError:
+    AuditEventType = None
+    AuditSeverity = None
+
 
 # ============================================================================
 # Fixtures
@@ -147,7 +153,7 @@ def quota_service(mock_db_session):
     """Create a QuotaService instance."""
     if not AUTH_AVAILABLE:
         pytest.skip("Auth module not available")
-    
+
     with patch('automl_platform.auth.redis.from_url') as mock_redis:
         mock_client = MagicMock()
         mock_redis.return_value = mock_client
@@ -156,11 +162,22 @@ def quota_service(mock_db_session):
 
 
 @pytest.fixture
-def audit_service(mock_db_session):
+def audit_backend():
+    with patch('automl_platform.auth._get_audit_backend') as mock_get_backend:
+        backend = MagicMock()
+        mock_get_backend.return_value = backend
+        yield backend
+
+
+@pytest.fixture
+def audit_service(mock_db_session, audit_backend):
     """Create an AuditService instance."""
     if not AUTH_AVAILABLE:
         pytest.skip("Auth module not available")
-    return AuditService(mock_db_session)
+    with patch('automl_platform.auth.Counter') as mock_counter, patch('automl_platform.auth.Histogram') as mock_histogram:
+        mock_counter.return_value = MagicMock()
+        mock_histogram.return_value = MagicMock()
+        return AuditService(mock_db_session)
 
 
 @pytest.fixture
@@ -608,12 +625,12 @@ class TestQuotaService:
 
 class TestAuditService:
     """Tests for AuditService."""
-    
-    def test_log_action(self, audit_service, mock_db_session):
+
+    def test_log_action(self, audit_service, audit_backend):
         """Test logging an action."""
         user_id = str(uuid.uuid4())
         tenant_id = str(uuid.uuid4())
-        
+
         audit_service.log_action(
             user_id=user_id,
             tenant_id=tenant_id,
@@ -622,12 +639,17 @@ class TestAuditService:
             response_status=200,
             ip_address="127.0.0.1"
         )
-        
-        # Verify database operations
-        assert mock_db_session.add.called
-        assert mock_db_session.commit.called or mock_db_session.rollback.called
-    
-    def test_log_action_login_failure(self, audit_service, mock_db_session):
+
+        audit_backend.log_event.assert_called_once()
+        kwargs = audit_backend.log_event.call_args.kwargs
+        if AuditEventType is not None:
+            assert kwargs["event_type"] == AuditEventType.LOGIN
+        if AuditSeverity is not None:
+            assert kwargs["severity"] == AuditSeverity.INFO
+        assert kwargs["user_id"] == user_id
+        assert kwargs["tenant_id"] == tenant_id
+
+    def test_log_action_login_failure(self, audit_service, audit_backend):
         """Test logging failed login."""
         audit_service.log_action(
             user_id=None,
@@ -636,33 +658,33 @@ class TestAuditService:
             response_status=401,
             ip_address="192.168.1.100"
         )
-        
-        # Verify database operations
-        assert mock_db_session.add.called
-    
-    def test_get_audit_logs(self, audit_service, mock_db_session):
+
+        assert audit_backend.log_event.called
+        kwargs = audit_backend.log_event.call_args.kwargs
+        if AuditSeverity is not None:
+            assert kwargs["severity"] == AuditSeverity.WARNING
+
+    def test_get_audit_logs(self, audit_service, audit_backend):
         """Test retrieving audit logs."""
         tenant_id = str(uuid.uuid4())
         user_id = str(uuid.uuid4())
-        
-        # Mock query results
-        mock_query = MagicMock()
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter_by.return_value = mock_query
-        mock_query.filter.return_value = mock_query
-        mock_query.order_by.return_value = mock_query
-        mock_query.limit.return_value = mock_query
-        mock_query.all.return_value = []
-        
+
+        audit_backend.search.return_value = []
+
         logs = audit_service.get_audit_logs(
             tenant_id=tenant_id,
             user_id=user_id,
             limit=50
         )
-        
+
         assert isinstance(logs, list)
-        mock_query.filter_by.assert_called()
-        mock_query.limit.assert_called_with(50)
+        audit_backend.search.assert_called_once_with(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            start_date=None,
+            end_date=None,
+            limit=50,
+        )
 
 
 # ============================================================================
