@@ -1,9 +1,9 @@
-import AxellePrelaunch from './axelle-prelaunch'
+import AxellePreLaunch from './axelle-prelaunch'
 
 function App() {
   return (
     <>
-      <AxellePrelaunch />
+      <AxellePreLaunch />
     </>
   )
 }
