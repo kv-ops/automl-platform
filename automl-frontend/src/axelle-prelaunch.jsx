@@ -22,7 +22,7 @@ export default function AxellePreLaunch() {
       <nav className="fixed top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm border-b border-gray-800">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <img src="/mnt/user-data/uploads/Axelle_AI_Logo_2.png" alt="Axelle AI" className="w-8 h-8" />
+            <img src="/axelle-logo.png" alt="Axelle AI" className="w-8 h-8" />
             <span className="text-xl font-bold tracking-tight">AXELLE AI</span>
           </div>
           <div className="hidden md:flex space-x-8 text-sm">
@@ -59,7 +59,7 @@ export default function AxellePreLaunch() {
           <p className="text-xl text-gray-400 mb-12 max-w-3xl mx-auto font-normal">
             We democratize data science by turning your data into value with AI&nbsp;agents — accessible, no-code and ready-to-use.
           </p>
-          
+
           {/* Waitlist Form */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto mb-8">
             <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -87,7 +87,7 @@ export default function AxellePreLaunch() {
               {submitted ? 'Welcome aboard! 🚀' : 'Join Waitlist'}
             </button>
           </form>
-          
+
           <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
             <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
             <span><span className="text-white font-medium">75</span> professionals already joined</span>
@@ -99,7 +99,7 @@ export default function AxellePreLaunch() {
       <section id="features" className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-3xl font-bold mb-16 tracking-tight">Developed in France, Axelle AI embodies<br />the triple role of an&nbsp;all-in-one virtual data expert.</h2>
-          
+
           <div className="grid md:grid-cols-3 gap-1 bg-gray-800">
             {/* Consultant */}
             <div className="bg-black p-12 border border-gray-800 hover:border-gray-600 transition group">
@@ -166,7 +166,7 @@ export default function AxellePreLaunch() {
                 </p>
               </div>
             </div>
-            
+
             <div className="relative h-96 border border-gray-800 bg-gradient-to-br from-gray-900 to-black overflow-hidden">
               <div className="absolute inset-0">
                 <svg className="w-full h-full" viewBox="0 0 400 400">
@@ -177,37 +177,37 @@ export default function AxellePreLaunch() {
                     </pattern>
                   </defs>
                   <rect width="400" height="400" fill="url(#grid)" />
-                  
+
                   {/* Central node */}
                   <circle cx="200" cy="200" r="8" fill="white" opacity="0.8">
                     <animate attributeName="r" values="8;10;8" dur="2s" repeatCount="indefinite" />
                   </circle>
-                  
+
                   {/* Connecting lines and nodes */}
                   <line x1="200" y1="200" x2="100" y2="100" stroke="rgba(156, 163, 175, 0.4)" strokeWidth="1"/>
                   <circle cx="100" cy="100" r="5" fill="rgba(156, 163, 175, 0.6)"/>
-                  
+
                   <line x1="200" y1="200" x2="300" y2="100" stroke="rgba(156, 163, 175, 0.4)" strokeWidth="1"/>
                   <circle cx="300" cy="100" r="5" fill="rgba(156, 163, 175, 0.6)"/>
-                  
+
                   <line x1="200" y1="200" x2="100" y2="300" stroke="rgba(156, 163, 175, 0.4)" strokeWidth="1"/>
                   <circle cx="100" cy="300" r="5" fill="rgba(156, 163, 175, 0.6)"/>
-                  
+
                   <line x1="200" y1="200" x2="300" y2="300" stroke="rgba(156, 163, 175, 0.4)" strokeWidth="1"/>
                   <circle cx="300" cy="300" r="5" fill="rgba(156, 163, 175, 0.6)"/>
-                  
+
                   <line x1="200" y1="200" x2="50" y2="200" stroke="rgba(156, 163, 175, 0.4)" strokeWidth="1"/>
                   <circle cx="50" cy="200" r="5" fill="rgba(156, 163, 175, 0.6)"/>
-                  
+
                   <line x1="200" y1="200" x2="350" y2="200" stroke="rgba(156, 163, 175, 0.4)" strokeWidth="1"/>
                   <circle cx="350" cy="200" r="5" fill="rgba(156, 163, 175, 0.6)"/>
-                  
+
                   {/* Secondary connections */}
                   <line x1="100" y1="100" x2="300" y2="100" stroke="rgba(107, 114, 128, 0.2)" strokeWidth="0.5" strokeDasharray="2,2"/>
                   <line x1="100" y1="300" x2="300" y2="300" stroke="rgba(107, 114, 128, 0.2)" strokeWidth="0.5" strokeDasharray="2,2"/>
                   <line x1="100" y1="100" x2="100" y2="300" stroke="rgba(107, 114, 128, 0.2)" strokeWidth="0.5" strokeDasharray="2,2"/>
                   <line x1="300" y1="100" x2="300" y2="300" stroke="rgba(107, 114, 128, 0.2)" strokeWidth="0.5" strokeDasharray="2,2"/>
-                  
+
                   {/* Data points */}
                   <circle cx="150" cy="150" r="3" fill="rgba(209, 213, 219, 0.4)">
                     <animate attributeName="opacity" values="0.4;0.8;0.4" dur="3s" repeatCount="indefinite" />
@@ -221,7 +221,7 @@ export default function AxellePreLaunch() {
                   <circle cx="250" cy="250" r="3" fill="rgba(209, 213, 219, 0.4)">
                     <animate attributeName="opacity" values="0.4;0.8;0.4" dur="4s" repeatCount="indefinite" />
                   </circle>
-                  
+
                   {/* Orbital ring */}
                   <circle cx="200" cy="200" r="80" fill="none" stroke="rgba(75, 85, 99, 0.3)" strokeWidth="0.5" strokeDasharray="5,5">
                     <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="20s" repeatCount="indefinite"/>
@@ -237,7 +237,7 @@ export default function AxellePreLaunch() {
       <section className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-extrabold mb-16">What Sets Axelle AI Apart</h2>
-          
+
           <div className="max-w-5xl mx-auto space-y-8">
             <div>
               <h3 className="text-xl font-bold text-white mb-3">Context-aware data quality checks and KPI identification:</h3>
@@ -281,7 +281,7 @@ export default function AxellePreLaunch() {
       <section className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-extrabold mb-16">Use Cases</h2>
-          
+
           <div className="max-w-5xl mx-auto space-y-8">
             <div>
               <h3 className="text-xl font-bold text-white mb-3">SME with heaps of data but no structure:</h3>
@@ -318,7 +318,7 @@ export default function AxellePreLaunch() {
       <section className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-extrabold mb-8">GDPR-Compliant</h2>
-          
+
           <div className="max-w-4xl">
             <p className="text-gray-400 font-normal leading-relaxed">
               Based in Paris, Axelle AI is rooted in European values of data privacy, transparency and responsibility. Its vision is clear: to democratize AI so that any business can compete with larger businesses through data-driven decision making.
@@ -331,7 +331,7 @@ export default function AxellePreLaunch() {
       <section className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-extrabold mb-8">Founder Story & Mission</h2>
-          
+
           <div className="max-w-4xl">
             <p className="text-gray-400 font-normal leading-relaxed">
               Axelle AI was founded by Karthigan Vijey, a French engineer who had previously built a financial advisory business that generated €700,000 in revenue. After observing how many SMEs struggle to access advanced analytics, he designed a platform that non-experts can use without financial barriers, with support from a senior ML engineer who has worked on projects for BNP Paribas, Parrot, AWS and Palantir.
@@ -344,7 +344,7 @@ export default function AxellePreLaunch() {
       <section className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-extrabold mb-8">Getting Started</h2>
-          
+
           <div className="max-w-4xl">
             <p className="text-gray-400 font-normal leading-relaxed">
               Axelle AI is currently in an early pilot stage and preparing for launch in late 2025. <a href="#hero" className="text-white font-semibold hover:underline transition">Join&nbsp;waitlist&nbsp;now</a>
